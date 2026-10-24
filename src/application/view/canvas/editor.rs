@@ -568,6 +568,10 @@ enum Drag {
         end: Option<usize>,
         start: Point,
     },
+    /// Measure tool: the ruler's fixed end in design space; the other end follows the pointer.
+    Measure {
+        start: Point,
+    },
     /// Drawing a shape; endpoints in design space.
     Shape {
         start: Point,
@@ -617,8 +621,13 @@ pub(crate) struct EditorWidget {
     /// The picture's transform while it is dragged, drawn before it is committed.
     image_preview: Option<Affine>,
     drag: Drag,
-    /// Last cursor position in design space, for the pen preview segment.
+    /// Last cursor position in design space, for the pen preview segment and the Measure
+    /// tool's scan line.
     hover: Option<Point>,
+    /// Option is held: the Measure tool's scan line runs vertically.
+    hover_vertical: bool,
+    /// The Measure tool's ruler in design space, kept after the drag until a click or Escape.
+    ruler: Option<Line>,
     /// Where a pen click would add a point to an existing segment, and
     /// whether that point splits a curve.
     insert_preview: Option<(Point, bool)>,
@@ -1397,6 +1406,124 @@ impl EditorWidget {
     /// The label tool's view of the glyph: each letter's ink in that letter's color, the regions
     /// of the active letter, and the polygon being placed. Ink no letter owns keeps the plain
     /// outline, so what is left to label is what is not colored.
+    /// The point the Measure tool puts a ruler end on: a point within reach, or else the
+    /// pointer itself, in design space.
+    fn measure_snap(&self, at: Point) -> Point {
+        let affine = self.glyph_affine();
+        self.session
+            .points()
+            .into_iter()
+            .map(|p| (p.point, (affine * p.point).distance(at)))
+            .filter(|(_, distance)| *distance <= HIT_RADIUS_PX)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map_or_else(|| self.screen_to_glyph_design(at), |(point, _)| point)
+    }
+
+    /// The Measure tool's scan line through `at`: across the advance, or with Option held,
+    /// from descender to ascender, stretched to reach any ink outside those.
+    fn scan_line(&self, at: Point, ink: &kurbo::BezPath) -> Line {
+        let bounds = if ink.elements().is_empty() {
+            Rect::from_points(at, at)
+        } else {
+            ink.bounding_box()
+        };
+        if self.hover_vertical {
+            let m = &self.session.metrics;
+            Line::new(
+                (at.x, m.descender.min(bounds.y0)),
+                (at.x, m.ascender.max(bounds.y1)),
+            )
+        } else {
+            Line::new(
+                (bounds.x0.min(0.0), at.y),
+                (bounds.x1.max(self.session.advance()), at.y),
+            )
+        }
+    }
+
+    /// The Measure tool, as in other font editors: the dragged ruler, or else a scan line
+    /// through the pointer. Each is cut where it crosses the outline and every piece is
+    /// labeled, ink in full text color and counters and margins muted.
+    fn paint_ruler(&self, painter: &mut Painter<'_>, affine: Affine) {
+        let pal = &self.palette;
+        let mut ink = self.session.outline();
+        ink.extend(self.session.components.elements().iter().copied());
+        let (line, scan) = match (self.ruler, self.hover) {
+            (Some(ruler), _) => (ruler, false),
+            (None, Some(hover)) if matches!(self.drag, Drag::None) => {
+                (self.scan_line(hover, &ink), true)
+            }
+            _ => return,
+        };
+        let ruler = runebender::analysis::measure::ruler(&ink, line);
+        let color = if scan {
+            pal.role("metricQuiet")
+        } else {
+            pal.tool_feedback()
+        };
+        let (p0, p1) = (affine * line.p0, affine * line.p1);
+        painter
+            .stroke(Line::new(p0, p1), &Stroke::new(pal.stroke), color)
+            .draw();
+        for crossing in &ruler.crossings {
+            painter
+                .fill(Circle::new(affine * *crossing, 3.0), color)
+                .draw();
+        }
+        // A ruler that crosses nothing is one piece, and its end label says it all.
+        if scan || ruler.pieces.len() > 1 {
+            for piece in &ruler.pieces {
+                let (a, b) = (affine * piece.a, affine * piece.b);
+                if a.distance(b) < 16.0 {
+                    continue;
+                }
+                let text = self.view.label(piece.units());
+                let ink = if piece.ink { pal.text } else { pal.text_muted };
+                self.measure_tag(painter, a.midpoint(b), &text, ink, Anchor::Middle);
+            }
+        }
+        if !scan && line.length() >= 1.0 {
+            let d = line.p1 - line.p0;
+            let angle = d.y.atan2(d.x).to_degrees();
+            let text = format!(
+                "{} · {angle:.0}°",
+                self.view
+                    .label(runebender::outline::glyph_paths::round_units(line.length()))
+            );
+            let away = (p1 - p0).normalize() * 14.0;
+            let anchor = if away.x < 0.0 {
+                Anchor::End
+            } else {
+                Anchor::Start
+            };
+            self.measure_tag(painter, p1 + away, &text, color, anchor);
+        }
+    }
+
+    /// A measurement label on a backdrop, so it reads over ink and outline alike.
+    fn measure_tag(
+        &self,
+        painter: &mut Painter<'_>,
+        at: Point,
+        text: &str,
+        color: xilem::Color,
+        anchor: Anchor,
+    ) {
+        let size = TextSize::Caption.px();
+        let width = text_label::width(text, size);
+        let x0 = match anchor {
+            Anchor::Start => at.x,
+            Anchor::Middle => at.x - width / 2.0,
+            Anchor::End => at.x - width,
+        };
+        let half = f64::from(size) * 0.75;
+        let backdrop = Rect::new(x0 - 3.0, at.y - half, x0 + width + 3.0, at.y + half);
+        painter
+            .fill(backdrop, self.palette.point_halo_fill())
+            .draw();
+        text_label::draw(painter, at, text, size, color, anchor);
+    }
+
     fn paint_labels(&self, painter: &mut Painter<'_>, affine: Affine) {
         use crate::application::editor::tools::label::{LabelHit, LabelSelection};
         let pal = &self.palette;
@@ -2577,6 +2704,10 @@ impl Widget for EditorWidget {
             }
         }
 
+        if self.tool == Tool::Measure && self.interp.is_none() {
+            self.paint_ruler(painter, affine);
+        }
+
         if matches!(self.tool, Tool::Select | Tool::Metaball)
             && let Ok(source) = self.session.metaball_data()
         {
@@ -3217,6 +3348,15 @@ impl Widget for EditorWidget {
                         ctx.set_handled();
                         return;
                     }
+                    Some(PointerButton::Primary) if self.tool == Tool::Measure => {
+                        ctx.request_focus();
+                        let start = self.measure_snap(at);
+                        self.ruler = Some(Line::new(start, start));
+                        self.drag = Drag::Measure { start };
+                        ctx.request_render();
+                        ctx.set_handled();
+                        return;
+                    }
                     Some(PointerButton::Primary) if self.tool == Tool::Pen => {
                         let affine = self.glyph_affine();
                         let near_first = self
@@ -3406,6 +3546,11 @@ impl Widget for EditorWidget {
                         self.ai_hover = hover;
                         ctx.request_render();
                     }
+                }
+                if self.tool == Tool::Measure {
+                    self.hover = Some(glyph_design);
+                    self.hover_vertical = current.modifiers.alt();
+                    ctx.request_render();
                 }
                 if matches!(self.tool, Tool::Pen | Tool::HyperPen) {
                     self.hover = Some(glyph_design);
@@ -3608,6 +3753,16 @@ impl Widget for EditorWidget {
                             points.push(at);
                             ctx.request_render();
                         }
+                    }
+                    Drag::Measure { start } => {
+                        let start = *start;
+                        let end = if current.modifiers.shift() {
+                            constrain_to_45(start, glyph_design)
+                        } else {
+                            self.measure_snap(at)
+                        };
+                        self.ruler = Some(Line::new(start, end));
+                        ctx.request_render();
                     }
                     Drag::Shape { current, .. } => {
                         *current = glyph_design;
@@ -3812,6 +3967,14 @@ impl Widget for EditorWidget {
                         self.emit(ctx, !cancelled);
                     }
                     Drag::Enter { .. } => self.drag = Drag::None,
+                    Drag::Measure { .. } => {
+                        // A click without a drag clears the ruler and brings back the scan line.
+                        if cancelled || self.ruler.is_some_and(|ruler| ruler.length() < 1.0) {
+                            self.ruler = None;
+                        }
+                        self.drag = Drag::None;
+                        ctx.request_render();
+                    }
                     Drag::Component { .. } => {
                         if cancelled {
                             self.session.cancel_component_drag();
@@ -4252,7 +4415,11 @@ impl Widget for EditorWidget {
         }
         let (edited, handled) = match &key.key {
             Key::Named(NamedKey::Escape) => {
-                if self.session.pen_is_active() || self.session.contour_drawing_is_active() {
+                if self.tool == Tool::Measure && self.ruler.is_some() {
+                    self.ruler = None;
+                    ctx.request_render();
+                    ctx.set_handled();
+                } else if self.session.pen_is_active() || self.session.contour_drawing_is_active() {
                     self.session.pen_cancel();
                     self.emit(ctx, false);
                     ctx.set_handled();
@@ -4353,6 +4520,8 @@ impl Widget for EditorWidget {
             } else {
                 CursorIcon::Grab
             }
+        } else if self.tool == Tool::Measure {
+            CursorIcon::Crosshair
         } else {
             CursorIcon::Default
         }
@@ -4374,6 +4543,15 @@ impl Widget for EditorWidget {
 
 // ---------------------------------------------------------------------------
 /// Cheap equality for the interpolation overlay: same Arc, or both absent.
+/// `to`, moved onto the nearest line through `from` at a multiple of 45 degrees.
+fn constrain_to_45(from: Point, to: Point) -> Point {
+    let d = to - from;
+    let step = std::f64::consts::FRAC_PI_4;
+    let angle = (d.y.atan2(d.x) / step).round() * step;
+    let direction = kurbo::Vec2::new(angle.cos(), angle.sin());
+    from + direction * d.dot(direction)
+}
+
 fn interp_eq(a: &Option<Arc<kurbo::BezPath>>, b: &Option<Arc<kurbo::BezPath>>) -> bool {
     match (a, b) {
         (Some(x), Some(y)) => Arc::ptr_eq(x, y),
@@ -4485,17 +4663,6 @@ pub(crate) struct ViewOptions {
 }
 
 impl ViewOptions {
-    /// What the Measure tool turns on when it is picked.
-    pub(crate) fn measuring() -> Self {
-        Self {
-            handles: true,
-            segments: true,
-            bearings: true,
-            popcount: true,
-            ..Self::default()
-        }
-    }
-
     /// Whether anything in the measure group is on.
     pub(crate) fn measures(self) -> bool {
         self.colorize || self.handles || self.segments || self.sizes || self.spans || self.bearings
@@ -4574,6 +4741,8 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
             size: Size::ZERO,
             drag: Drag::None,
             hover: None,
+            hover_vertical: false,
+            ruler: None,
             insert_preview: None,
             label_hover: None,
             menu: None,
@@ -4832,6 +5001,8 @@ mod tests {
             size: Size::ZERO,
             drag: Drag::None,
             hover: None,
+            hover_vertical: false,
+            ruler: None,
             insert_preview: None,
             label_hover: None,
             menu: None,
@@ -6953,6 +7124,43 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_measure_drag_lays_a_ruler_without_editing_and_a_click_clears_it() {
+        let mut editor = widget();
+        editor.tool = Tool::Measure;
+        let points = editor.session.points().len();
+        let mut harness =
+            TestHarness::create_with_size(default_property_set(), editor.prepare(), (600, 400));
+
+        harness.mouse_move(Point::new(100.0, 200.0));
+        assert_eq!(harness.cursor_icon(), CursorIcon::Crosshair);
+        harness.mouse_button_press(Some(PointerButton::Primary));
+        harness.mouse_move(Point::new(400.0, 210.0));
+        harness.mouse_button_release(Some(PointerButton::Primary));
+        let (ruler, selection, after) = harness.edit_root_widget(|root| {
+            (
+                root.widget.ruler,
+                root.widget.session.selection.len(),
+                root.widget.session.points().len(),
+            )
+        });
+        let ruler = ruler.expect("the drag leaves a ruler");
+        assert!(ruler.length() > 1.0);
+        assert_eq!((selection, after), (0, points), "measuring edits nothing");
+
+        harness.mouse_button_press(Some(PointerButton::Primary));
+        harness.mouse_button_release(Some(PointerButton::Primary));
+        assert!(harness.edit_root_widget(|root| root.widget.ruler.is_none()));
+    }
+
+    #[test]
+    fn shift_holds_a_ruler_to_45_degree_steps() {
+        let from = Point::new(10.0, 10.0);
+        assert_eq!(constrain_to_45(from, Point::new(110.0, 14.0)).y, 10.0);
+        let diagonal = constrain_to_45(from, Point::new(110.0, 100.0));
+        assert!((diagonal.x - diagonal.y).abs() < 1e-9);
     }
 
     #[test]

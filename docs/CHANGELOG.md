@@ -7,6 +7,10 @@ Entries under Unreleased describe work being prepared, not an available public r
 
 ### Added
 
+- Measure tool: a drag lays a ruler across the glyph, cut and labeled where it crosses the outline, with its length and angle at the end.
+  Shift holds it to 45 degree steps, ends snap to points, and a click or Escape clears it.
+  With no ruler, a line through the pointer measures the margins, stems and counters across the advance, or vertically with Option held.
+  Picking the tool no longer turns on the handle and segment labels, which stay in the Measure section.
 - Chat: a Talk button records a spoken request through a local whisper.cpp model and puts the words in the text field.
 - Proof view: a button at the foot of the editor swaps the canvas for a
   proof of the open glyph. It shows the current drawing and the proposal

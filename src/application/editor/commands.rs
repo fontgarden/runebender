@@ -7,7 +7,6 @@ use crate::application::design::theme::Palette;
 use crate::application::editor::session;
 use crate::application::editor::session::{Session, SessionSyncOutcome};
 use crate::application::platform::dialogs;
-use crate::application::view::canvas;
 use crate::application::view::canvas::grid::cells_of;
 use crate::application::widgets::shortcuts;
 use crate::application::workspace::{MetadataEdit, Mode, Sel, Sort, Tool, Workspace};
@@ -994,20 +993,7 @@ impl Workspace {
             }
             A::BeginSpacePan => self.begin_space_pan(),
             A::EndSpacePan => self.end_space_pan(),
-            A::Tool(t) => {
-                self.select_tool(t);
-                // Picking Measure turns on what the tool is for, keeping
-                // whatever curve analyses were already showing.
-                if t == Tool::Measure && !self.view.measures() {
-                    let measuring = canvas::editor::ViewOptions::measuring();
-                    self.view = canvas::editor::ViewOptions {
-                        comb: self.view.comb,
-                        continuity: self.view.continuity,
-                        components: self.view.components,
-                        ..measuring
-                    };
-                }
-            }
+            A::Tool(t) => self.select_tool(t),
             A::FlipHorizontal => self.apply_op(|s| s.flip_horizontal()),
             A::FlipVertical => self.apply_op(|s| s.flip_vertical()),
             A::Rotate90 => self.apply_op(|s| s.rotate_90()),

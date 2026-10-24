@@ -743,9 +743,8 @@ pub(crate) fn curves_section(app: &Workspace) -> impl WidgetView<Workspace> + us
     )
 }
 
-/// Measure: the option toggles the Measure tool works through. Picking
-/// the tool turns the usual three on; the toggles are what make it
-/// answer a specific question instead of drawing everything at once.
+/// Measure: labels drawn over the outline in any tool, for handle and segment lengths, spans
+/// and side bearings. The Measure tool's own ruler needs none of them.
 pub(crate) fn measure_section(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     let pal = &app.palette;
     let view = app.view;

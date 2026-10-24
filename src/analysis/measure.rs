@@ -337,6 +337,71 @@ fn push_span_dedup(out: &mut Vec<Measurement>, a: Point, b: Point, length: i64, 
     }
 }
 
+/// A measuring line cut where it crosses an outline, as font editors' measurement tools draw it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Ruler {
+    /// Where the line crosses the outline, in order from the line's start.
+    pub crossings: Vec<Point>,
+    /// The line between consecutive stops, where a stop is an end or a crossing.
+    pub pieces: Vec<RulerPiece>,
+}
+
+/// One piece of a [`Ruler`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RulerPiece {
+    /// The piece's first end, nearer the line's start.
+    pub a: Point,
+    /// The piece's second end.
+    pub b: Point,
+    /// Whether the piece runs through ink (a stem or bar) rather than a counter or margin.
+    pub ink: bool,
+}
+
+impl RulerPiece {
+    /// The piece's length in design units.
+    pub fn length(&self) -> f64 {
+        self.a.distance(self.b)
+    }
+
+    /// The piece's length rounded to whole units, as it is labeled.
+    pub fn units(&self) -> i64 {
+        round_units(self.length())
+    }
+}
+
+/// Cut `line` where it crosses `path`, with each piece marked by whether it runs through ink.
+///
+/// Crossings closer than half a unit merge, so a line through a node shared by two segments
+/// stops there once.
+pub fn ruler(path: &BezPath, line: Line) -> Ruler {
+    let length = line.length();
+    if length < 0.5 {
+        return Ruler::default();
+    }
+    let mut ts: Vec<f64> = path
+        .segments()
+        .flat_map(|seg| seg.intersect_line(line).into_iter().map(|hit| hit.line_t))
+        .filter(|t| (0.0..=1.0).contains(t))
+        .collect();
+    ts.sort_by(f64::total_cmp);
+    ts.dedup_by(|b, a| (*b - *a) * length < 0.5);
+    let crossings: Vec<Point> = ts.iter().map(|&t| line.eval(t)).collect();
+    let mut stops = Vec::with_capacity(crossings.len() + 2);
+    stops.push(line.p0);
+    stops.extend(crossings.iter().copied());
+    stops.push(line.p1);
+    stops.dedup_by(|b, a| a.distance(*b) < 0.5);
+    let pieces = stops
+        .windows(2)
+        .map(|w| RulerPiece {
+            a: w[0],
+            b: w[1],
+            ink: path.contains(w[0].midpoint(w[1])),
+        })
+        .collect();
+    Ruler { crossings, pieces }
+}
+
 /// A drawn outline piece tagged with the popcount that colors it.
 ///
 /// A piece is a straight segment, a curve, or a handle line. The tag lets
@@ -617,5 +682,51 @@ mod tests {
         assert_eq!(popcount(256), 1);
         assert_eq!(popcount(96), 2);
         assert_eq!(popcount(116), 4); // 64+32+16+4
+    }
+
+    #[test]
+    fn a_ruler_across_a_ring_measures_both_stems_and_the_counter() {
+        // A 100 wide ring with 20 unit walls, outer clockwise and inner counter-clockwise.
+        let mut ring = BezPath::new();
+        ring.move_to((0.0, 0.0));
+        ring.line_to((0.0, 100.0));
+        ring.line_to((100.0, 100.0));
+        ring.line_to((100.0, 0.0));
+        ring.close_path();
+        ring.move_to((20.0, 20.0));
+        ring.line_to((80.0, 20.0));
+        ring.line_to((80.0, 80.0));
+        ring.line_to((20.0, 80.0));
+        ring.close_path();
+        let ruler = ruler(&ring, Line::new((-10.0, 50.0), (110.0, 50.0)));
+        assert_eq!(ruler.crossings.len(), 4);
+        let pieces: Vec<(i64, bool)> = ruler
+            .pieces
+            .iter()
+            .map(|piece| (piece.units(), piece.ink))
+            .collect();
+        assert_eq!(
+            pieces,
+            [
+                (10, false),
+                (20, true),
+                (60, false),
+                (20, true),
+                (10, false)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_ruler_ending_on_an_outline_has_no_empty_piece() {
+        let mut square = BezPath::new();
+        square.move_to((0.0, 0.0));
+        square.line_to((0.0, 50.0));
+        square.line_to((50.0, 50.0));
+        square.line_to((50.0, 0.0));
+        square.close_path();
+        let ruler = ruler(&square, Line::new((0.0, 25.0), (50.0, 25.0)));
+        assert_eq!(ruler.pieces.len(), 1);
+        assert!(ruler.pieces[0].ink);
     }
 }
