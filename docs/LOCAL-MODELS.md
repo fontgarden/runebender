@@ -89,10 +89,16 @@ Upgrade both together: `brew upgrade llama.cpp whisper.cpp`.
 
 ## One server for every local agent
 
-`llama-server` can serve one model to Runebender and to a coding agent
-such as Hermes at the same time, so a model is in memory once. Start it on
-a fixed port with two slots, for example
-`llama-server -m ~/Runebender/models/qwen3.6-35b-a3b/model.gguf --alias qwen3.6-35b-a3b --jinja -c 65536 -np 2 --port 8080`,
-and launch the editor with `RUNEBENDER_CHAT_ENDPOINT=http://127.0.0.1:8080/v1`
-and `RUNEBENDER_CHAT_MODEL=qwen3.6-35b-a3b`; the Chat panel then uses that
-server instead of starting its own.
+`llama-server` in router mode serves every chat model folder under the
+model root to Runebender and to a coding agent such as Pi or Hermes at the
+same time, loading a model the first time it is asked for by name, so each
+model is in memory once:
+
+    llama-server --models-dir ~/Runebender/models --models-preset ~/Runebender/models/presets.ini --port 8080
+
+`presets.ini` holds each model's server settings, one `[folder-name]`
+section per model with llama-server arguments as keys; it carries the same
+values as the folders' `model.json` files. Launch the editor with
+`RUNEBENDER_CHAT_ENDPOINT=http://127.0.0.1:8080/v1` and
+`RUNEBENDER_CHAT_MODEL=<folder name>` and the Chat panel uses that server
+instead of starting its own.
