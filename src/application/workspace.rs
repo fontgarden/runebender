@@ -663,6 +663,30 @@ impl AppState {
     }
 }
 
+#[cfg(target_os = "macos")]
+impl AppState {
+    /// Preserve the normal save/discard/cancel behavior before Sparkle restarts the app.
+    #[cfg(feature = "macos-updater")]
+    pub(crate) fn confirm_update_restart(&mut self) -> bool {
+        let decision = if self
+            .workspace
+            .as_ref()
+            .is_some_and(|workspace| workspace.modified)
+        {
+            dialogs::dirty_decision("installing an update and restarting Runebender")
+        } else {
+            DirtyDecision::Discard
+        };
+        self.resolve_update_restart(decision)
+    }
+
+    #[cfg(feature = "macos-updater")]
+    fn resolve_update_restart(&mut self, decision: DirtyDecision) -> bool {
+        // Sparkle owns termination after this succeeds; do not stop the event loop here.
+        self.resolve_dirty(decision)
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl xilem::AppState for AppState {
     fn keep_running(&self) -> bool {
@@ -872,6 +896,45 @@ mod tests {
 
         std::fs::remove_dir_all(path).expect("the source fixture is removed");
         std::fs::remove_dir_all(replacement).expect("the replacement fixture is removed");
+    }
+
+    #[cfg(all(target_os = "macos", feature = "macos-updater"))]
+    #[test]
+    fn update_restart_preserves_cancel_save_and_discard_without_exiting_early() {
+        let path = std::env::temp_dir().join(format!(
+            "runebender-update-save-{}-{}.ufo",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("the clock is after the Unix epoch")
+                .as_nanos(),
+        ));
+        norad::Font::new()
+            .save(&path)
+            .expect("save the font fixture");
+        let mut app = AppState::open(Some(&path));
+        let workspace = app.workspace.as_mut().expect("open the font fixture");
+        workspace.filter = "A".into();
+        workspace.new_glyph();
+
+        assert!(!app.resolve_update_restart(DirtyDecision::Cancel));
+        assert!(app.running);
+        assert!(app.workspace.as_ref().unwrap().modified);
+        assert!(norad::Font::load(&path).unwrap().get_glyph("A").is_none());
+
+        assert!(app.resolve_update_restart(DirtyDecision::Save));
+        assert!(app.running, "Sparkle must own the eventual termination");
+        assert!(!app.workspace.as_ref().unwrap().modified);
+        assert!(norad::Font::load(&path).unwrap().get_glyph("A").is_some());
+
+        let workspace = app.workspace.as_mut().unwrap();
+        workspace.filter = "B".into();
+        workspace.new_glyph();
+        assert!(app.resolve_update_restart(DirtyDecision::Discard));
+        assert!(app.running);
+        assert!(!app.workspace.as_ref().unwrap().modified);
+        assert!(norad::Font::load(&path).unwrap().get_glyph("B").is_none());
+        std::fs::remove_dir_all(path).expect("remove the owned fixture");
     }
 
     #[test]

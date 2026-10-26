@@ -1,6 +1,6 @@
 # Releasing Runebender
 
-The first native release is being prepared as `0.1.0`.
+The first native alpha release is being prepared as `0.1.0-alpha.1`.
 The canonical repository is [fontgarden/runebender](https://github.com/fontgarden/runebender).
 It was transferred from `eliheuer/runebender-xilem` on October 17, 2026, preserving its history and GitHub identity.
 Keep the old GitHub repository path unused so its redirects continue to work.
@@ -18,25 +18,77 @@ The second image passed checksum, mount/copy/eject, copied-app signature, bundle
 This was a dirty-tree local test build at `b338d2a`, not a public release candidate or an interactive installation test.
 Its artifacts, build receipt, and validation results are under the corresponding timestamped `target/macos/` directory.
 
+## Current alpha workflow
+
+The release version is `0.1.0-alpha.1` and the intended GitHub tag is `v0.1.0-alpha.1`.
+The macOS build number in `release.toml` starts at `1` and must increase for every published build, including each alpha.
+The public application is initially Apple Silicon only, with a minimum macOS requirement of 12 because the pinned Sparkle framework requires it.
+The minimum OS declaration is not proof of testing on that OS; retain the actual tested OS and hardware with each candidate.
+
+### Preparation status on October 25, 2026
+
+Apple Developer individual membership is active, but this Mac still has no usable Developer ID Application identity and no `runebender-notary` credential profile.
+The separate Runebender Sparkle archive-signing key has been created in the login Keychain under account `org.runebender.Runebender`.
+Only its public key is stored in `release.toml`; keep the private key and the Apple certificate's private key backed up securely, outside Git.
+The updater-enabled application compiles, and its locked dependencies pass the advisory check after updating Tokio.
+A signed, notarized candidate and an actual two-version update still need to be validated before public distribution.
+Existing local DMGs made before the updater was added need one manual replacement; they cannot acquire an updater by themselves.
+
+### Commands
+
+Run these from the root of a clean checkout at the chosen release commit.
+`build_dmg.sh` remains a local test wrapper and permits a dirty development tree.
+Public packages require a clean committed checkout; preserve other work by using an isolated clone or worktree.
+
+```sh
+# Local candidate, with the icon and updater included.
+./scripts/build_dmg.sh
+
+# Public candidate, after installing the certificate and storing the notary profile.
+python3 scripts/package_macos.py \
+  --identity 'Developer ID Application: YOUR LEGAL NAME (TEAMID)' \
+  --notary-profile runebender-notary
+
+# OUT is the completed timestamped package directory printed above.
+python3 scripts/release.py prepare OUT
+python3 scripts/release.py draft OUT --installation-tested
+
+# Publish only after reviewing the draft and testing that exact signed artifact.
+python3 scripts/release.py publish OUT --website ../runebender-dot-org
+```
+
+`prepare` uses Sparkle's official `generate_appcast` tool and the Keychain key to sign the final DMG's update metadata.
+It retains the existing archive bytes, embeds the curated notes from `docs/releases/0.1.0-alpha.1.md`, and creates `release.json` and `appcast.xml`.
+For isolated testing, `prepare OUT --local-test` accepts an ad-hoc candidate and marks its metadata unavailable for publication.
+That test metadata is refused by `draft` and `publish`.
+`draft` requires a clean, notarized receipt, installation-test confirmation, and passing supported-platform CI for that exact commit.
+It stages the already tested DMG, checksums, manifest, feed, and notes as a GitHub prerelease draft.
+`publish` rechecks CI and the uploaded DMG bytes, publishes the prerelease, verifies the public download, then updates website source metadata.
+It does not deploy the website: build and review that source change, commit only its explicit release paths, and push it through the website's normal deployment.
+A GitHub alpha prerelease is selected explicitly by the website manifest; do not use GitHub's stable-only `/releases/latest` endpoint for this channel.
+
+Before signing, follow [Apple's certificate setup](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/) and configure notarization using the commands below.
+Entering passwords and completing credential setup belongs in Apple or Terminal, never in chat or repository files.
+
 ## Release strategy
 
-The first public release targets macOS, initially Apple Silicon, with Linux installation from a pinned Git tag through Cargo.
+The first public alpha targets macOS on Apple Silicon, with Linux source-install instructions through Cargo.
 Ship an Intel DMG only after testing it on an Intel Mac; being able to cross-compile it is insufficient.
 Treat Linux as an experimental source installation until a Linux desktop has passed the editing and installation checks.
 Windows remains a visible CI diagnostic, without an installer or a supported desktop release.
-Homebrew, crates.io publication, and automatic updates are subsequent milestones rather than requirements for the first DMG.
+Homebrew and crates.io publication are later milestones; this alpha includes the native Sparkle updater.
 
 | Component | Initial approach | Status |
 | --- | --- | --- |
 | Local macOS packages | `./scripts/build_dmg.sh`, using the temporary icon | Implemented; local test signing |
 | Public macOS packages | Developer ID Application, notarization, stapling | Packaging commands exist; signed path awaits validation |
 | Release validation | Existing Linux/macOS CI plus installation tests | CI needs repair; manual checklist below |
-| Release orchestration | Small Python script wrapping existing tools | Planned; no `scripts/release.py` exists yet |
-| Hosting | Versioned GitHub Release assets | Planned; no public release yet |
-| Website | Download page linking to those assets | Planned in the website repository |
+| Release orchestration | `scripts/release.py prepare`, `draft`, and `publish` | Implemented; public end-to-end validation pending |
+| Hosting | Versioned GitHub prerelease assets | Publisher implemented; no public alpha yet |
+| Website | `/download.html` reads verified release metadata | Source prepared; deployment follows verified public assets |
 | Linux installation | Cargo from the exact release tag, with `--locked` | Must be tested outside the checkout |
 | Changelog | Curated [CHANGELOG.md](CHANGELOG.md) | Started; first release notes still need curation |
-| Updates | Download a new DMG and replace the closed app | Initial policy; updater integration is follow-up work |
+| Updates | Sparkle checks at launch and through the menu, with user-confirmed installation | Native integration implemented; two-version signed validation pending |
 
 Keep signing on the maintainer's Mac for the first release.
 Use GitHub Actions for validation without uploading the Developer ID private key to CI at this stage.
@@ -77,29 +129,25 @@ Never move a public version tag or silently replace an artifact with different b
 If a published release is defective, remove it from the advertised stable downloads, document the problem, and ship a new patch version.
 Keep prior release files available for rollback where safe; warn when a source-format change makes downgrading unsafe.
 
-### Planned automation contract
+### Release configuration and dependencies
 
-Implement one small `scripts/release.py` using Python's standard library, Git, Cargo, the GitHub CLI, and the existing package script.
-The interface below is a design target, not commands that work today:
+The Cargo package version is the release's user-facing SemVer and tag source.
+`release.toml` contains the increasing numeric macOS build number and the pinned Sparkle version, official archive SHA-256, minimum OS requirement, feed URL, public key, and Keychain account name.
+The package script separates numeric Apple bundle version fields from the full alpha version and records both in its receipt.
+For alpha.2, change the Cargo version to `0.1.0-alpha.2`, update `Cargo.lock`, increase `build_number` to `2`, and add that version's curated notes before freezing its source commit.
+Never reuse a published build number or rotate the public verification key casually; use Sparkle's documented key-rotation process.
 
-| Proposed command | Responsibility |
-| --- | --- |
-| `prepare --commit FULL_SHA` | Verify canonical remote, clean committed inputs, version and notes; create an isolated source checkout and release receipt |
-| `validate --receipt PATH` | Run or verify the required checks for that SHA and retain their evidence |
-| `build-macos --receipt PATH --target TARGET` | Invoke the package script with committed icon and signing settings; append notarization results and final artifact hashes |
-| `draft --receipt PATH` | Check release gates and tag target; upload the existing files and curated notes to a draft |
-| `publish --receipt PATH` | Recheck remote draft contents and hashes, then publish only when explicitly requested |
+The optional `macos-updater` feature uses the reviewed `sparkle-updater = 0.1.0` safe main-thread API.
+It does not add unsafe code to this workspace, and its new package sources and build script were inspected before adoption.
+It is MIT-licensed and links the native framework without downloading it from a Cargo build.
+The separately pinned official Sparkle 2.10.1 archive is checked against its SHA-256 and its framework's signature before use.
+`scripts/sparkle.py` fetches it explicitly into the ignored vendor cache and signs nested framework executables, helpers, and bundles from the inside out.
+The application includes the framework's license notice.
+Dependency review and the advisory check are not claims of a complete third-party code or license audit.
 
-Store non-secret release configuration, such as supported targets and a numeric macOS build number, in a small committed `release.toml` when implementing the wrapper.
-Read the public version from Cargo instead of maintaining a second version string there.
-Keep local test builds separate from public artifacts, and make a missing check or rejected notarization stop the pipeline.
-Retain failed-build diagnostics; do not automatically delete worktrees that may contain changes.
-Retries must not overwrite existing public assets or create a second release for the same version.
-
-Use SemVer tags such as `v0.1.0` and, when needed, explicitly marked prereleases such as `v0.1.0-rc.1`.
-Prereleases must not become the website's stable download.
-Before packaging an RC, separate the user-visible version from Apple's numeric bundle version fields: `CFBundleShortVersionString` can remain `0.1.0`, while `CFBundleVersion` uses a monotonically increasing numeric build number.
-The current package script copies the Cargo version into both fields, so prerelease version support is an implementation task, not an established capability.
+Normal `cargo run` and Linux builds omit the native updater.
+The DMG script enables it by default, installs Sparkle under `Contents/Frameworks`, and links only through the app-relative framework path.
+`--without-updates` is a local-only packaging option; public packages must include update support.
 
 ### Hosting and website downloads
 
@@ -109,9 +157,9 @@ The website can stay static; no separate file server, object-storage account, or
 Do not commit DMGs to either Git repository or use expiring Actions artifacts as public download links.
 
 Keep architecture-specific, versioned filenames.
-The current public packager's convention is `Runebender-0.1.0-macos-apple-silicon-notarized.dmg`, with `intel` for the Intel build.
+The current public packager's convention is `Runebender-0.1.0-alpha.1-macos-apple-silicon-notarized.dmg`, with `intel` for the Intel build.
 Use the actual tested asset name in the website metadata, not a guessed name or a link to a moving branch.
-For example, the intended versioned URL is `https://github.com/fontgarden/runebender/releases/download/v0.1.0/Runebender-0.1.0-macos-apple-silicon-notarized.dmg`.
+For example, the intended versioned URL is `https://github.com/fontgarden/runebender/releases/download/v0.1.0-alpha.1/Runebender-0.1.0-alpha.1-macos-apple-silicon-notarized.dmg`.
 This example is not an available download until that release is published.
 
 Generate a public `release.json` manifest alongside `SHA256SUMS`.
@@ -132,10 +180,10 @@ The browser editor is a separate artifact and must not be presented as the same 
 For the first release, test a pinned Git installation before advertising it:
 
 ```sh
-# Future release example: requires the published v0.1.0 tag.
+# Release example: requires the published v0.1.0-alpha.1 tag.
 rustup toolchain install 1.96
 cargo +1.96 install --locked --git https://github.com/fontgarden/runebender \
-  --tag v0.1.0 --bin runebender runebender
+  --tag v0.1.0-alpha.1 --bin runebender runebender
 ```
 
 Before the tag exists, use `--rev FULL_RELEASE_SHA` in a clean installation test.
@@ -169,17 +217,19 @@ Use that version section for the GitHub Release body and website notes, includin
 Generated commit lists may supplement these notes but should not be the main changelog.
 Do not invent historical release dates or imply that the Cargo version means a public release already exists.
 
-For v0.1, document manual updates: quit Runebender, download the newer DMG, replace the app in Applications, eject, and relaunch.
-Add a visible application version and a menu action such as “Downloads and Release Notes…” that opens the website; this menu action is still to be implemented.
-This provides a discoverable update route without claiming that an in-app version checker already exists.
-Keep preferences outside the signed app bundle and test replacement without losing them.
+The updater checks for newer alpha builds after the native event loop starts, and Sparkle handles the download, archive signature verification, installation UI, and relaunch.
+The Runebender menu contains “Check for Updates…” and About displays the full alpha version.
+Automatic checks do not imply unattended installation: the bundle disables automatic downloading and automatic installation, and Sparkle asks before installing.
+When an installation requests a restart, Runebender routes it through the existing dirty-document save/discard/cancel handling.
+Cancel retains the document and postpones the update; the menu command can resume the pending restart after the user is ready.
+The ordinary Quit flow retains its own unsaved-document protection.
 
-For automatic macOS updates, evaluate [Sparkle 2](https://sparkle-project.org/documentation/) after the basic signed release workflow works.
-Use its archive signatures and appcast rather than a custom executable downloader.
-Store the separate EdDSA signing key securely, embed its public key, and test updates between two genuinely signed builds, including failures and offline behavior.
-Host the appcast on runebender.org with versioned archives on GitHub Releases.
-The Rust/Xilem integration and nested framework/helper signing need a prototype that respects this repository's prohibition on unsafe workspace code.
-Do not delay the first DMG on this integration or silently replace installations managed by another package manager.
+The alpha appcast is `https://runebender.org/updates/alpha/appcast.xml`.
+The feed contains only archive signatures for validated public downloads, never private signing material.
+It can be empty before the first release, so a development candidate sees no newer public build rather than a missing feed.
+The feed uses a dedicated alpha URL without an extra Sparkle channel filter.
+Keep preferences outside the signed application and test both clean and dirty-document update scenarios, cancellation, offline checks, and rejected signatures between two real app builds.
+The implementation has not completed those signed runtime tests merely by compiling successfully.
 
 ### Homebrew later
 
@@ -195,11 +245,13 @@ Submission to Homebrew's main cask repository can come later.
 - [ ] Complete the manual Finder installation and editing checklist.
 - [ ] Repair Linux Clippy and macOS tests, update the browser adapter for the current Xilem pin, and obtain passing checks on the chosen release SHA.
 - [ ] Pin or record the font-fixture revision and make external test dependencies explicit.
-- [ ] Complete Apple activation and validate Developer ID signing, notarization, stapling, and browser-download Gatekeeper behavior.
-- [ ] Implement the small release wrapper, numeric bundle build version, immutable-source checks, draft upload, and public manifest.
+- [x] Confirm Apple membership is active.
+- [ ] Install the Developer ID identity and notarization profile, then validate signing, notarization, stapling, and browser-download Gatekeeper behavior.
+- [x] Implement release commands, numeric bundle versions, clean-source checks, draft upload, and a public manifest.
+- [ ] Validate the complete signed release and two-version update path.
 - [ ] Curate v0.1 notes, verify Linux installation and runtime assets, and decide the tested OS/architecture support matrix.
 - [ ] Stage a release, finish installation review, publish explicitly, verify the public downloads, and deploy the website download page.
-- [ ] Follow up separately with registry dependencies/crates.io, a Homebrew tap, and Sparkle.
+- [ ] Follow up separately with registry dependencies/crates.io and a Homebrew tap.
 
 Aim the first week at the signed Apple Silicon DMG and a reliable source-install route.
 If Intel hardware, Linux desktop validation, or Apple activation is unavailable, narrow the advertised support or keep the build a test candidate rather than inventing a passing result.
@@ -212,13 +264,13 @@ Windows diagnostics are separate from the supported-platform release gates.
 
 ## Local macOS package
 
-Run on macOS with Rust from `rust-toolchain.toml`, Python 3, and Apple's command-line tools installed:
+Run on macOS with Rust from `rust-toolchain.toml`, Python 3.12 or later, and Apple's command-line tools installed:
 
 ```sh
 ./scripts/build_dmg.sh
 ```
 
-This always runs `cargo build --release --locked --bin runebender` before packaging.
+This runs `cargo build --release --locked --bin runebender --features macos-updater` before packaging.
 It gets the version and output directory from Cargo and the minimum macOS version from the built executable.
 The default package targets the current Mac's architecture.
 On hosts with less than 24 GiB of memory, the command sets `CARGO_BUILD_JOBS=2`; do not run another Cargo command concurrently on those hosts.
@@ -320,5 +372,5 @@ The package script uses `syspolicy_check distribution` where available, falling 
 - Write release notes covering supported source formats, known limitations, backup advice, and separately installed AI features.
 - Publish the validated DMGs and checksums on a tagged GitHub Release, then update the website's installation instructions to link to those artifacts.
 
-Do not create the `v0.1.0` tag or publish a release until these gates have been reviewed.
+Do not create the `v0.1.0-alpha.1` tag or publish a release until these gates have been reviewed.
 Signing and notarization have not been validated merely by successfully creating a local test DMG.

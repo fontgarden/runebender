@@ -35,6 +35,8 @@
 
 // Cargo enables package features for both targets. These anonymous imports stop the library's
 // dependency lint from flagging dependencies used only by the application executable.
+#[cfg(all(feature = "macos-updater", target_os = "macos"))]
+use sparkle_updater as _;
 #[cfg(feature = "application")]
 use {
     base64 as _, clap as _, copypasta as _, cpal as _, image as _, imaging_vello_cpu as _,

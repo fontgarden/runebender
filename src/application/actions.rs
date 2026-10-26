@@ -1227,12 +1227,14 @@ mod platform {
         /// The bar, its items in action order, and the enabled and checked state each
         /// item was last given, so a rebuild only calls into AppKit for what changed.
         static MENU: RefCell<Option<InstalledMenu>> = const { RefCell::new(None) };
+        static UPDATE_ITEM: RefCell<Option<MenuItem>> = const { RefCell::new(None) };
     }
     /// Menu item ids, in the same order as [`actions()`]. These are plain
     /// strings, so the event pump on another thread can read them.
     static IDS: OnceLock<Vec<MenuId>> = OnceLock::new();
     /// Custom Quit item id; predefined `AppKit` Quit would bypass dirty-state checks.
     static QUIT_ID: OnceLock<MenuId> = OnceLock::new();
+    static UPDATE_ID: OnceLock<MenuId> = OnceLock::new();
 
     /// Text-editing accelerators stay in Masonry's event path so the focused
     /// `TextArea` gets first refusal. Installing the same equivalents on the
@@ -1259,6 +1261,11 @@ mod platform {
     /// Must run on the main thread, which is where the view function runs.
     /// Later calls update enabled and checked state without rebuilding the bar.
     pub(crate) fn install(app: &crate::application::workspace::AppState) {
+        UPDATE_ITEM.with(|slot| {
+            if let Some(item) = slot.borrow().as_ref() {
+                item.set_enabled(crate::application::platform::updates::can_check());
+            }
+        });
         if IDS.get().is_some() {
             MENU.with(|slot| {
                 if let Some((_, items, states)) = slot.borrow_mut().as_mut() {
@@ -1293,7 +1300,18 @@ mod platform {
         // The first submenu on macOS is the application menu, and it is
         // where the platform expects Quit to live.
         let app_menu = Submenu::new("Runebender", true);
-        let _ = app_menu.append(&muda::PredefinedMenuItem::about(None, None));
+        let _ = app_menu.append(&muda::PredefinedMenuItem::about(
+            None,
+            Some(muda::AboutMetadata {
+                name: Some("Runebender".into()),
+                version: Some(env!("CARGO_PKG_VERSION").into()),
+                ..Default::default()
+            }),
+        ));
+        let updates = MenuItem::new("Check for Updates…", false, None);
+        let _ = UPDATE_ID.set(updates.id().clone());
+        let _ = app_menu.append(&updates);
+        UPDATE_ITEM.with(|slot| *slot.borrow_mut() = Some(updates));
         let _ = app_menu.append(&muda::PredefinedMenuItem::separator());
         let _ = app_menu.append(&muda::PredefinedMenuItem::hide(None));
         let _ = app_menu.append(&muda::PredefinedMenuItem::separator());
@@ -1378,6 +1396,11 @@ mod platform {
         let _ = IDS.set(ids);
     }
 
+    /// Update checks are an application operation rather than a document action.
+    pub(super) fn is_update(id: &MenuId) -> bool {
+        UPDATE_ID.get() == Some(id)
+    }
+
     /// The action a menu id fires, if it is one of ours.
     pub(super) fn action_for(id: &MenuId) -> Option<AppAction> {
         if QUIT_ID.get() == Some(id) {
@@ -1448,9 +1471,17 @@ pub(crate) fn with_menu_events<V: xilem::WidgetView<AppState>>(
     fork(
         view,
         task(
-            |proxy: xilem::core::MessageProxy<muda::MenuId>, _: &mut AppState| async move {
+            |proxy: xilem::core::MessageProxy<Option<muda::MenuId>>, _: &mut AppState| async move {
                 let channel = muda::MenuEvent::receiver();
+                let mut next_update_poll = std::time::Instant::now();
                 loop {
+                    if std::time::Instant::now() >= next_update_poll {
+                        if proxy.message(None).is_err() {
+                            return;
+                        }
+                        next_update_poll =
+                            std::time::Instant::now() + std::time::Duration::from_secs(1);
+                    }
                     // Polled, never blocked. `recv()` is a synchronous call:
                     // inside an async task it parks a runtime worker and
                     // never gives it back, and then dropping the runtime on
@@ -1458,7 +1489,7 @@ pub(crate) fn with_menu_events<V: xilem::WidgetView<AppState>>(
                     // closes and the process hangs.
                     match channel.try_recv() {
                         Ok(event) => {
-                            if proxy.message(event.id).is_err() {
+                            if proxy.message(Some(event.id)).is_err() {
                                 return;
                             }
                         }
@@ -1471,8 +1502,14 @@ pub(crate) fn with_menu_events<V: xilem::WidgetView<AppState>>(
                     }
                 }
             },
-            |app: &mut AppState, id: muda::MenuId| {
-                if let Some(action) = platform::action_for(&id) {
+            |app: &mut AppState, id: Option<muda::MenuId>| {
+                let Some(id) = id else {
+                    crate::application::platform::updates::poll(app);
+                    return;
+                };
+                if platform::is_update(&id) {
+                    crate::application::platform::updates::check(app);
+                } else if let Some(action) = platform::action_for(&id) {
                     app.dispatch(action);
                 }
             },

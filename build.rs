@@ -40,6 +40,13 @@ fn main() {
     println!("cargo::rerun-if-changed=build.rs");
     embed_icons();
 
+    // Public macOS bundles carry Sparkle beside the executable, never at a developer path.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos")
+        && std::env::var_os("CARGO_FEATURE_MACOS_UPDATER").is_some()
+    {
+        println!("cargo::rustc-link-arg-bin=runebender=-Wl,-rpath,@executable_path/../Frameworks");
+    }
+
     // Xilem needs more than Windows' default 1 MiB stack in debug builds.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         match std::env::var("CARGO_CFG_TARGET_ENV").as_deref() {

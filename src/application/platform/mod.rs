@@ -24,6 +24,8 @@ pub(crate) mod script_jobs;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod script_library;
 pub(crate) mod themes;
+#[cfg(target_os = "macos")]
+pub(crate) mod updates;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod watch;
 #[cfg(target_arch = "wasm32")]

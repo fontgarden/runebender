@@ -28,6 +28,7 @@ pub(crate) fn window_theme_for_color(background: Color) -> winit::window::Theme 
 }
 
 /// The theme's request for the native window backdrop.
+#[cfg(target_os = "macos")]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct BackdropStyle {
     /// Whether the theme asks for the backdrop at all.
@@ -81,7 +82,9 @@ pub(crate) struct Palette {
     /// The side panels' face color when they are frosted.
     panel_tint: Color,
     /// The macOS material and its appearance behind the blur.
+    #[cfg(target_os = "macos")]
     blur_material: runebender::ui::theme::BlurMaterial,
+    #[cfg(target_os = "macos")]
     blur_appearance: runebender::ui::theme::BlurAppearance,
     /// Text on the window ground; custom themes can supply the optional `appInk` token.
     pub app_ink: Color,
@@ -198,7 +201,9 @@ impl Palette {
             blur_panels: t.window.blur_panels,
             panel_tint_opacity: t.window.panel_tint_opacity,
             panel_tint: color(t.surface("panelTint")),
+            #[cfg(target_os = "macos")]
             blur_material: t.window.blur_material,
+            #[cfg(target_os = "macos")]
             blur_appearance: t.window.blur_appearance,
             app_ink: color(t.text("appInk")),
             panel,
@@ -328,6 +333,7 @@ impl Palette {
     }
 
     /// Everything the native backdrop needs from the theme.
+    #[cfg(target_os = "macos")]
     pub(crate) fn backdrop_style(&self) -> BackdropStyle {
         BackdropStyle {
             enabled: self.blur_background,

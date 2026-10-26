@@ -1,0 +1,15 @@
+# Copyright 2026 the Runebender Authors
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+
+[macos]
+# Increase for every published build, including each alpha. Never reuse a build number.
+build_number = 1
+targets = ["aarch64-apple-darwin"]
+
+[sparkle]
+version = "2.10.1"
+sha256 = "1a856d2a9edb8e628de88121d7be04cf0e2167f8641650b78fca00b14244cf27"
+minimum_macos = "12.0"
+feed_url = "https://runebender.org/updates/alpha/appcast.xml"
+public_key = "ccGLGelYY+twiT7626zt7JaPJhoWOl4FB5i5oWNpSsk="
+keychain_account = "org.runebender.Runebender"
