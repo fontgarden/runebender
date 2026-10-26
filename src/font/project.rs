@@ -361,6 +361,11 @@ pub struct Project {
     pub brace: Vec<BraceSource>,
     /// Independent, session-only experimental versions of live masters.
     pub experiments: super::experiments::Experiments,
+    /// The Glyphs file or Fontra folder this project's UFOs were converted from, which Save
+    /// also writes back to.
+    pub foreign_source: Option<crate::formats::foreign::ForeignSource>,
+    /// What the conversion from a foreign source could not read.
+    pub import_warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -546,6 +551,8 @@ impl Project {
             ds_dirty: false,
             brace: Vec::new(),
             experiments: super::experiments::Experiments::default(),
+            foreign_source: None,
+            import_warnings: Vec::new(),
         };
         project.compute_compat();
         project
@@ -576,20 +583,28 @@ impl Project {
                 GlyphsSource::Neither
             }
         });
-        if let Some(kind @ (GlyphsSource::File | GlyphsSource::Package)) = glyphs_ext {
-            let result = match kind {
-                GlyphsSource::Package => {
+        let foreign = crate::formats::foreign::ForeignFormat::of(path);
+        if let Some(format) = foreign {
+            let result = match glyphs_ext {
+                Some(GlyphsSource::Package) => {
                     let entries = read_glyphspackage(path)?;
                     crate::formats::glyphs_import::glyphs_package_to_ufo_files(&entries)?
                 }
-                _ => {
+                Some(GlyphsSource::File) => {
                     let text = std::fs::read_to_string(path).map_err(|e| format!("{e}"))?;
                     crate::formats::glyphs_import::glyphs_to_ufo_files(&text)?
                 }
+                _ => crate::formats::fontra::to_ufo_files(path)?,
             };
-            let open = super::persistence::publish_glyphs_import(path, result)?;
+            let warnings = result.warnings.clone();
+            let open = super::persistence::publish_converted_import(path, result)?;
             let mut project = Self::load_inner(&open)?;
             project.export_source = Some(open);
+            project.foreign_source = Some(crate::formats::foreign::ForeignSource {
+                path: path.to_path_buf(),
+                format,
+            });
+            project.import_warnings = warnings;
             return Ok(project);
         }
         if path
@@ -843,6 +858,8 @@ impl Project {
             ds_dirty: false,
             brace,
             experiments: super::experiments::Experiments::default(),
+            foreign_source: None,
+            import_warnings: Vec::new(),
         };
         project.refresh_instances_from_doc();
         Ok(project)
@@ -2364,6 +2381,14 @@ impl Project {
         };
         super::persistence::ExportPlan::new(exports, designspace)?.execute()?;
         self.mark_saved();
+        if let (Some(foreign), Some(working)) = (&self.foreign_source, &self.export_source) {
+            crate::formats::foreign::write_back(foreign, working).map_err(|error| {
+                format!(
+                    "the UFO working copy saved, but {} did not: {error}",
+                    foreign.path.display()
+                )
+            })?;
+        }
         Ok(())
     }
 

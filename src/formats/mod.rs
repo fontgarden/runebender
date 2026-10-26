@@ -5,11 +5,14 @@
 //!
 //! `metadata` owns codecs for persisted keys and values.
 //! The remaining modules read or write complete formats such as UFO, SVG, compiled fonts,
-//! `.glyphs`, and traced images.
+//! `.glyphs`, Fontra folders, and traced images.
 
 pub mod babelfont_import;
 pub mod binary_import;
 pub mod color_font;
+pub mod fontra;
+pub mod foreign;
+pub mod glyphs_export;
 pub mod glyphs_import;
 pub mod icon_ufo;
 pub mod image_trace;

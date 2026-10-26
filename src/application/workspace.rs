@@ -466,8 +466,8 @@ impl AppState {
                     workspace.note = format!("Place image: {error}");
                 }
             }
-            "ufo" | "nufo" | "designspace" | "glyphs" | "glyphspackage" | "babelfont" | "ttf"
-            | "otf" => {
+            "ufo" | "nufo" | "designspace" | "glyphs" | "glyphspackage" | "fontra"
+            | "babelfont" | "ttf" | "otf" => {
                 self.open_path(&path);
             }
             _ => {

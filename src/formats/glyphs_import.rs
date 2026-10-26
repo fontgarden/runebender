@@ -8,14 +8,29 @@
 //! load pipeline stays the single ingestion path. A .glyphs file is
 //! translated into the same shape before it ever reaches the
 //! loader: per-master UFOs and, for multi-master fonts, a
-//! designspace. Read-only: nothing here writes .glyphs back.
+//! designspace. Saving back to the Glyphs source is
+//! [`super::glyphs_export`]'s job.
 //!
 //! Scope: outlines, components (position/rotation/scale), anchors,
 //! widths, unicodes, per-master vertical metrics, kerning + kerning
-//! groups. Skipped for now: brace/bracket layers, smart components,
-//! OpenType features, color labels, hints. Conversion choices follow
-//! glyphsLib where a convention exists: closed-contour node
-//! rotation, kern-group naming, italic-angle sign.
+//! groups. Conversion choices follow glyphsLib where a convention
+//! exists: closed-contour node rotation, kern-group naming,
+//! italic-angle sign.
+//!
+//! # Known gaps
+//!
+//! - Not read: brace and bracket layers, smart components, OpenType
+//!   features, classes and prefixes, color labels, hints, guides,
+//!   instances, right-to-left and vertical kerning, and most custom
+//!   parameters. Write-back leaves them in the file untouched.
+//! - Not reading features means the compiled preview has no Glyphs
+//!   features, and feature edits made in Runebender stay in the UFO
+//!   working copy.
+//! - Only a glyph that fails to convert is reported as a warning. The
+//!   skipped data above is dropped silently on open; it should be
+//!   listed as warnings, as the Fontra import does.
+//! - Masters map to UFOs by file name (`master_ufo_name`), so two
+//!   masters with the same name collide.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -86,11 +101,9 @@ fn convert(font: GlyphsFont) -> Result<ConversionResult, String> {
     } else {
         family
     };
-    let family_compact: String = family.chars().filter(|c| !c.is_whitespace()).collect();
-
     for master in &font.masters {
         let master_name = master_display_name(font, master);
-        let ufo_dir = format!("{family_compact}-{}.ufo", compact(&master_name));
+        let ufo_dir = master_ufo_name(font, master);
 
         // metainfo + layercontents make the synthesized UFO honest.
         files.push(ConvertedFile {
@@ -163,6 +176,7 @@ fn convert(font: GlyphsFont) -> Result<ConversionResult, String> {
     }
 
     if font.masters.len() > 1 {
+        let family_compact = compact(family);
         files.push(ConvertedFile {
             path: format!("{family_compact}.designspace"),
             text: designspace_xml(font, family, &family_compact),
@@ -174,6 +188,21 @@ fn convert(font: GlyphsFont) -> Result<ConversionResult, String> {
         files,
         warnings,
     })
+}
+
+/// The working-copy UFO a Glyphs master converts to, such as `Family-Regular.ufo`.
+pub(crate) fn master_ufo_name(font: &Glyphs3, master: &glyphslib::glyphs3::Master) -> String {
+    let family = font.family_name.trim();
+    let family = if family.is_empty() {
+        "Untitled"
+    } else {
+        family
+    };
+    format!(
+        "{}-{}.ufo",
+        compact(family),
+        compact(&master_display_name(font, master))
+    )
 }
 
 fn compact(name: &str) -> String {
@@ -264,6 +293,17 @@ fn layer_to_glif(
     glyph: &glyphslib::glyphs3::Glyph,
     layer: &glyphslib::glyphs3::Layer,
 ) -> Result<String, String> {
+    let out = layer_to_norad(font, glyph, layer)?;
+    let bytes = out.encode_xml().map_err(|e| format!("encode .glif: {e}"))?;
+    String::from_utf8(bytes).map_err(|e| format!("glif not utf-8: {e}"))
+}
+
+/// A Glyphs layer as the UFO glyph the import writes for it.
+pub(crate) fn layer_to_norad(
+    font: &Glyphs3,
+    glyph: &glyphslib::glyphs3::Glyph,
+    layer: &glyphslib::glyphs3::Layer,
+) -> Result<norad::Glyph, String> {
     let mut out = norad::Glyph::new(&glyph.name);
     out.width = layer.width as f64;
     out.codepoints = glyph
@@ -368,8 +408,7 @@ fn layer_to_glif(
         }
     }
 
-    let bytes = out.encode_xml().map_err(|e| format!("encode .glif: {e}"))?;
-    String::from_utf8(bytes).map_err(|e| format!("glif not utf-8: {e}"))
+    Ok(out)
 }
 
 fn point_type(node_type: NodeType) -> norad::PointType {
@@ -392,7 +431,7 @@ fn is_smooth(node_type: NodeType) -> bool {
 ///
 /// Glyphs `@MMK_L_x` / `@MMK_R_x` become UFO `public.kern1.x` /
 /// `public.kern2.x`. Plain names pass through.
-fn kern_name(raw: &str, first_side: bool) -> String {
+pub(crate) fn kern_name(raw: &str, first_side: bool) -> String {
     if let Some(rest) = raw.strip_prefix("@MMK_L_") {
         return format!("public.kern1.{rest}");
     }

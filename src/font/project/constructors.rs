@@ -124,6 +124,8 @@ impl Project {
             ds_dirty: false,
             brace: Vec::new(),
             experiments: super::super::experiments::Experiments::default(),
+            foreign_source: None,
+            import_warnings: Vec::new(),
         };
         project.compute_compat();
         Ok(project)

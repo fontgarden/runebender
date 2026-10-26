@@ -355,21 +355,16 @@ impl ExportPlan {
     }
 }
 
-/// Stage, validate and publish one converted Glyphs file set without replacing existing output.
-pub(crate) fn publish_glyphs_import(
+/// Stage, validate and publish one converted Glyphs or Fontra file set without replacing
+/// existing output. Conversion warnings do not stop it; the caller reports them.
+pub(crate) fn publish_converted_import(
     source: &Path,
     result: ConversionResult,
 ) -> Result<PathBuf, String> {
-    if !result.warnings.is_empty() {
-        return Err(format!(
-            "Glyphs conversion reported unsupported data:\n- {}",
-            result.warnings.join("\n- ")
-        ));
-    }
     let stem = source
         .file_stem()
         .filter(|stem| !stem.is_empty())
-        .ok_or_else(|| format!("invalid Glyphs source path {}", source.display()))?
+        .ok_or_else(|| format!("invalid import source path {}", source.display()))?
         .to_string_lossy();
     let parent = source.parent().unwrap_or(Path::new("."));
     let preferred = parent.join(format!("{stem}-ufo"));
@@ -382,7 +377,7 @@ pub(crate) fn publish_glyphs_import(
     };
     let open_relative = stage_generated_files(&staged.stage, result)?;
     ImportPlan::read(&staged.stage.join(&open_relative))
-        .map_err(|error| format!("staged Glyphs conversion is invalid: {error}"))?;
+        .map_err(|error| format!("staged conversion is invalid: {error}"))?;
     if path_entry_exists(&staged.destination)? {
         return Err(format!(
             "generated import destination appeared while staging: {}",
@@ -470,9 +465,9 @@ fn stage_generated_files(root: &Path, result: ConversionResult) -> Result<PathBu
     match (designspaces.as_slice(), ufo_roots.as_slice()) {
         ([designspace], [_first, ..]) => Ok(designspace.clone()),
         ([], [ufo]) => Ok(ufo.clone()),
-        ([], []) => Err("Glyphs conversion produced no UFO".into()),
-        ([], _) => Err("Glyphs conversion produced multiple UFOs without a Designspace".into()),
-        (_, _) => Err("Glyphs conversion produced multiple Designspace files".into()),
+        ([], []) => Err("conversion produced no UFO".into()),
+        ([], _) => Err("conversion produced multiple UFOs without a Designspace".into()),
+        (_, _) => Err("conversion produced multiple Designspace files".into()),
     }
 }
 
@@ -1019,20 +1014,6 @@ mod tests {
     }
 
     #[test]
-    fn glyphs_warnings_fail_before_creating_output() {
-        let scratch = Scratch::new("glyphs-warning");
-        let source = scratch.0.join("Example.glyphs");
-        let result = ConversionResult {
-            family_name: "Example".into(),
-            files: Vec::new(),
-            warnings: vec!["A (Regular): unsupported layer".into()],
-        };
-        let error = publish_glyphs_import(&source, result).unwrap_err();
-        assert!(error.contains("unsupported layer"), "{error}");
-        assert!(!scratch.0.join("Example-ufo").exists());
-    }
-
-    #[test]
     fn glyphs_output_uses_a_validated_collision_free_destination() {
         let scratch = Scratch::new("glyphs-collision");
         let source = scratch.0.join("Example.glyphs");
@@ -1040,7 +1021,7 @@ mod tests {
         fs::create_dir(&occupied).unwrap();
         fs::write(occupied.join("sentinel"), b"keep").unwrap();
 
-        let open = publish_glyphs_import(&source, generated_ufo()).unwrap();
+        let open = publish_converted_import(&source, generated_ufo()).unwrap();
 
         assert_eq!(
             open,
@@ -1087,7 +1068,7 @@ mod tests {
             }],
             warnings: Vec::new(),
         };
-        let error = publish_glyphs_import(&source, result).unwrap_err();
+        let error = publish_converted_import(&source, result).unwrap_err();
         assert!(error.contains("unsafe generated import path"), "{error}");
         assert!(!scratch.0.join("Example-ufo").exists());
         assert!(!scratch.0.join("outside").exists());

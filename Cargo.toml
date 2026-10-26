@@ -62,6 +62,8 @@ linesweeper = "0.4"
 neuraltype-core = { git = "https://github.com/eliheuer/post-opentype", rev = "572c905cde57fa65a3e0d5754f6c62699109029c", optional = true }
 skrifa = "0.46.2"
 glyphslib = "0.2.7"
+# Fontra folders keep their glyph map and kerning as semicolon-separated tables.
+csv = "1.4"
 img2bez = { git = "https://github.com/eliheuer/img2bez", rev = "80bdb2e6d0226449a5e9bf05a49b3339276020c8", default-features = false }
 plist = { version = "1.4", features = ["serde"] }
 quick-xml = { version = "0.41", features = ["serialize"] }

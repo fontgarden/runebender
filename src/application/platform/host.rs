@@ -81,6 +81,20 @@ impl Workspace {
         let source_fingerprint = source_fingerprint(&source_roots);
         let features_buf = font.feature_text().to_owned();
         let source_name_buf = font.master_names()[font.active()].to_string();
+        // A Glyphs or Fontra source opens through UFOs; say what the conversion left out.
+        let import_note = match font.project.import_warnings.as_slice() {
+            [] => String::new(),
+            warnings => {
+                for warning in warnings {
+                    eprintln!("runebender: import: {warning}");
+                }
+                format!(
+                    "Opened with {} unread item(s), listed in the terminal: {}",
+                    warnings.len(),
+                    warnings[0]
+                )
+            }
+        };
         let hidden_docks: Vec<String> = std::env::var("RUNEBENDER_HIDDEN_DOCKS")
             .map(|s| s.split(',').map(str::trim).map(str::to_string).collect())
             .unwrap_or_default();
@@ -354,7 +368,7 @@ impl Workspace {
             modified,
             source_roots,
             source_fingerprint,
-            note: String::new(),
+            note: import_note,
             ui_actions: Vec::new(),
             ui_action_sequence: 0,
             view,
