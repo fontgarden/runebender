@@ -37,8 +37,10 @@ Rail tab Chat. Source: `src/application/view/panels/chat.rs`,
 `src/application/editor/tools/chat.rs`, `src/application/editor/tools/chat_endpoint.rs`,
 `src/workflows/llama_server.rs`, `src/workflows/local_chat.rs`.
 
-- Controls: the field "Ask about the open font", the model picker, Clear, Talk,
-  Stop and Send. Each answer has a Detail toggle.
+- Controls: the field "Ask about the open font", the model picker, and three icon
+  buttons: a cross that clears the conversation, a microphone for voice input, and
+  an arrow that sends, which is a stop square while the model answers.
+  Each answer has a Detail toggle.
 - Backend, chosen for each turn:
   1. `RUNEBENDER_CHAT_ENDPOINT` and `RUNEBENDER_CHAT_MODEL`.
   2. A shared `llama-server` on `127.0.0.1:8080`, when `GET /v1/models` lists the selected folder name.
@@ -61,16 +63,32 @@ Rail tab Chat. Source: `src/application/view/panels/chat.rs`,
 
 ### 2.2 Voice input
 
-Talk button in Chat. Source: `src/application/editor/tools/voice.rs`,
+Microphone button in Chat. Source: `src/application/editor/tools/voice.rs`,
 `src/workflows/whisper_server.rs`.
 
 - Records up to 90 s and sends 16 kHz mono WAV to `POST /inference`, with a
   vocabulary prompt and the family name.
-- Puts the text in the field. The designer checks it and sends it.
+- The microphone icon becomes sound bars while it listens; pressing them stops it.
+- Puts the text in the field, after any text already there. The designer checks it and sends it.
+- A bracketed transcription such as `(audience mumbling)` counts as nothing heard.
 - Model: `RUNEBENDER_WHISPER_MODEL`, or `model.bin` in a `whisper*` folder under a model root.
 - The button is hidden until the binary and a model are found.
 
-### 2.3 Local AI rail
+### 2.3 Proof view
+
+Editor footer, the fourth button. Source: `src/application/view/canvas/proof.rs`,
+`src/application/view/render.rs`, `src/application/view/chrome.rs`.
+
+- Replaces the canvas with a proof of the open glyph; the button switches back.
+- Shows the current drawing and the latest proposal that names the glyph, side by
+  side at one scale in their advance boxes, with Install and Discard.
+- Below them, current and proposal in running text at 96, 48 and 24 px per em: the
+  Text tool's composition, or a sample of the glyph between n, o, H and O.
+- Reads the proposal in the active master only.
+- `RUNEBENDER_PROOF_VIEW=1` opens it, and `RUNEBENDER_PROOF_SAMPLE=1` adds a sample
+  proposal, for headless screenshots.
+
+### 2.4 Local AI rail
 
 Rail tab Local AI. Source: `src/application/view/panels/local_ai.rs`,
 `src/application/view/panels/weight_debt.rs`, `src/application/editor/tools/local_ai.rs`.
@@ -87,7 +105,7 @@ Rail tab Local AI. Source: `src/application/view/panels/local_ai.rs`,
 - Keeps at most 16 candidates for the session. Install is one undo group.
 - Glyph > Bolden With Model… runs the `bolden` task on the open glyph.
 
-### 2.4 Local AI Shapes
+### 2.5 Local AI Shapes
 
 Toolbar Shapes group, Local AI Shapes. Source: `src/application/editor/tools/ai_shapes.rs`,
 `src/application/view/panels/ai_shapes.rs`.
@@ -102,7 +120,7 @@ Toolbar Shapes group, Local AI Shapes. Source: `src/application/editor/tools/ai_
 - Writes to `~/Runebender/models/shapes/` for the sample font, or to
   `<Font>.models/shapes/` for the open font.
 
-### 2.5 Brush and Draft with Virtua
+### 2.6 Brush and Draft with Virtua
 
 Toolbar Brush tile. Source: `src/application/view/panels/sketch.rs`,
 `src/application/editor/tools/sketch.rs`, `src/workflows/local_sketch.rs`,
@@ -115,7 +133,7 @@ Toolbar Brush tile. Source: `src/application/view/panels/sketch.rs`,
 - The editor sends 1 candidate, temperature 0.0, seed 0 and an identity strength from 0 to 1.5.
 - Review: Check status, Retry current ink, Use draft in glyph, Open proof comparison.
 
-### 2.6 Neural fonts
+### 2.7 Neural fonts
 
 Source: `crates/nufo`, `src/application/editor/tools/label.rs`,
 `src/application/view/panels/neural.rs`, `src/application/platform/train.rs`,
@@ -132,7 +150,7 @@ Source: `crates/nufo`, `src/application/editor/tools/label.rs`,
 - The preview strip has Pieces, which assembles labeled pieces with no model, and
   Model, which draws with a trained version through `neuraltype-core`.
 
-### 2.7 Graph
+### 2.8 Graph
 
 Source: `src/workflows/graph.rs`, `src/workflows/graph_run.rs`,
 `src/workflows/graph_live.rs`, `src/workflows/graph_session.rs`.
@@ -144,7 +162,7 @@ Source: `src/workflows/graph.rs`, `src/workflows/graph_run.rs`,
   result in a `live.python` recipe node.
 - Graph runs from MCP on saved files are always proposal-only.
 
-### 2.8 Design context
+### 2.9 Design context
 
 Source: `src/automation/context.rs`. A later layer wins.
 
@@ -249,6 +267,10 @@ Model roots: `RUNEBENDER_MODELS` or `~/Runebender/models`, the older
 `~/runebender/models`. That is the same folder on a case-insensitive macOS
 volume and a different folder on Linux.
 
+A `presets.ini` at the model root holds each chat model's settings for a shared
+`llama-server` in router mode, one section per folder name; see
+[the shared model server](LOCAL-MODELS.md#one-server-for-every-local-agent).
+
 The editor downloads no models. `scripts/bundle_llama.py` copies a pinned
 `llama-server` build into the macOS app bundle.
 
@@ -256,7 +278,7 @@ The editor downloads no models. `scripts/bundle_llama.py` copies a pinned
 
 | Feature | Status |
 | --- | --- |
-| Chat, voice input | Working |
+| Chat, voice input, Proof view | Working |
 | Local AI rail, Bolden, Weight Debt | Working; the models score only slightly better than a mean shift |
 | Local AI Shapes | Working |
 | Live MCP, experiments, compiled proofs | Working on macOS and Linux |
@@ -267,7 +289,7 @@ The editor downloads no models. `scripts/bundle_llama.py` copies a pinned
 | Chat model catalog with download | Planned |
 | Sketch redraw with a drawing model | Planned |
 | Spacing and kerning models | Planned; named in font-ml, not built |
-| Draft ranking model, Proof panel, one model for several families | Planned |
+| Draft ranking model, one model for several families | Planned |
 
 The planning records are [the AI architecture checklist](AI-ARCHITECTURE-CHECKLIST.md)
 and [the Virtua Regular AI checklist](VIRTUA-REGULAR-AI-CHECKLIST.md).
