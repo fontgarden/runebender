@@ -19,5 +19,13 @@
 # Trained neural font versions beside a .nufo source
 *.models/
 
-# Icons of the installable browser app.
+# Source artwork used to build the macOS application icon.
+!/assets/icons/runebender.png
+
+# Icons of the installable browser app and the Steam Deck shortcut art.
 !/web/icons/*.png
+!/steamdeck/art/*.png
+
+# Python packaging helper caches.
+__pycache__/
+*.py[cod]

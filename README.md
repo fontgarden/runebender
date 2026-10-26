@@ -39,6 +39,19 @@ This profile keeps release's optimization level and disabled debug assertions, w
 Its first build fills a separate cache; later source changes reuse incremental compilation data.
 Use `cargo build --release --locked` for final release builds and performance comparisons.
 
+## macOS application packages
+
+To build a local `.app` and drag-to-Applications DMG on macOS:
+
+```sh
+./scripts/build_dmg.sh
+```
+
+Each invocation builds the current source with the temporary application icon and writes a fresh DMG under `target/macos/`.
+This is a local test package with ad-hoc signing.
+Follow [Testing a Runebender DMG](docs/TESTING-MACOS.md) to install and exercise it.
+See [Releasing Runebender](docs/RELEASING.md) for the release plan, signing, notarization, Cargo distribution, and website downloads, and [CHANGELOG.md](docs/CHANGELOG.md) for release notes.
+
 ## Local sketch models
 
 The native Brush panel can draft with an installed Virtua model and compare the result before applying it.
