@@ -13,6 +13,7 @@ Commands in these guides run from the repository root unless stated otherwise.
 ## Interface and local models
 
 - [Interface design and headless screenshots](UI-DESIGN.md): shared panel conventions and visual validation.
+- [Local AI reference](LOCAL-AI.md): every local AI feature, agent tool, runtime and model location, checked by `tests/local_ai_reference.rs`.
 - [Local model packages](LOCAL-MODELS.md): package layout, runtime requirements, and installation.
 - [Virtua Regular testing](VIRTUA-REGULAR-TESTING.md): scratch-font setup and manual review.
 

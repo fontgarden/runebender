@@ -14,6 +14,7 @@ The live host also serves the workflows in `skills/` as MCP prompts; link a `ski
 The tiny `.codex/config.toml` repeats that command so Codex can discover it automatically in a trusted checkout.
 See [MCP and the live editor](https://runebender.org/docs/mcp.html) for setup and document-selection guidance.
 No agent-specific directory is required to understand or work on this repository.
+[docs/LOCAL-AI.md](docs/LOCAL-AI.md) is the reference for every local AI feature and agent tool; `tests/local_ai_reference.rs` checks it against the registries. A change that adds, removes or renames a local AI feature, tool, prompt, model location, environment variable or runtime updates that file in the same commit.
 
 Before changing Rust or documentation, read and follow the
 [Linebender formatting scheme](https://linebender.org/wiki/formatting-scheme/).

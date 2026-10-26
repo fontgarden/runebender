@@ -10,7 +10,7 @@ The live tools talk to the unsaved document inside the running editor. Nothing h
 
 ## Connect
 
-1. Call `editor_sessions`. Each entry is one open editor window with its socket, project path and age.
+1. Call `editor_sessions`. Each entry is the socket path of one open editor. Connect to read its project.
 2. Call `editor_connect` with the socket of the window the designer means. If more than one editor is open, ask which font before connecting. A closed endpoint never reconnects on its own; connect again.
 3. Call `project_info`. Note the `document_epoch` and the stable source ids. Display order can change when sources are reordered; the id does not. Use the id in every later call.
 4. Call `editor_context` to learn the active source, layer and glyph when the request says "this glyph" or "the current master".
@@ -20,7 +20,7 @@ The live tools talk to the unsaved document inside the running editor. Nothing h
 
 - Read before you judge. `analyze_glyph` returns stems, bars, kinks, grid fit, the mark label and compatibility with the other sources. `read_glyph` returns points. `proof` and `specimen` return images. State a number only after a tool returned it.
 - Edits are proposals. `propose_edits` writes a proposal layer the designer installs, nudges or discards in the editor. Change a glyph with the smallest operation that says what moved: `transform_points` moves or scales a chosen set of points (by index or by a region in font units, handles included), `adjust_width` adds to the advance, `set_point` moves one point. Redraw with `set_outline` only when the request is to draw, and then keep the point structure the other sources have. Do not call `proposal_install` or `proposal_discard` unless the designer asked for that exact glyph in this conversation.
-- `agent_apply` edits the live glyph and needs the designer's grant, carried as `user_approved` with the current revision. Reuse the same actor, operation key and payload after a lost response, or read `agent_receipt`. `agent_cancel` with the same identity stops a pending apply; it never undoes a committed edit.
+- `agent_apply` edits the live glyph and needs the designer's grant, carried as `authorization: "user-approved"` with the current revision. Reuse the same actor, operation key and payload after a lost response, or read `agent_receipt`. `agent_cancel` with the same identity stops a pending apply; it never undoes a committed edit.
 - Mark labels are the designer's grading. Never set green, purple or yellow, and never clear a mark. `flag_glyph` is the one mark an agent may set: pink, with a dated one-line reason written into the glyph's note, on glyphs that are red, orange, blue, pink or unmarked.
 - Never save, export or write into the font's folder. The designer saves.
 - When a request is ambiguous about which source, glyph or layer, ask. One question is cheaper than one wrong edit.

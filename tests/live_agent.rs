@@ -328,7 +328,6 @@ fn live_mcp_serves_workflows_as_prompts_before_any_connection() {
                     | "set_outline"
                     | "transform_points"
                     | "adjust_width"
-                    | "user_approved"
                     | "document_epoch"
                     | "lsb"
                     | "rsb"

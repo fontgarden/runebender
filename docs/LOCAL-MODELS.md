@@ -51,7 +51,7 @@ Model copying leaves FontGarden's training and development files unchanged.
 Select the intended Arabic occurrence in Text, switch to Brush, draw temporary ink, and choose an approved reference and rationale.
 Choose a ready local model and **Draft with Virtua**.
 Identity strength follows the Web control, from 0 to 1.5.
-Each draft runs at most three samples with temperature 0.5 and seed 0, retaining the script-selected candidate; its score is not visual approval.
+Each draft runs one sample with temperature 0 and seed 0, so the same ink gives the same draft; its score is not visual approval.
 The optional Unicode hint is explicit conditioning, not an edit to the glyph's encoding.
 For example, a medial kaf experiment may explicitly use `0643`; a contextual glyph may have no source Unicode and may not exist in the checkpoint's name vocabulary.
 The model does not consume the selected green reference at inference; that reference supports grading guards and human review.

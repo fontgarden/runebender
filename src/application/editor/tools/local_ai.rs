@@ -408,7 +408,7 @@ fn run_font_ml_with_limits(
 
 impl Workspace {
     /// Where models are looked for: `$RUNEBENDER_MODELS`, else
-    /// `~/.runebender/models`, plus the roots core reads.
+    /// `~/Runebender/models`, plus the roots core reads.
     pub(crate) fn models_dir() -> Option<PathBuf> {
         runebender::workflows::graph_run::default_models_dir()
     }
