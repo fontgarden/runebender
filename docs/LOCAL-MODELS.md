@@ -98,7 +98,7 @@ model is in memory once:
 
 `presets.ini` holds each model's server settings, one `[folder-name]`
 section per model with llama-server arguments as keys; it carries the same
-values as the folders' `model.json` files. Launch the editor with
-`RUNEBENDER_CHAT_ENDPOINT=http://127.0.0.1:8080/v1` and
-`RUNEBENDER_CHAT_MODEL=<folder name>` and the Chat panel uses that server
-instead of starting its own.
+values as the folders' `model.json` files. When that server is running on port 8080 and lists the model picked in
+the Chat panel, the panel uses it instead of starting its own server; no
+setting is needed. `RUNEBENDER_CHAT_ENDPOINT` and `RUNEBENDER_CHAT_MODEL`
+still name any other server explicitly.

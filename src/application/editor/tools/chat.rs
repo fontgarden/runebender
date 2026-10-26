@@ -194,6 +194,38 @@ fn ensure_llama_server(
         .clone())
 }
 
+/// The port of the shared `llama-server` router that `local-model` starts
+/// for every local agent on this machine.
+const SHARED_SERVER_PORT: u16 = 8080;
+
+/// The endpoint of the shared model server when it is running and lists a
+/// model named `name`: one `GET /v1/models` on loopback, answered within
+/// a fraction of a second or not at all.
+fn shared_server_endpoint(name: &str) -> Option<LocalChatEndpoint> {
+    use std::io::{Read as _, Write as _};
+    let address = std::net::SocketAddr::from(([127, 0, 0, 1], SHARED_SERVER_PORT));
+    let timeout = std::time::Duration::from_millis(300);
+    let mut stream = std::net::TcpStream::connect_timeout(&address, timeout).ok()?;
+    stream.set_read_timeout(Some(timeout)).ok()?;
+    stream.set_write_timeout(Some(timeout)).ok()?;
+    stream
+        .write_all(b"GET /v1/models HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .ok()?;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).ok()?;
+    let body_at = response.windows(4).position(|w| w == b"\r\n\r\n")? + 4;
+    let body: Value = serde_json::from_slice(&response[body_at..]).ok()?;
+    let listed = body
+        .get("data")?
+        .as_array()?
+        .iter()
+        .any(|model| model.get("id").and_then(Value::as_str) == Some(name));
+    if !listed {
+        return None;
+    }
+    LocalChatEndpoint::parse(&format!("http://127.0.0.1:{SHARED_SERVER_PORT}/v1"), name).ok()
+}
+
 /// Use this application's CLI, with an explicit override for custom runners.
 fn core_binary() -> Option<PathBuf> {
     std::env::var_os("RUNEBENDER_CORE")
@@ -295,9 +327,18 @@ impl Workspace {
             .map(|server| server.document_epoch().to_string());
         #[cfg(not(unix))]
         let epoch: Option<String> = None;
-        // Without a configured endpoint, a selected GGUF is served by a
-        // supervised llama-server when that binary exists; otherwise the
-        // older font-ml runtime runs it.
+        // Without a configured endpoint, a shared server that already lists
+        // the selected model is used, so the model is in memory once for
+        // the editor and the coding agents. Otherwise a selected GGUF is
+        // served by a supervised llama-server when that binary exists, and
+        // failing that the older font-ml runtime runs it.
+        let endpoint = endpoint.or_else(|| {
+            let folder = self.chat.model.as_deref()?;
+            let name = folder.file_name()?.to_str()?;
+            let endpoint = shared_server_endpoint(name)?;
+            eprintln!("chat uses the shared model server at {}", endpoint.url());
+            Some(endpoint)
+        });
         let llama = if endpoint.is_none() {
             let Some(model) = self.chat.model.clone() else {
                 self.note = "Choose a local chat model first".into();
