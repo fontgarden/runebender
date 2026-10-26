@@ -1,0 +1,614 @@
+"controller_mappings"
+{
+	"version"		"3"
+	"revision"		"1"
+	"title"		"Runebender"
+	"description"		"Runebender font editor: right pad is the pointer, triggers click and pan, face buttons pick tools, bumpers undo and redo."
+	"creator"		"76561198218411607"
+	"controller_type"		"controller_neptune"
+	"major_revision"		"0"
+	"minor_revision"		"0"
+	"Timestamp"		"1792700000"
+	"group"
+	{
+		"id"		"0"
+		"mode"		"four_buttons"
+		"inputs"
+		{
+			"button_a"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press RETURN, Confirm"
+						}
+					}
+				}
+			}
+			"button_b"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press ESCAPE, Overview"
+						}
+					}
+				}
+			}
+			"button_x"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press V, Select tool"
+						}
+					}
+					"Long_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press M, Measure tool"
+						}
+						"settings"
+						{
+							"long_press_time"		"400"
+						}
+					}
+				}
+			}
+			"button_y"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press P, Pen tool"
+						}
+					}
+					"Long_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press B, Hyper pen"
+						}
+						"settings"
+						{
+							"long_press_time"		"400"
+						}
+					}
+				}
+			}
+		}
+	}
+	"group"
+	{
+		"id"		"1"
+		"mode"		"dpad"
+		"inputs"
+		{
+			"dpad_north"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press UP_ARROW, Nudge up"
+						}
+						"settings"
+						{
+							"hold_repeats"		"1"
+							"repeat_rate"		"80"
+						}
+					}
+				}
+			}
+			"dpad_south"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press DOWN_ARROW, Nudge down"
+						}
+						"settings"
+						{
+							"hold_repeats"		"1"
+							"repeat_rate"		"80"
+						}
+					}
+				}
+			}
+			"dpad_east"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press RIGHT_ARROW, Nudge right"
+						}
+						"settings"
+						{
+							"hold_repeats"		"1"
+							"repeat_rate"		"80"
+						}
+					}
+				}
+			}
+			"dpad_west"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press LEFT_ARROW, Nudge left"
+						}
+						"settings"
+						{
+							"hold_repeats"		"1"
+							"repeat_rate"		"80"
+						}
+					}
+				}
+			}
+		}
+		"settings"
+		{
+			"requires_click"		"0"
+			"layout"		"0"
+		}
+	}
+	"group"
+	{
+		"id"		"2"
+		"mode"		"dpad"
+		"inputs"
+		{
+			"dpad_north"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press UP_ARROW, Nudge up"
+						}
+						"settings"
+						{
+							"hold_repeats"		"1"
+							"repeat_rate"		"60"
+						}
+					}
+				}
+			}
+			"dpad_south"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press DOWN_ARROW, Nudge down"
+						}
+						"settings"
+						{
+							"hold_repeats"		"1"
+							"repeat_rate"		"60"
+						}
+					}
+				}
+			}
+			"dpad_east"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press RIGHT_ARROW, Nudge right"
+						}
+						"settings"
+						{
+							"hold_repeats"		"1"
+							"repeat_rate"		"60"
+						}
+					}
+				}
+			}
+			"dpad_west"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press LEFT_ARROW, Nudge left"
+						}
+						"settings"
+						{
+							"hold_repeats"		"1"
+							"repeat_rate"		"60"
+						}
+					}
+				}
+			}
+		}
+		"settings"
+		{
+			"requires_click"		"0"
+			"layout"		"0"
+		}
+	}
+	"group"
+	{
+		"id"		"3"
+		"mode"		"absolute_mouse"
+		"inputs"
+		{
+			"click"
+			{
+				"activators"
+				{
+					"Soft_Press"
+					{
+						"bindings"
+						{
+							"binding"		"mouse_button LEFT, Click"
+						}
+						"settings"
+						{
+							"haptic_intensity"		"1"
+						}
+					}
+				}
+			}
+		}
+		"settings"
+		{
+			"sensitivity"		"100"
+			"doubletap_beep"		"0"
+		}
+	}
+	"group"
+	{
+		"id"		"4"
+		"mode"		"trigger"
+		"inputs"
+		{
+			"edge"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press SPACE, Pan (hold)"
+						}
+						"settings"
+						{
+							"haptic_intensity"		"2"
+						}
+					}
+				}
+			}
+		}
+	}
+	"group"
+	{
+		"id"		"5"
+		"mode"		"trigger"
+		"inputs"
+		{
+			"edge"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"mouse_button LEFT, Click and drag"
+						}
+						"settings"
+						{
+							"haptic_intensity"		"2"
+						}
+					}
+				}
+			}
+		}
+	}
+	"group"
+	{
+		"id"		"7"
+		"mode"		"scrollwheel"
+		"inputs"
+		{
+			"scroll_clockwise"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"mouse_wheel SCROLL_UP, Zoom in"
+						}
+						"settings"
+						{
+							"interruptable"		"0"
+						}
+					}
+				}
+			}
+			"scroll_counterclockwise"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"mouse_wheel SCROLL_DOWN, Zoom out"
+						}
+						"settings"
+						{
+							"interruptable"		"0"
+						}
+					}
+				}
+			}
+			"click"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"mouse_button RIGHT, Context menu"
+						}
+					}
+				}
+			}
+		}
+		"settings"
+		{
+			"scroll_angle"		"137"
+			"haptic_intensity"		"1"
+			"scroll_type"		"2"
+			"scroll_invert"		"1"
+			"scroll_friction"		"1"
+		}
+	}
+	"group"
+	{
+		"id"		"8"
+		"mode"		"absolute_mouse"
+		"inputs"
+		{
+		}
+		"settings"
+		{
+			"sensitivity"		"113"
+		}
+	}
+	"group"
+	{
+		"id"		"11"
+		"mode"		"joystick_mouse"
+		"inputs"
+		{
+			"click"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"mouse_button LEFT, Click"
+						}
+					}
+				}
+			}
+		}
+		"settings"
+		{
+			"sensitivity"		"60"
+			"curve_exponent"		"4"
+		}
+	}
+	"group"
+	{
+		"id"		"6"
+		"mode"		"switches"
+		"inputs"
+		{
+			"button_escape"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press TAB, Tab"
+						}
+					}
+				}
+			}
+			"button_menu"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"controller_action SHOW_KEYBOARD, Keyboard"
+						}
+					}
+				}
+			}
+			"left_bumper"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press LEFT_CONTROL, Undo"
+							"binding"		"key_press Z"
+						}
+					}
+				}
+			}
+			"right_bumper"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press LEFT_CONTROL, Redo"
+							"binding"		"key_press LEFT_SHIFT"
+							"binding"		"key_press Z"
+						}
+					}
+				}
+			}
+			"button_back_left_upper"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press LEFT_CONTROL, Zoom to fit"
+							"binding"		"key_press 0"
+						}
+					}
+				}
+			}
+			"button_back_left"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press LEFT_CONTROL, Save"
+							"binding"		"key_press S"
+						}
+					}
+				}
+			}
+			"button_back_right_upper"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press LEFT_SHIFT, Shift (hold)"
+						}
+					}
+				}
+			}
+			"button_back_right"
+			{
+				"activators"
+				{
+					"Full_Press"
+					{
+						"bindings"
+						{
+							"binding"		"key_press LEFT_CONTROL, Ctrl (hold)"
+						}
+					}
+				}
+			}
+			"button_capture"
+			{
+				"activators"
+				{
+					"release"
+					{
+						"bindings"
+						{
+							"binding"		"controller_action system_key_1"
+						}
+					}
+				}
+			}
+			"always_on_action"
+			{
+				"activators"
+				{
+					"full_press"
+					{
+						"bindings"
+						{
+							"binding"		"controller_action ts_n"
+						}
+					}
+				}
+				"disabled_activators"
+				{
+				}
+			}
+		}
+	}
+	"preset"
+	{
+		"id"		"0"
+		"name"		"Default"
+		"group_source_bindings"
+		{
+			"6"		"switch active"
+			"0"		"button_diamond active"
+			"1"		"joystick active"
+			"7"		"left_trackpad active"
+			"3"		"right_trackpad active"
+			"4"		"left_trigger active"
+			"5"		"right_trigger active"
+			"8"		"gyro inactive"
+			"2"		"dpad active"
+			"11"		"right_joystick active"
+		}
+	}
+	"settings"
+	{
+		"left_trackpad_mode"		"0"
+		"right_trackpad_mode"		"0"
+	}
+}

@@ -16,6 +16,7 @@ Commands in these guides run from the repository root unless stated otherwise.
 - [Local AI reference](LOCAL-AI.md): every local AI feature, agent tool, runtime and model location, checked by `tests/local_ai_reference.rs`.
 - [Local model packages](LOCAL-MODELS.md): package layout, runtime requirements, and installation.
 - [Virtua Regular testing](VIRTUA-REGULAR-TESTING.md): scratch-font setup and manual review.
+- [Steam Deck plan](STEAM-DECK.md): feasibility, SSH setup, local models, and controller mapping for a handheld.
 
 ## Planning and review records
 

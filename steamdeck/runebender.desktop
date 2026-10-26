@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Runebender
+Comment=Font editor
+Exec=/home/deck/Games/runebender/steamdeck/run.sh %f
+Icon=/home/deck/Games/runebender/steamdeck/art/icon.png
+Path=/home/deck/Games/runebender
+Terminal=false
+Categories=Graphics;
+MimeType=inode/directory;
