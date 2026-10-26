@@ -950,6 +950,15 @@ fn compose_derives_marks_and_the_result_shapes() {
     use runebender::text::shape::{ShapingFont, ShapingGlyph, ShapingSource};
     let (_dir, ufo) = scratch_ufo();
     let path = ufo.to_str().expect("utf8");
+    // Make the representative targets stale in our owned copy. The upstream fixture
+    // gains finished composites over time, so the font-wide pending count is not a contract.
+    let mut fixture = norad::Font::load(&ufo).expect("loads the owned fixture");
+    for name in ["Aacute", "alefHamzaabove-ar", "alefHamzaabove-ar.fina"] {
+        let glyph = fixture.get_glyph_mut(name).expect("fixture has the target");
+        glyph.contours.clear();
+        glyph.components.clear();
+    }
+    fixture.save(&ufo).expect("save only the owned fixture");
     // Report first: a Latin accent and an Arabic hamza both derive
     // from their decompositions; a positional form from its stem.
     let (code, out) = run(&[
@@ -977,9 +986,13 @@ fn compose_derives_marks_and_the_result_shapes() {
     // Write the whole font's recipes and install them.
     let (code, out) = run(&["compose", path, "--write"]);
     assert_eq!(code, 0, "{out}");
-    let proposed = out["proposed"].as_array().expect("proposed").len();
-    assert!(proposed > 100, "{proposed} proposed");
-    assert!(out["skipped"].as_array().expect("skipped").len() < proposed / 2);
+    let proposed = out["proposed"].as_array().expect("proposed");
+    for name in ["Aacute", "alefHamzaabove-ar", "alefHamzaabove-ar.fina"] {
+        assert!(
+            proposed.iter().any(|glyph| glyph == name),
+            "missing {name}: {out}"
+        );
+    }
     let (code, out) = run(&["proposal", "list", path]);
     assert_eq!(code, 0);
     assert!(out.to_string().contains("\"compose\""), "{out}");

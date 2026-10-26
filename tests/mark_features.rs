@@ -27,7 +27,10 @@ fn fixture() -> PathBuf {
 /// The shaping font for Virtua with the generated features inlined,
 /// and the glyph names in id order.
 fn project() -> (Project, SourceId) {
-    let project = Project::load(&fixture()).expect("fixture loads");
+    let mut project = Project::load(&fixture()).expect("fixture loads");
+    // These tests exercise automatic mark generation, not the fixture's evolving
+    // authored feature file. Isolate that condition in memory without editing the UFO.
+    project.set_feature_text(String::new());
     let source = project.source_id(0).unwrap();
     (project, source)
 }

@@ -107,6 +107,61 @@ pub fn glyph_revision(glyph: &norad::Glyph) -> Result<String, String> {
     Ok(format!("glif-sha256:{:x}", Sha256::digest(bytes)))
 }
 
+/// Decode an ordinary-contour GLIF into the drawing schema at the format boundary.
+///
+/// The name, advance and optional Unicode scalar must match the request that produced it.
+/// Components, anchors, empty drawings and invalid point sequences are rejected.
+pub fn decode_drawing_glif(
+    glif: &[u8],
+    name: &str,
+    advance: f64,
+    codepoint: Option<u32>,
+) -> Result<Vec<crate::outline::drawing::DrawingContour>, String> {
+    use crate::outline::drawing::{DrawingContour, DrawingPoint, DrawingPointType};
+    let glyph = norad::Glyph::parse_raw(glif).map_err(|error| format!("GLIF: {error}"))?;
+    if glyph.name().as_str() != name || glyph.width != advance {
+        return Err("GLIF name or advance differs from the request".into());
+    }
+    if glyph.codepoints.iter().collect::<Vec<_>>()
+        != codepoint
+            .and_then(char::from_u32)
+            .into_iter()
+            .collect::<Vec<_>>()
+    {
+        return Err("GLIF Unicode differs from the request".into());
+    }
+    if !glyph.components.is_empty() || !glyph.anchors.is_empty() {
+        return Err("GLIF must contain ordinary contours only".into());
+    }
+    let contours = glyph
+        .contours
+        .iter()
+        .map(|contour| DrawingContour {
+            points: contour
+                .points
+                .iter()
+                .map(|point| DrawingPoint {
+                    x: point.x,
+                    y: point.y,
+                    kind: match point.typ {
+                        norad::PointType::Move => DrawingPointType::Move,
+                        norad::PointType::Line => DrawingPointType::Line,
+                        norad::PointType::Curve => DrawingPointType::Curve,
+                        norad::PointType::QCurve => DrawingPointType::Qcurve,
+                        norad::PointType::OffCurve => DrawingPointType::Offcurve,
+                    },
+                    smooth: point.smooth,
+                })
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    if contours.is_empty() {
+        return Err("returned no editable contours".into());
+    }
+    crate::outline::drawing::validate(&contours)?;
+    Ok(contours)
+}
+
 /// Decode UFO contours once into canonical Babelfont paths plus exact object metadata.
 pub fn decode_contours(contours: &[norad::Contour]) -> Result<ImportedContours, String> {
     ImportedContours::from_ufo(contours).map_err(|error| error.to_string())

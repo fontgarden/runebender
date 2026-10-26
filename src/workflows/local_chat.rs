@@ -616,6 +616,9 @@ mod tests {
     }
 
     fn read_request(stream: &mut TcpStream) -> Value {
+        // Accepted sockets may inherit O_NONBLOCK on BSD/macOS. This fixture's read
+        // loop is blocking, even though the listener polls accept with a deadline.
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();

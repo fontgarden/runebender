@@ -19,7 +19,7 @@ use sha2::{Digest as _, Sha256};
 
 use super::process::{self, ProcessCancellation, ProcessLimits, ProcessOutcome};
 use crate::formats::image_trace::TraceCalibration;
-use crate::outline::drawing::{DrawingContour, DrawingPoint, DrawingPointType};
+use crate::outline::drawing::{DrawingContour, DrawingPointType};
 
 const MAX_PNG_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PIXELS: u64 = 262_144;
@@ -297,49 +297,13 @@ pub fn run(
         .and_then(serde_json::Value::as_f64)
         .filter(|value| value.is_finite())
         .ok_or("local sketch returned no finite score")?;
-    let glyph = norad::Glyph::parse_raw(glif.as_bytes())
-        .map_err(|error| format!("local sketch GLIF: {error}"))?;
-    if glyph.name().as_str() != request.glyph || glyph.width != request.advance {
-        return Err("local sketch GLIF name or advance differs from the request".into());
-    }
-    if glyph.codepoints.iter().collect::<Vec<_>>()
-        != request
-            .codepoint
-            .and_then(char::from_u32)
-            .into_iter()
-            .collect::<Vec<_>>()
-    {
-        return Err("local sketch GLIF Unicode differs from the request".into());
-    }
-    if !glyph.components.is_empty() || !glyph.anchors.is_empty() {
-        return Err("local sketch GLIF must contain ordinary contours only".into());
-    }
-    let contours = glyph
-        .contours
-        .iter()
-        .map(|contour| DrawingContour {
-            points: contour
-                .points
-                .iter()
-                .map(|point| DrawingPoint {
-                    x: point.x,
-                    y: point.y,
-                    kind: match point.typ {
-                        norad::PointType::Move => DrawingPointType::Move,
-                        norad::PointType::Line => DrawingPointType::Line,
-                        norad::PointType::Curve => DrawingPointType::Curve,
-                        norad::PointType::QCurve => DrawingPointType::Qcurve,
-                        norad::PointType::OffCurve => DrawingPointType::Offcurve,
-                    },
-                    smooth: point.smooth,
-                })
-                .collect(),
-        })
-        .collect::<Vec<_>>();
-    if contours.is_empty() {
-        return Err("local sketch returned no editable contours".into());
-    }
-    crate::outline::drawing::validate(&contours)?;
+    let contours = crate::formats::ufo::decode_drawing_glif(
+        glif.as_bytes(),
+        &request.glyph,
+        request.advance,
+        request.codepoint,
+    )
+    .map_err(|error| format!("local sketch {error}"))?;
     check_sketch_fidelity(request, &contours)?;
     Ok(SketchCandidate {
         runtime: current,
@@ -680,9 +644,11 @@ impl Drop for Scratch {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use super::*;
+    use crate::outline::drawing::DrawingPoint;
     use std::os::unix::fs::PermissionsExt as _;
 
     fn fixture(response: &str) -> (Scratch, SketchRuntime, SketchRequest) {
