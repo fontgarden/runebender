@@ -7,6 +7,9 @@ Entries under Unreleased describe work being prepared, not an available public r
 
 ### Added
 
+- Native launch opens the normal glyph grid with an untitled, empty font.
+  New fonts stay in memory until Save or Save As chooses a destination folder.
+  An untouched starter can be replaced or closed without a save prompt; edits retain save/discard/cancel protection.
 - Chat: the model can ask for proof images of a glyph and its proposal, the
   pair and a difference image with its pixel counts, and sees them when its
   model folder holds a vision projector. The source open in the editor is

@@ -220,6 +220,8 @@ pub(crate) struct Workspace {
     /// keyboard/IME focus without making the view-owned text buffer `Send`.
     pub(crate) editor_focus: Arc<std::sync::Mutex<Option<masonry::core::WidgetId>>>,
     pub(crate) modified: bool,
+    /// This template has no user-chosen destination; first Save must use Save As.
+    pub(crate) untitled: bool,
     /// Source paths whose disk contents define the conflict baseline.
     pub(crate) source_roots: Vec<std::path::PathBuf>,
     /// Hash of the source tree at open or last successful save.
@@ -424,18 +426,20 @@ pub(crate) enum DirtyDecision {
 }
 
 impl AppState {
-    /// Opens `path`, or makes the no-document state when no path was supplied.
+    /// Opens `path`, or starts an in-memory untitled font in the glyph grid.
     pub(crate) fn open(path: Option<&std::path::Path>) -> Self {
         let theme_id = crate::application::platform::themes::catalog().initial_id();
         let palette = Arc::new(Palette::load(theme_id));
         let Some(path) = path else {
-            return Self {
+            let mut app = Self {
                 workspace: None,
                 palette,
                 theme_id,
                 notice: None,
                 running: true,
             };
+            app.dispatch(shortcuts::AppAction::NewFont);
+            return app;
         };
         let mut app = Self {
             workspace: None,
@@ -563,9 +567,12 @@ impl AppState {
             let directory = self
                 .workspace
                 .as_ref()
+                .filter(|workspace| !workspace.untitled)
                 .and_then(|workspace| workspace.font.document_source().parent())
-                .unwrap_or_else(|| std::path::Path::new("."));
-            if let Some(path) = dialogs::font(directory)
+                .map(std::path::Path::to_path_buf)
+                .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            if let Some(path) = dialogs::font(&directory)
                 && self.confirm_replacement("opening another font")
             {
                 self.open_path(&path);
@@ -573,23 +580,11 @@ impl AppState {
             return;
         }
         if action == shortcuts::AppAction::NewFont && self.workspace.is_none() {
-            let path = std::env::temp_dir().join(format!(
-                "Runebender-Untitled-{}-{}.ufo",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |duration| duration.as_nanos()),
-            ));
-            let mut project = runebender::font::project::Project::new_font(path);
-            match project
-                .save()
-                .and_then(|()| Workspace::from_model(FontModel::from_project(project)))
-            {
+            match Workspace::untitled() {
                 Ok(mut workspace) => {
                     if workspace.theme_id != self.theme_id {
                         workspace.set_theme(self.theme_id);
                     }
-                    workspace.note = "new font · Save As picks where it lives".into();
                     self.theme_id = workspace.theme_id;
                     self.palette = workspace.palette.clone();
                     self.workspace = Some(workspace);
@@ -739,10 +734,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn no_path_starts_without_a_document() {
+    fn no_path_starts_with_a_pristine_untitled_grid() {
         let app = AppState::open(None);
-        assert!(app.workspace.is_none());
+        let workspace = app.workspace.as_ref().expect("the starter font opens");
+        assert!(workspace.untitled);
+        assert!(!workspace.modified);
+        assert!(matches!(workspace.mode, Mode::Overview));
+        assert_eq!(workspace.font.glyphs.len(), 324);
+        assert!(!workspace.font.source().exists());
         assert_eq!(app.notice, None);
+    }
+
+    #[test]
+    fn untouched_starter_closes_but_edited_starter_honors_cancel() {
+        let mut app = AppState::open(None);
+        assert!(app.confirm_replacement("opening another font"));
+        let workspace = app.workspace.as_mut().unwrap();
+        let index = workspace.font.index_of("A").unwrap();
+        workspace.open_glyph(index);
+        workspace.set_advance_from_buf("710".into());
+        assert!(workspace.modified);
+        assert!(!app.resolve_dirty(DirtyDecision::Cancel));
+        app.request_quit_with(DirtyDecision::Cancel);
+        assert!(app.running);
+        assert!(app.workspace.as_ref().unwrap().modified);
+        app.request_quit_with(DirtyDecision::Discard);
+        assert!(!app.running);
     }
 
     #[test]
@@ -769,10 +786,10 @@ mod tests {
                 .width(),
             260.0
         );
-        assert_eq!(workspace.note, "new font · Save As picks where it lives");
+        assert!(workspace.untitled);
         let path = workspace.font.source().to_path_buf();
-        assert!(path.is_dir());
-        std::fs::remove_dir_all(path).expect("the new-font fixture is removed");
+        assert!(!path.exists());
+        assert!(!path.parent().unwrap().exists());
     }
 
     #[test]

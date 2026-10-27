@@ -118,7 +118,8 @@ impl Entry {
         };
         let editor = matches!(app.mode, Mode::Editor(_));
         match self.action {
-            A::Save => app.modified && app.font.is_writable(),
+            A::Save => app.untitled || (app.modified && app.font.is_writable()),
+            A::RevertToSaved => !app.untitled,
             A::ExportFont => app.export_job.is_none(),
             A::Undo => match app.mode {
                 Mode::Editor(index) => {
@@ -1185,8 +1186,24 @@ mod tests {
     }
 
     #[test]
-    fn welcome_state_keeps_application_commands_and_disables_document_commands() {
+    fn pristine_starter_can_be_saved_but_cannot_revert_to_a_nonexistent_file() {
         let app = AppState::open(None);
+        let enabled = |action| {
+            actions()
+                .iter()
+                .find(|entry| entry.action == action)
+                .unwrap()
+                .enabled(&app)
+        };
+        assert!(enabled(AppAction::Save));
+        assert!(enabled(AppAction::OpenFont));
+        assert!(!enabled(AppAction::RevertToSaved));
+    }
+
+    #[test]
+    fn welcome_state_keeps_application_commands_and_disables_document_commands() {
+        let mut app = AppState::open(None);
+        app.workspace = None;
         let entry = |action| {
             actions()
                 .iter()

@@ -366,6 +366,7 @@ impl Workspace {
             sketch_identity: 0.0,
             editor_focus: Arc::new(std::sync::Mutex::new(None)),
             modified,
+            untitled: false,
             source_roots,
             source_fingerprint,
             note: import_note,
@@ -590,6 +591,9 @@ impl Workspace {
             self.note = "Apply or Revert feature edits before saving".into();
             return false;
         }
+        if self.untitled {
+            return self.command_save_as();
+        }
         // The editor's version wins: when the sources changed on disk since they were
         // opened, Save still writes, and says so.
         let disk_changed = source_fingerprint(&self.source_roots) != self.source_fingerprint;
@@ -625,6 +629,10 @@ impl Workspace {
     }
 
     fn reload_from_disk_inner(&mut self, force: bool) {
+        if self.untitled {
+            self.note = "This new font has no saved version yet".into();
+            return;
+        }
         if !force && source_fingerprint(&self.source_roots) == self.source_fingerprint {
             return;
         }
@@ -735,41 +743,40 @@ impl Workspace {
 
     /// Establish the newly published Save As destinations as the conflict baseline.
     pub(crate) fn prepare_save_as(&mut self) {
+        self.untitled = false;
         self.source_roots = source_roots(&self.font);
         self.source_fingerprint = source_fingerprint(&self.source_roots);
     }
 
-    /// A new font from the template: GF metrics and the GF Latin Core
-    /// set as empty encoded glyphs, saved beside the font in hand.
-    ///
-    /// The new font lands next to the current source under the first Untitled
-    /// name that is free.
+    /// Create a pristine template without writing a temporary UFO or a user's files.
+    pub(crate) fn untitled() -> Result<Self, String> {
+        // The engine needs a logical source path, but this location is never created.
+        // A private namespace prevents unrelated disk files from becoming this document.
+        let path = std::env::temp_dir()
+            .join(format!(
+                "Runebender-Untitled-{}-{}",
+                std::process::id(),
+                NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed),
+            ))
+            .join("Untitled.ufo");
+        let mut project = runebender::font::project::Project::new_font(path);
+        // Establish the template as the edit baseline, independently of its unsaved location.
+        // Save As exports the entire project even before the first edit.
+        project.mark_saved();
+        let mut workspace = Self::from_model(FontModel::from_project(project))?;
+        workspace.untitled = true;
+        Ok(workspace)
+    }
+
+    /// Replace a clean document with an in-memory Latin Core template.
     pub(crate) fn new_font(&mut self) {
         if self.modified {
             self.note = "Save or discard changes before creating a new font".into();
             return;
         }
-        let dir = self
-            .font
-            .source()
-            .parent()
-            .unwrap_or(FsPath::new("."))
-            .to_path_buf();
-        let mut path = dir.join("Untitled.ufo");
-        let mut n = 1;
-        while path.exists() {
-            path = dir.join(format!("Untitled-{n}.ufo"));
-            n += 1;
-        }
-        let mut project = runebender::font::project::Project::new_font(path.clone());
-        if let Err(e) = project.save() {
-            self.note = format!("could not write {}: {e}", path.display());
-            return;
-        }
-        match Self::from_model(FontModel::from_project(project)) {
+        match Self::untitled() {
             Ok(mut fresh) => {
                 fresh.set_theme(self.theme_id);
-                fresh.note = format!("new font at {}", path.display());
                 *self = fresh;
             }
             Err(e) => self.note = e,
@@ -2286,6 +2293,46 @@ mod tests {
     }
 
     #[test]
+    fn untitled_save_cancellation_failure_and_success_preserve_the_document() {
+        let mut workspace = Workspace::untitled().unwrap();
+        let logical_source = workspace.font.source().to_path_buf();
+        let directory = logical_source.parent().unwrap().with_extension("save-test");
+        std::fs::create_dir(&directory).unwrap();
+        let index = workspace.font.index_of("A").unwrap();
+        workspace.open_glyph(index);
+        workspace.set_advance_from_buf("710".into());
+        assert!(workspace.modified);
+        assert!(!workspace.save_as_selected(None));
+        assert!(workspace.untitled && workspace.modified);
+        assert!(!logical_source.exists());
+        // A colliding destination must not clear the edit or retarget the source.
+        std::fs::create_dir(directory.join("Untitled.ufo")).unwrap();
+        assert!(!workspace.save_as_selected(Some(&directory)));
+        assert_eq!(workspace.font.source(), logical_source);
+        assert!(workspace.untitled && workspace.modified);
+        std::fs::remove_dir(directory.join("Untitled.ufo")).unwrap();
+        assert!(workspace.save_as_selected(Some(&directory)));
+        assert!(!workspace.untitled && !workspace.modified);
+        assert_eq!(workspace.font.source(), directory.join("Untitled.ufo"));
+        assert!(!logical_source.exists());
+        let reopened = Workspace::open(workspace.font.source()).unwrap();
+        assert_eq!(reopened.font.glyphs.len(), 324);
+        assert_eq!(
+            reopened.font.glyphs[reopened.font.index_of("A").unwrap()].advance,
+            710.0
+        );
+        // Later Save writes the chosen location without another picker.
+        workspace.set_advance_from_buf("720".into());
+        assert!(workspace.save());
+        let reopened = Workspace::open(workspace.font.source()).unwrap();
+        assert_eq!(
+            reopened.font.glyphs[reopened.font.index_of("A").unwrap()].advance,
+            720.0
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn new_font_keeps_a_dirty_document_open() {
         let path = std::env::temp_dir().join(format!(
             "runebender-xilem-new-dirty-{}-{}.ufo",
@@ -2332,7 +2379,9 @@ mod tests {
 
         workspace.new_font();
 
-        assert_eq!(workspace.font.source(), directory.join("Untitled.ufo"));
+        assert!(workspace.untitled);
+        assert!(!workspace.modified);
+        assert!(!directory.join("Untitled.ufo").exists());
         assert_eq!(workspace.font.project.glyph_names().count(), 324);
         let source = workspace.font.project.source_id(0).unwrap();
         let layer = workspace
@@ -2350,7 +2399,7 @@ mod tests {
                 .width(),
             260.0
         );
-        assert!(workspace.font.source().is_dir());
+        assert!(!workspace.font.source().exists());
         std::fs::remove_dir_all(directory).expect("the fixture directory is removed");
     }
 

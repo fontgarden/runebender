@@ -189,7 +189,9 @@ fn document_readout(app: &Workspace, note: String) -> impl WidgetView<Workspace>
     let source = app.font.source();
     // The path as opened may be relative to wherever the app was started,
     // and may climb through `..`; show it from the root with those folded.
-    let path = {
+    let path = if app.untitled {
+        "Untitled".into()
+    } else {
         use std::path::Component;
         let mut folded = std::path::PathBuf::new();
         for part in std::path::absolute(source)
@@ -210,7 +212,11 @@ fn document_readout(app: &Workspace, note: String) -> impl WidgetView<Workspace>
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let status = if app.modified { "Not saved" } else { "Saved" };
+    let status = if app.modified || app.untitled {
+        "Not saved"
+    } else {
+        "Saved"
+    };
     let ink = app.palette.text_muted;
     // Saved is the resting state and stays as quiet as the name beside it;
     // only an unsaved document asks for attention.

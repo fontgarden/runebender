@@ -675,16 +675,25 @@ impl Workspace {
     }
 
     /// Pick a destination directory and keep saving each master there.
-    pub(crate) fn command_save_as(&mut self) {
-        let start = self
-            .font
-            .document_source()
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."));
-        let Some(directory) = dialogs::folder(start) else {
-            return;
+    pub(crate) fn command_save_as(&mut self) -> bool {
+        let start = if self.untitled {
+            std::env::var_os("HOME").map(std::path::PathBuf::from)
+        } else {
+            self.font
+                .document_source()
+                .parent()
+                .map(std::path::Path::to_path_buf)
         };
-        self.save_as_to(&directory);
+        let directory = dialogs::folder(start.as_deref().unwrap_or(std::path::Path::new(".")));
+        self.save_as_selected(directory.as_deref())
+    }
+
+    /// Resolve the folder picker without losing edits when it is cancelled or writing fails.
+    pub(crate) fn save_as_selected(&mut self, directory: Option<&std::path::Path>) -> bool {
+        let Some(directory) = directory else {
+            return false;
+        };
+        self.save_as_to(directory)
     }
 
     /// Copy this document into a new directory and make that copy current.
@@ -977,7 +986,9 @@ impl Workspace {
                 self.save();
             }
             A::OpenFont => unreachable!("Open belongs to AppState"),
-            A::SaveAs => self.command_save_as(),
+            A::SaveAs => {
+                self.command_save_as();
+            }
             A::RevertToSaved => {
                 if dialogs::confirm_revert() {
                     self.revert_to_saved();

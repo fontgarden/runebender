@@ -32,12 +32,17 @@ Replace the square source PNG with a 1024-pixel or larger PNG when the artwork c
 5. Open Runebender from Applications, without starting it from a terminal or source checkout.
    Check the Dock icon, application name, native menu bar, normal window activation, and quit/relaunch behavior.
    Optionally choose Keep in Dock for convenient access.
-6. Use File > Open on a disposable UFO and a Designspace, edit outlines and widths, undo/redo, save, close, and reopen.
+6. With no font path, confirm launch opens the normal glyph grid with an Untitled font and 324 empty glyph slots.
+   Open a disposable font without editing the starter and verify there is no unsaved-changes prompt.
+   Use File > New Font, edit one glyph, cancel the first Save folder picker, and confirm the font stays open with the edit intact.
+   Save into an empty test folder, confirm it creates `Untitled.ufo`, then close and reopen that UFO to verify the edit.
+   Repeat Quit and Open with an edited starter, checking Save, Discard, and Cancel; cancelling the Save picker must cancel closing or replacement.
+7. Use File > Open on a disposable UFO and a Designspace, edit outlines and widths, undo/redo, save, close, and reopen.
    Confirm the intended changes and preservation of unrelated source data, including through a Git diff of the copies where practical.
-7. Check dialogs, clipboard operations, keyboard shortcuts, resizing, rendering, and font compilation/export for the supported formats.
-8. Check behavior with no installed local AI models or tools, then separately test each external tool advertised as supported.
+8. Check dialogs, clipboard operations, keyboard shortcuts, resizing, rendering, and font compilation/export for the supported formats.
+9. Check behavior with no installed local AI models or tools, then separately test each external tool advertised as supported.
    Missing optional tools should give a useful explanation rather than breaking core editing.
-9. Replace a closed older copy with a newer candidate and verify preferences and ordinary source documents still work.
+10. Replace a closed older copy with a newer candidate and verify preferences and ordinary source documents still work.
    Reopening a recently used file and preserving unsaved-document prompts also need interactive checks.
 
 The installed app should work without Rust, Homebrew, the source checkout, or developer shell variables.
