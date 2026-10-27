@@ -118,6 +118,21 @@ mod tests {
     fn canonical_specification_carries_the_template() {
         let specification = specification("Untitled", "Regular", 400).unwrap();
         assert_eq!(specification.glyphs.len(), 324);
+        let core = crate::ui::sidebar::gf_glyphsets()
+            .iter()
+            .find(|set| set.id == "GF_Latin_Core")
+            .expect("bundled GF Latin Core");
+        let expected: std::collections::BTreeSet<_> =
+            core.glyph_names.iter().map(String::as_str).collect();
+        let actual: std::collections::BTreeSet<_> = specification
+            .glyphs
+            .iter()
+            .map(|glyph| glyph.name.as_str())
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "new fonts start with the complete GF Latin Core set"
+        );
         assert!(
             specification
                 .glyphs

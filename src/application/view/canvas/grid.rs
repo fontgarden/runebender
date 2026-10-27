@@ -239,6 +239,17 @@ fn reference_outline(character: char) -> Option<Arc<kurbo::BezPath>> {
     })
 }
 
+/// Empty cells use a question mark when their character is unknown or uncovered.
+/// Known nonprinting characters remain blank rather than suggesting visible ink.
+fn empty_cell_reference(character: Option<char>) -> Option<Arc<kurbo::BezPath>> {
+    if character.is_some_and(|c| c.is_whitespace() || c.is_control()) {
+        return None;
+    }
+    character
+        .and_then(reference_outline)
+        .or_else(|| reference_outline('?'))
+}
+
 /// One drawable cell: what the grid needs without touching the font model.
 #[derive(Clone)]
 pub(crate) struct Cell {
@@ -870,7 +881,7 @@ impl Widget for GridWidget {
                     // Glyphs and captions share the resolved tile ink: its
                     // mark hue for outlined tiles, contrasting ink for filled ones.
                     painter.fill(&outline, ink).draw();
-                } else if let Some(reference) = cell.codepoint.and_then(reference_outline) {
+                } else if let Some(reference) = empty_cell_reference(cell.codepoint) {
                     let preview = fit_transform(preview_rect, reference.bounding_box(), 1000.0);
                     painter
                         .fill(
@@ -1685,6 +1696,24 @@ mod thumbnail_tests {
         let interior = rendered.get_pixel(1, 20);
         assert_eq!(rendered.get_pixel(1, 1), interior);
         assert_eq!(rendered.get_pixel(1, 536), interior);
+    }
+
+    #[test]
+    fn unknown_empty_cells_use_question_marks_but_spaces_stay_blank() {
+        let question = reference_outline('?').expect("bundled question mark");
+        for character in [None, Some('\u{10FFFF}')] {
+            assert!(Arc::ptr_eq(
+                &empty_cell_reference(character).unwrap(),
+                &question
+            ));
+        }
+        for character in [' ', '\u{00A0}', '\n'] {
+            assert!(empty_cell_reference(Some(character)).is_none());
+        }
+        assert!(Arc::ptr_eq(
+            &empty_cell_reference(Some('A')).unwrap(),
+            &reference_outline('A').unwrap()
+        ));
     }
 
     #[test]
