@@ -619,6 +619,17 @@ pub(crate) fn prose(pal: &Palette, text: String) -> impl WidgetView<Workspace> +
         .line_break_mode(masonry::properties::LineBreaking::WordWrap)
 }
 
+/// A stable-width save indicator for the title bar, beside the window controls.
+pub(crate) fn save_indicator(pal: &Palette, unsaved: bool) -> impl WidgetView<Workspace> + use<> {
+    let width = crate::application::widgets::text_label::width("Not saved", TextSize::Body.px());
+    sized_box(
+        label(if unsaved { "Not saved" } else { "Saved" })
+            .text_size(TextSize::Body.px())
+            .color(pal.save_status_ink(unsaved)),
+    )
+    .dims(Dimensions::new(Dim::Fixed(Length::px(width)), Dim::Auto))
+}
+
 /// [`prose`] in the muted colour, for notes and hints.
 pub(crate) fn prose_muted(pal: &Palette, text: String) -> impl WidgetView<Workspace> + use<> {
     label(text)

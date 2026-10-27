@@ -30,10 +30,8 @@ use xilem::view::{canvas, flex_col, portal, sized_box};
 
 /// The title bar for editor tools and tabs.
 ///
-/// Left to right: the window controls, the tools when a glyph is open,
-/// and the tab strip. The tabs live here in both modes, so the strip
-/// does not move when the mode changes. The document's name and save
-/// state sit in the footer, where there is room for them.
+/// Left to right: window controls, save state, editor tools, and tabs.
+/// The document name remains in the footer.
 pub(crate) fn titlebar(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     let pal = &app.palette;
     let editing = matches!(app.mode, Mode::Editor(_));
@@ -46,6 +44,7 @@ pub(crate) fn titlebar(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
             (cfg!(target_os = "macos") && !app.fullscreen).then(|| {
                 sized_box(label("")).dims(Dimensions::new(Dim::Fixed(Length::px(66.0)), Dim::Auto))
             }),
+            recipes::save_indicator(pal, app.modified || app.untitled),
             // The empty middle of the bar moves the window and zooms
             // it on a double click, as the system title bar would.
             drag_region().flex(1.0),
@@ -179,11 +178,11 @@ pub(crate) fn marks_bar(app: &Workspace) -> impl WidgetView<Workspace, Widget: S
     .dims(Dimensions::new(Dim::Stretch, Dim::Auto))
 }
 
-/// The document's name and save state, centred in the footer.
+/// The document's name, centred in the footer.
 ///
 /// The path is the part that can shrink: the whole path when the bar
 /// has room for it, the file name alone when it does not, and an elided
-/// name below that. The save state always shows. A transient `note`
+/// name below that. A transient `note`
 /// takes the readout's place while it has something to say.
 fn document_readout(app: &Workspace, note: String) -> impl WidgetView<Workspace> + use<> {
     let source = app.font.source();
@@ -212,15 +211,9 @@ fn document_readout(app: &Workspace, note: String) -> impl WidgetView<Workspace>
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let status = if app.modified || app.untitled {
-        "Not saved"
-    } else {
-        "Saved"
-    };
     let ink = app.palette.text_muted;
-    let status_ink = app.palette.save_status_ink(app.modified || app.untitled);
     let description = if note.is_empty() {
-        format!("{name}, {status}")
+        name.clone()
     } else {
         note.clone()
     };
@@ -243,36 +236,19 @@ fn document_readout(app: &Workspace, note: String) -> impl WidgetView<Workspace>
                     );
                     return;
                 }
-                let gap = Space::Md.px();
-                let status_width = text_label::width(status, text_size);
-                let room = (size.width - status_width - gap).max(0.0);
-                let text = if text_label::width(&path, text_size) <= room {
+                let text = if text_label::width(&path, text_size) <= size.width {
                     &path
                 } else {
                     &name
                 };
-                let text_width = text_label::width(text, text_size).min(room);
-                // With no room for a name, the status centres on its own.
-                let gap = if room > 0.0 { gap } else { 0.0 };
-                let start = ((size.width - text_width - gap - status_width) / 2.0).max(0.0);
                 text_label::draw_elided(
                     &mut painter,
-                    kurbo::Point::new(start, middle.y),
+                    middle,
                     text,
                     text_size,
                     ink,
-                    Anchor::Start,
-                    room,
-                );
-                let status_start = start + text_width + gap;
-                text_label::draw_elided(
-                    &mut painter,
-                    kurbo::Point::new(status_start, middle.y),
-                    status,
-                    text_size,
-                    status_ink,
-                    Anchor::Start,
-                    (size.width - status_start).max(0.0),
+                    Anchor::Middle,
+                    size.width,
                 );
             })
             .alt_text(description),

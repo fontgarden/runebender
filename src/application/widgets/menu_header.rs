@@ -3,8 +3,8 @@
 
 //! Editor controls beside the in-window application menus.
 //!
-//! The document's name and save state sit in the footer, so the header
-//! keeps only the tools and the tabs, pushed to the trailing edge.
+//! Save state follows the menus; tools and tabs stay at the trailing edge.
+//! The document name remains in the footer.
 
 use crate::application::design::Space;
 use crate::application::view::chrome::header_tools;
@@ -19,6 +19,10 @@ use xilem::view::{FlexSpacer, flex_row, sized_box};
 
 fn document(app: &mut Workspace) -> Box<xilem::AnyWidgetView<Workspace>> {
     flex_row((
+        crate::application::design::recipes::save_indicator(
+            &app.palette,
+            app.modified || app.untitled,
+        ),
         FlexSpacer::Flex(1.0),
         matches!(app.mode, Mode::Editor(_)).then(|| header_tools(app)),
         tab_strip(app),
