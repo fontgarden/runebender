@@ -7,6 +7,16 @@ Entries under Unreleased describe work being prepared, not an available public r
 
 ### Added
 
+- Chat: the model can ask for proof images of a glyph and its proposal, the
+  pair and a difference image with its pixel counts, and sees them when its
+  model folder holds a vision projector. The source open in the editor is
+  filled into tool calls that leave it out, and a turn may make eight tool
+  calls.
+- Chat: a `llama-server` in router mode answers with chunked transfer
+  encoding, which the chat client now reads, so the shared model server works.
+- Edits: a `transform_points` that chooses points but gives no move is
+  refused with a worked example, instead of recording a proposal that
+  changes nothing.
 - Measure tool: a drag lays a ruler across the glyph, cut and labeled where it crosses the outline, with its length and angle at the end.
   Shift holds it to 45 degree steps, ends snap to points, and a click or Escape clears it.
   With no ruler, a line through the pointer measures the margins, stems and counters across the advance, or vertically with Option held.

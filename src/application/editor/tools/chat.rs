@@ -17,6 +17,7 @@ mod chat_endpoint {
         _endpoint: &runebender::workflows::local_chat::LocalChatEndpoint,
         _session: &std::path::Path,
         _epoch: &str,
+        _source: Option<u64>,
         _conversation: &str,
         _context: &str,
         _job: &super::ChatJob,
@@ -214,7 +215,13 @@ fn shared_server_endpoint(name: &str) -> Option<LocalChatEndpoint> {
     let mut response = Vec::new();
     stream.read_to_end(&mut response).ok()?;
     let body_at = response.windows(4).position(|w| w == b"\r\n\r\n")? + 4;
-    let body: Value = serde_json::from_slice(&response[body_at..]).ok()?;
+    let head = String::from_utf8_lossy(&response[..body_at]).to_ascii_lowercase();
+    let body = if head.contains("transfer-encoding: chunked") {
+        runebender::workflows::local_chat::dechunk(&response[body_at..]).ok()?
+    } else {
+        response[body_at..].to_vec()
+    };
+    let body: Value = serde_json::from_slice(&body).ok()?;
     let listed = body
         .get("data")?
         .as_array()?
@@ -399,6 +406,11 @@ impl Workspace {
             &runebender::automation::context::load(Some(&font)),
             Some(chat_endpoint::CONTEXT_BUDGET_CHARS),
         );
+        let active_source = self
+            .font
+            .project
+            .source_id(self.font.project.active)
+            .map(|source| source.0 as u64);
         let job = ChatJob {
             document_epoch: epoch.clone(),
             ..ChatJob::default()
@@ -419,6 +431,7 @@ impl Workspace {
                         &endpoint,
                         &session,
                         epoch.as_deref().unwrap_or_default(),
+                        active_source,
                         &conversation,
                         &context,
                         &job,
@@ -573,6 +586,37 @@ impl Workspace {
                 self.chat.raw_assistant.clear();
                 self.chat.streaming_artifacts.clear();
                 self.chat.busy = Some("Thinking…".into());
+            }
+            "image" => {
+                // The pictures the model was shown, kept beside the server
+                // logs so the person can see what it saw.
+                let glyph = event
+                    .get("glyph")
+                    .and_then(Value::as_str)
+                    .unwrap_or("glyph");
+                let label = event
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .unwrap_or("image");
+                if let Some(png) = event.get("png_base64").and_then(Value::as_str) {
+                    use base64::Engine as _;
+                    let folder = std::env::temp_dir().join("runebender-proof-images");
+                    let path = folder.join(format!("{glyph}-{label}.png"));
+                    let written = std::fs::create_dir_all(&folder).and_then(|()| {
+                        let bytes = base64::engine::general_purpose::STANDARD
+                            .decode(png)
+                            .map_err(std::io::Error::other)?;
+                        std::fs::write(&path, bytes)
+                    });
+                    match written {
+                        Ok(()) => {
+                            eprintln!("chat proof image {label} for {glyph}: {}", path.display());
+                        }
+                        Err(error) => {
+                            eprintln!("chat proof image {label} for {glyph} not kept: {error}");
+                        }
+                    }
+                }
             }
             "done" => {
                 if let (Some(tokens), Some(speed)) = (

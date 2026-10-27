@@ -216,6 +216,25 @@ pub fn find_binary() -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+/// The vision projector beside a model: the first `mmproj*.gguf` in its
+/// folder, which lets the server take images. None for a text-only model.
+pub fn projector_in(model: &Path) -> Option<PathBuf> {
+    let folder = model.parent()?;
+    let mut files: Vec<PathBuf> = std::fs::read_dir(folder)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("mmproj") && name.ends_with(".gguf"))
+                && path.is_file()
+        })
+        .collect();
+    files.sort();
+    files.into_iter().next()
+}
+
 /// The GGUF file a chat model folder holds: `model.gguf` when present,
 /// else the first `.gguf` by name.
 pub fn gguf_in(folder: &Path) -> Option<PathBuf> {
@@ -317,7 +336,12 @@ impl LlamaServer {
             .args(["-c", &settings.context.to_string()])
             .args(["-ngl", &settings.gpu_layers.to_string()])
             .args(["--reasoning", if settings.thinking { "on" } else { "off" }])
-            .args(settings.extra_args())
+            .args(settings.extra_args());
+        // A vision projector beside the model lets the chat send images.
+        if let Some(projector) = projector_in(model) {
+            command.arg("--mmproj").arg(projector);
+        }
+        command
             .stdin(Stdio::null())
             .stdout(Stdio::from(log_file))
             .stderr(Stdio::from(log_err));
@@ -465,6 +489,15 @@ mod tests {
     }
 
     #[test]
+    fn a_projector_beside_the_model_is_found_by_its_name() {
+        let dir = scratch("projector");
+        let model = fake_model(&dir.0);
+        assert_eq!(projector_in(&model), None);
+        std::fs::write(dir.0.join("mmproj-F16.gguf"), b"x").unwrap();
+        assert_eq!(projector_in(&model), Some(dir.0.join("mmproj-F16.gguf")));
+    }
+
+    #[test]
     fn gguf_in_prefers_model_gguf_then_first_by_name() {
         let dir = scratch("gguf");
         assert_eq!(gguf_in(&dir.0), None);
@@ -530,6 +563,10 @@ mod tests {
         assert!(recorded.windows(2).any(|w| w == ["-c", "4096"]));
         assert!(recorded.windows(2).any(|w| w == ["--reasoning", "off"]));
         assert!(recorded.contains(&"--jinja") && recorded.contains(&"--no-webui"));
+        assert!(
+            !recorded.contains(&"--mmproj"),
+            "no projector file, no flag"
+        );
         let pid: i32 = std::fs::read_to_string(&pidfile)
             .unwrap()
             .trim()

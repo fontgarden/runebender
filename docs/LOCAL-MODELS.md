@@ -71,6 +71,13 @@ A chat model folder holds one `.gguf` file, and may hold a `model.json` with the
 
 `context` sets the prompt size in tokens and `template_kwargs` is an object passed to the chat template, such as `{"reasoning_effort":"low"}`. Each model family publishes its own sampling values; the file holds the ones for its model.
 
+## Vision
+
+A chat model sees the proof images when its folder also holds its vision
+projector, a `mmproj*.gguf` from the same model repository (about 1 GB). The
+editor's own server and the shared router both find it by name. Qwen 3.6 and
+Gemma 4 have projectors; gpt-oss has none.
+
 ## Voice input
 
 The Chat panel's Talk button records a spoken request and puts the words in

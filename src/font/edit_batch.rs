@@ -353,6 +353,18 @@ pub fn apply_canonical_operation(
             origin_x,
             origin_y,
         } => {
+            // A small model writes the selection and forgets the move;
+            // accepting that would record a proposal that changes nothing.
+            if *dx == 0.0 && *dy == 0.0 && *scale_x == 1.0 && *scale_y == 1.0 {
+                return Err(
+                    "transform_points moves nothing: it chose points but gave no dx, dy, \
+                     scale_x or scale_y. To move the chosen points 64 units to the right, \
+                     add \"dx\": 64 to this same operation, for example {\"op\": \
+                     \"transform_points\", \"x_min\": 340, \"dx\": 64}. Do not use \
+                     translate, which moves the whole glyph and leaves its width as it is."
+                        .into(),
+                );
+            }
             let view = draft.view();
             let ids: Vec<Vec<(crate::font::PointId, kurbo::Point)>> = view
                 .contours()
@@ -920,6 +932,17 @@ mod tests {
             .unwrap()
             .position();
         assert_eq!((first.x, first.y), (150.0, 10.0));
+        // A selection with no move is refused: a model that forgets dx
+        // must hear so, not get a proposal that changes nothing.
+        let still: Operation = serde_json::from_value(serde_json::json!({
+            "op": "transform_points", "x_min": 300
+        }))
+        .unwrap();
+        assert!(
+            apply_canonical_operation(transaction.draft_mut(), &still)
+                .unwrap_err()
+                .contains("moves nothing")
+        );
         // An empty choice and a bad index are refused, not silently ignored.
         let nothing: Operation = serde_json::from_value(serde_json::json!({
             "op": "transform_points", "x_min": 9000, "dx": 1

@@ -16,9 +16,10 @@ use runebender::workflows::local_chat::{LocalChatEndpoint, LocalChatLimits};
 use runebender::workflows::process::ProcessCancellation;
 
 use super::ChatJob;
+use crate::application::editor::tools::proof_image;
 
-const MAX_TOOL_CALLS: usize = 6;
-const MAX_COMPLETIONS: usize = 7;
+const MAX_TOOL_CALLS: usize = 8;
+const MAX_COMPLETIONS: usize = 10;
 const MAX_MESSAGES: usize = 64;
 const MAX_CONTEXT_BYTES: usize = 1024 * 1024;
 const ALLOWED_TOOLS: &[&str] = &[
@@ -66,7 +67,73 @@ fn tools() -> Vec<agent::Tool> {
             }
             tool
         })
+        .chain(std::iter::once(proof_image_tool()))
         .collect()
+}
+
+/// The one tool the chat answers itself: pictures of a glyph beside its
+/// proposal, for the model to look at.
+fn proof_image_tool() -> agent::Tool {
+    agent::Tool {
+        name: "proof_image".into(),
+        description: "Pictures of a glyph and its proposal for you to look at. The pair shows A, \
+            the current drawing, on the left and B, the proposal, on the right, each in its \
+            advance box at one scale. The difference image is red where only A has ink, blue \
+            where only B has ink and grey where both do. Use it after propose_edits to check \
+            that the drawing is still whole and that the change is where you meant it. Ask \
+            yourself one closed question at a time about what you see; do not judge drawing \
+            quality from it."
+            .into(),
+        parameters: json!({"type":"object", "properties":{
+            "glyph":{"type":"string", "description":"The glyph name."},
+            "task":{"type":"string", "description":"The proposal's task name from propose_edits or proposal_list. Omit for the latest proposal that names the glyph."},
+            "source":{"type":"integer", "minimum":0, "description":"The stable source id from project_info. Omit for the source open in the editor."}
+        }, "required":["glyph"], "additionalProperties":false}),
+    }
+}
+
+/// The text a tool result goes back to the model as, and the images it
+/// carried: each image leaves the text and is attached as a picture, since
+/// a block of base64 in a tool result is noise to the model.
+fn split_images(result: &mut Value) -> Vec<(String, String)> {
+    let Some(images) = result.get_mut("images").and_then(Value::as_array_mut) else {
+        return Vec::new();
+    };
+    let attached: Vec<(String, String)> = images
+        .iter()
+        .filter_map(|image| {
+            Some((
+                image.get("label")?.as_str()?.to_owned(),
+                image.get("png_base64")?.as_str()?.to_owned(),
+            ))
+        })
+        .collect();
+    *images = attached
+        .iter()
+        .map(|(label, _)| json!({"label":label, "attached":true}))
+        .collect();
+    attached
+}
+
+/// The user message that shows the model the attached pictures, with what
+/// the editor counted in them, so the model reports the count and not a
+/// colour it did not see.
+fn image_message(glyph: &str, counted: Option<&str>, images: &[(String, String)]) -> Value {
+    let mut text = format!(
+        "Proof images for {glyph}. First the pair: A on the left is the current drawing, B on \
+         the right is the proposal, each in its advance box. Second the difference: red is \
+         only in A, blue is only in B, grey is in both."
+    );
+    if let Some(counted) = counted {
+        text.push_str(" Counted from these pictures by the editor: ");
+        text.push_str(counted);
+        text.push_str(" Report that count; do not describe a colour the count says is absent.");
+    }
+    let mut content = vec![json!({"type":"text", "text":text})];
+    content.extend(images.iter().map(|(_, png)| {
+        json!({"type":"image_url", "image_url":{"url":format!("data:image/png;base64,{png}")}})
+    }));
+    json!({"role":"user", "content":content})
 }
 
 /// How much of the design context the local model gets in its prompt, in
@@ -452,7 +519,7 @@ fn run_loop(
                 restore_read_revisions(&mut args, &revisions);
             }
             emit(json!({"event":"tool_call", "name":tool.name, "arguments":args}));
-            let result = match call(&tool.name, &Value::Object(args)) {
+            let mut result = match call(&tool.name, &Value::Object(args)) {
                 Ok(result) => result,
                 Err(error) => {
                     emit(json!({"event":"tool_result", "name":tool.name, "ok":false,
@@ -486,8 +553,22 @@ fn run_loop(
             // A tool that says no, such as a glyph that is not in the font,
             // is an answer the model can act on: it goes back as the tool's
             // result, and the model can retry with another name or say so.
+            let images = split_images(&mut result);
             messages
                 .push(json!({"role":"tool", "tool_call_id":tool.id, "content":result.to_string()}));
+            if !images.is_empty() {
+                let glyph = result
+                    .get("glyph")
+                    .and_then(Value::as_str)
+                    .unwrap_or("the glyph");
+                let counted = result
+                    .pointer("/difference/sentence")
+                    .and_then(Value::as_str);
+                messages.push(image_message(glyph, counted, &images));
+                for (label, png) in &images {
+                    emit(json!({"event":"image", "glyph":glyph, "label":label, "png_base64":png}));
+                }
+            }
             total_calls += 1;
             check_messages(&messages)?;
         }
@@ -574,6 +655,7 @@ pub(super) fn run_chat_endpoint(
     endpoint: &LocalChatEndpoint,
     session: &std::path::Path,
     epoch: &str,
+    source: Option<u64>,
     conversation: &str,
     context: &str,
     job: &ChatJob,
@@ -596,11 +678,23 @@ pub(super) fn run_chat_endpoint(
                 .map_err(|error| error.to_string())
         },
         |name, args| {
+            // The source the person is looking at stands in when the model
+            // leaves it out, as it often does in a family; a wrong guess at
+            // a source id would be worse than that.
+            let mut args = args.clone();
+            if let (Some(source), Some(object)) = (source, args.as_object_mut())
+                && !matches!(name, "project_info" | "design_context")
+            {
+                object.entry("source").or_insert_with(|| json!(source));
+            }
+            if name == "proof_image" {
+                return proof_image_call(session, &args);
+            }
             runebender::automation::live_socket::call(
                 session,
                 &agent::ToolCall {
                     name: name.into(),
-                    arguments: args.clone(),
+                    arguments: args,
                 },
             )
             .map_err(|error| format!("live {name} call failed: {error}; its outcome is unknown"))
@@ -612,6 +706,140 @@ pub(super) fn run_chat_endpoint(
                 .push(event);
         },
     )
+}
+
+/// The proposal to picture: the one named by `wanted`, exactly or as the
+/// prefix the chat made unique with a suffix, else the latest that names
+/// the glyph. A model often writes the task name it chose, not the one
+/// that came back.
+fn chosen_proposal<'a>(
+    proposals: &'a [Value],
+    glyph: &str,
+    wanted: Option<&str>,
+) -> Option<&'a Value> {
+    let names_glyph = |proposal: &Value| {
+        proposal
+            .get("glyphs")
+            .and_then(Value::as_array)
+            .is_some_and(|glyphs| glyphs.iter().any(|name| name.as_str() == Some(glyph)))
+    };
+    let task_of = |proposal: &'a Value| proposal.get("task").and_then(Value::as_str);
+    wanted
+        .and_then(|task| {
+            proposals.iter().rev().find(|proposal| {
+                names_glyph(proposal)
+                    && task_of(proposal).is_some_and(|name| {
+                        name == task
+                            || name.strip_prefix(task).is_some_and(|rest| {
+                                rest.strip_prefix('-').is_some_and(|digits| {
+                                    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+                                })
+                            })
+                    })
+            })
+        })
+        .or_else(|| {
+            proposals
+                .iter()
+                .rev()
+                .find(|proposal| names_glyph(proposal))
+        })
+}
+
+/// Answer a `proof_image` call: the glyph's current drawing and its
+/// proposal, each read through the live `proof` tool, as the pair and the
+/// difference pictures.
+fn proof_image_call(session: &std::path::Path, args: &Value) -> Result<Value, String> {
+    use base64::Engine as _;
+    let live = |name: &str, arguments: Value| {
+        runebender::automation::live_socket::call(
+            session,
+            &agent::ToolCall {
+                name: name.into(),
+                arguments,
+            },
+        )
+        .map_err(|error| format!("live {name} call failed: {error}; its outcome is unknown"))
+    };
+    let glyph = args
+        .get("glyph")
+        .and_then(Value::as_str)
+        .ok_or("proof_image needs a glyph name")?;
+    let epoch = args
+        .get("expected_document_epoch")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let wanted = args.get("task").and_then(Value::as_str);
+    // A family of sources needs one named; the editor's active source is
+    // the one the person is looking at.
+    let source = match args.get("source").filter(|value| value.is_u64()) {
+        Some(source) => source.clone(),
+        None => {
+            let info = live("project_info", json!({"expected_document_epoch":epoch}))?;
+            info.get("active_source")
+                .filter(|value| value.is_u64())
+                .cloned()
+                .or_else(|| info.get("sources")?.as_array()?.first()?.get("id").cloned())
+                .unwrap_or(Value::Null)
+        }
+    };
+    let listed = live(
+        "proposal_list",
+        json!({"expected_document_epoch":epoch, "source":source}),
+    )?;
+    let proposals = listed
+        .get("proposals")
+        .and_then(Value::as_array)
+        .ok_or("proposal_list returned no proposals")?;
+    let proposal = chosen_proposal(proposals, glyph, wanted)
+        .ok_or_else(|| format!("no proposal names {glyph}; propose a change first"))?;
+    let layer = proposal
+        .get("layer")
+        .and_then(Value::as_str)
+        .ok_or("the proposal has no layer")?;
+    let task = proposal.get("task").cloned().unwrap_or(Value::Null);
+    let current = live(
+        "proof",
+        json!({"glyphs":[glyph], "source":source, "expected_document_epoch":epoch}),
+    )?;
+    let proposed = live(
+        "proof",
+        json!({"glyphs":[glyph], "layer":layer, "source":source, "expected_document_epoch":epoch}),
+    )?;
+    let a = proof_image::Drawing::from_proof(&current)?;
+    let b = proof_image::Drawing::from_proof(&proposed)?;
+    let encode = |png: Vec<u8>| base64::engine::general_purpose::STANDARD.encode(png);
+    let difference = proof_image::difference(&a, &b);
+    let outline_changed = difference.only_a + difference.only_b > 0;
+    let sentence = if outline_changed {
+        format!(
+            "The outlines differ: {} pixels only in A (red), {} only in B (blue).",
+            difference.only_a, difference.only_b
+        )
+    } else {
+        "The outlines are identical; only the advance differs, and the difference image is all grey."
+            .to_owned()
+    };
+    Ok(json!({
+        "ok": true,
+        "glyph": glyph,
+        "task": task,
+        "document_epoch": current.get("document_epoch").cloned().unwrap_or(Value::Null),
+        "advance": {"current": a.advance, "proposal": b.advance},
+        // Counted from the pictures, so the model reports what they show
+        // instead of guessing from the numbers it already had.
+        "difference": {
+            "outline_changed": outline_changed,
+            "pixels_only_in_a": difference.only_a,
+            "pixels_only_in_b": difference.only_b,
+            "pixels_in_both": difference.both,
+            "sentence": sentence
+        },
+        "images": [
+            {"label":"pair", "png_base64": encode(proof_image::pair_png(&a, &b))},
+            {"label":"difference", "png_base64": encode(difference.png)}
+        ]
+    }))
 }
 
 #[cfg(test)]
@@ -684,6 +912,92 @@ mod tests {
             assert!(!properties.contains_key("branch"), "{}", tool.name);
         }
         assert!(tools().iter().any(|tool| tool.name == "analyze_glyph"));
+    }
+
+    #[test]
+    fn the_pictured_proposal_is_matched_by_name_or_prefix_else_the_latest() {
+        let proposals = vec![
+            json!({"task":"wider-66001","glyphs":["zero"]}),
+            json!({"task":"wider-66002","glyphs":["zero"]}),
+            json!({"task":"spacing","glyphs":["one"]}),
+        ];
+        let task = |found: Option<&Value>| found.map(|p| p["task"].as_str().unwrap().to_owned());
+        assert_eq!(
+            task(chosen_proposal(&proposals, "zero", Some("wider-66001"))),
+            Some("wider-66001".into())
+        );
+        assert_eq!(
+            task(chosen_proposal(&proposals, "zero", Some("wider"))),
+            Some("wider-66002".into())
+        );
+        assert_eq!(
+            task(chosen_proposal(&proposals, "zero", Some("nothing"))),
+            Some("wider-66002".into())
+        );
+        assert_eq!(
+            task(chosen_proposal(&proposals, "zero", None)),
+            Some("wider-66002".into())
+        );
+        assert_eq!(chosen_proposal(&proposals, "two", None), None);
+    }
+
+    #[test]
+    fn proof_images_leave_the_tool_result_and_reach_the_model_as_pictures() {
+        let replies = RefCell::new(
+            vec![
+                call_reply("proof_image", json!({"glyph":"zero"})),
+                completion("The change is on the right side, as meant."),
+                completion(r#"{"answer":"The change is on the right side.","detail":""}"#),
+            ]
+            .into_iter(),
+        );
+        let seen = RefCell::new(Vec::new());
+        let events = RefCell::new(Vec::new());
+        let result = run_loop(
+            r#"[{"role":"user","content":"Check the proposal for zero"}]"#,
+            "",
+            &ProcessCancellation::default(),
+            "host-epoch",
+            |request, _| {
+                seen.borrow_mut().push(request.clone());
+                Ok(replies.borrow_mut().next().expect("a prepared response"))
+            },
+            |name, _| {
+                assert_eq!(name, "proof_image");
+                Ok(
+                    json!({"ok":true,"document_epoch":"host-epoch","glyph":"zero",
+                    "images":[{"label":"pair","png_base64":"UEFJUg=="},
+                              {"label":"difference","png_base64":"RElGRg=="}]}),
+                )
+            },
+            |event| events.borrow_mut().push(event),
+        );
+        assert!(result.is_ok(), "{result:?}");
+        let seen = seen.into_inner();
+        let messages = seen[1]["messages"].as_array().unwrap();
+        let tool_text = messages[3]["content"].as_str().unwrap();
+        assert!(
+            !tool_text.contains("UEFJUg=="),
+            "no base64 in the tool text: {tool_text}"
+        );
+        assert!(tool_text.contains("\"attached\":true"), "{tool_text}");
+        assert_eq!(messages[4]["role"], "user");
+        let parts = messages[4]["content"].as_array().unwrap();
+        assert_eq!(parts.len(), 3, "a sentence and two pictures");
+        assert!(parts[0]["text"].as_str().unwrap().contains("A on the left"));
+        assert_eq!(
+            parts[1]["image_url"]["url"],
+            "data:image/png;base64,UEFJUg=="
+        );
+        assert_eq!(
+            events
+                .into_inner()
+                .iter()
+                .filter(|event| event["event"] == "image")
+                .map(|event| event["label"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>(),
+            ["pair", "difference"]
+        );
     }
 
     #[test]
@@ -828,7 +1142,7 @@ mod tests {
     }
 
     #[test]
-    fn sixth_call_is_last_allowed_and_failure_stops_without_retry() {
+    fn eighth_call_is_last_allowed_and_failure_stops_without_retry() {
         let completed = Cell::new(0);
         let calls = Cell::new(0);
         let result = run_loop(
@@ -846,9 +1160,9 @@ mod tests {
             },
             |_| {},
         );
-        assert!(result.unwrap_err().contains("6 tool calls"));
-        assert_eq!(completed.get(), 7);
-        assert_eq!(calls.get(), 6);
+        assert!(result.unwrap_err().contains("8 tool calls"));
+        assert_eq!(completed.get(), 9);
+        assert_eq!(calls.get(), 8);
 
         let calls = Cell::new(0);
         let result = run_loop(

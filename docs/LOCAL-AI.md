@@ -52,8 +52,15 @@ Rail tab Chat. Source: `src/application/view/panels/chat.rs`,
   `top_k`, `min_p`, `presence_penalty` and `template_kwargs`.
 - Tools the model can call: `design_context`, `project_info`, `font_info`,
   `editor_context`, `glyph_inventory`, `analyze_glyph`, `analyze_font`, `read_glyph`,
-  `read_kerning`, `proof`, `specimen`, `proposal_list`, `propose_edits`.
-  A turn has at most 6 tool calls.
+  `read_kerning`, `proof`, `specimen`, `proposal_list`, `propose_edits`, and
+  `proof_image`, which the chat answers itself. A turn has at most 8 tool calls.
+  When the model leaves out `source`, the source open in the editor is filled in.
+- `proof_image` draws a glyph beside its proposal, A and B in their advance boxes
+  at one scale, and a difference image, red where only A has ink, blue where only
+  B has, grey where both do. The pictures go to the model as images when the
+  model folder holds an `mmproj*.gguf` vision projector; the server passes it with
+  `--mmproj`. Each picture is also written to `runebender-proof-images/` in the
+  temporary folder. Source: `src/application/editor/tools/proof_image.rs`.
 - The prompt includes the design context, up to 20,000 characters.
 - A second request, constrained to a schema, restates each reply in one or two plain sentences.
 - `/review-glyph H` and the other workflow names send the workflow text.
@@ -256,7 +263,7 @@ unchanged. Operations: `set_width`, `set_anchor`, `set_point`, `append_contours`
 | --- | --- | --- |
 | Shapes | `~/Runebender/models/shapes/`, `<Font>.models/shapes/` | `config.json`, `weights.safetensors`, `vocab.txt`, `manifest.json` |
 | Bolden | `~/Runebender/models/bolden/`, `<Font>.models/` | `config.json`, `weights.safetensors`, `vocab.txt` |
-| Chat | a folder under a model root that holds a `.gguf` | `.gguf`, optional `model.json` |
+| Chat | a folder under a model root that holds a `.gguf` | `.gguf`, optional `model.json`, optional `mmproj*.gguf` for images |
 | Whisper | a `whisper*` folder under a model root | `model.bin` |
 | Virtua sketch | `~/runebender/models/<id>/` | `manifest.json`, `config.json`, `vocab.txt`, `weights.safetensors`, and `runtime.json` at the root |
 | Neural | `<Name>.models/<NNN>/` | output of `train-nufo.sh` |

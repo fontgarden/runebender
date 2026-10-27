@@ -415,31 +415,54 @@ fn read_response(
             ));
         }
     };
-    let (status, body_len) = parse_headers(&received[..header_end])?;
-    if body_len > body_limit {
-        return Err(LocalChatError::Protocol(format!(
-            "response body of {body_len} bytes exceeds {body_limit} byte limit"
-        )));
-    }
-    let mut body = Vec::with_capacity(body_len);
-    let initial = &received[header_end..];
-    if initial.len() > body_len {
-        return Err(LocalChatError::Protocol(
-            "response contains bytes beyond Content-Length".into(),
-        ));
-    }
-    body.extend_from_slice(initial);
-    while body.len() < body_len {
-        let remaining_len = body_len - body.len();
-        let read_len = remaining_len.min(chunk.len());
-        let n = read_bounded(stream, &mut chunk[..read_len], deadline, cancellation)?;
-        if n == 0 {
-            return Err(LocalChatError::Protocol(
-                "response body ended before Content-Length".into(),
-            ));
+    let (status, framing) = parse_headers(&received[..header_end])?;
+    let body = match framing {
+        BodyFraming::Length(body_len) => {
+            if body_len > body_limit {
+                return Err(LocalChatError::Protocol(format!(
+                    "response body of {body_len} bytes exceeds {body_limit} byte limit"
+                )));
+            }
+            let mut body = Vec::with_capacity(body_len);
+            let initial = &received[header_end..];
+            if initial.len() > body_len {
+                return Err(LocalChatError::Protocol(
+                    "response contains bytes beyond Content-Length".into(),
+                ));
+            }
+            body.extend_from_slice(initial);
+            while body.len() < body_len {
+                let remaining_len = body_len - body.len();
+                let read_len = remaining_len.min(chunk.len());
+                let n = read_bounded(stream, &mut chunk[..read_len], deadline, cancellation)?;
+                if n == 0 {
+                    return Err(LocalChatError::Protocol(
+                        "response body ended before Content-Length".into(),
+                    ));
+                }
+                body.extend_from_slice(&chunk[..n]);
+            }
+            body
         }
-        body.extend_from_slice(&chunk[..n]);
-    }
+        BodyFraming::Chunked => {
+            // The request asked for the connection to close, so the chunks
+            // end at the end of the stream; the limit bounds the raw bytes.
+            let mut raw = received[header_end..].to_vec();
+            loop {
+                if raw.len() > body_limit {
+                    return Err(LocalChatError::Protocol(format!(
+                        "chunked response body exceeds {body_limit} byte limit"
+                    )));
+                }
+                let n = read_bounded(stream, &mut chunk, deadline, cancellation)?;
+                if n == 0 {
+                    break;
+                }
+                raw.extend_from_slice(&chunk[..n]);
+            }
+            dechunk(&raw).map_err(LocalChatError::Protocol)?
+        }
+    };
     check_progress(deadline, cancellation)?;
     if status != 200 {
         let message = serde_json::from_slice::<Value>(&body)
@@ -468,8 +491,50 @@ fn read_response(
     Ok(value)
 }
 
+/// How a response body is delimited.
 #[cfg(not(target_arch = "wasm32"))]
-fn parse_headers(bytes: &[u8]) -> Result<(u16, usize), LocalChatError> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BodyFraming {
+    /// `Content-Length`: this many bytes.
+    Length(usize),
+    /// `Transfer-Encoding: chunked`, as a server behind a proxy answers.
+    Chunked,
+}
+
+/// The body of a `Transfer-Encoding: chunked` response: each chunk is a
+/// hexadecimal size line, the bytes, and a blank line; a zero size ends it
+/// and any trailer lines after it are ignored.
+pub fn dechunk(raw: &[u8]) -> Result<Vec<u8>, String> {
+    let mut body = Vec::new();
+    let mut at = 0;
+    loop {
+        let line_end = raw[at..]
+            .windows(2)
+            .position(|w| w == b"\r\n")
+            .ok_or("chunked body ended inside a size line")?;
+        let line =
+            std::str::from_utf8(&raw[at..at + line_end]).map_err(|_| "chunk size is not text")?;
+        let size_text = line.split(';').next().unwrap_or("").trim();
+        let size = usize::from_str_radix(size_text, 16)
+            .map_err(|_| format!("bad chunk size {size_text:?}"))?;
+        at += line_end + 2;
+        if size == 0 {
+            return Ok(body);
+        }
+        let end = at + size;
+        if end + 2 > raw.len() {
+            return Err("chunked body ended inside a chunk".into());
+        }
+        body.extend_from_slice(&raw[at..end]);
+        if &raw[end..end + 2] != b"\r\n" {
+            return Err("chunk is not followed by a blank line".into());
+        }
+        at = end + 2;
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_headers(bytes: &[u8]) -> Result<(u16, BodyFraming), LocalChatError> {
     let text = std::str::from_utf8(bytes)
         .map_err(|_| LocalChatError::Protocol("response headers are not UTF-8".into()))?;
     let mut lines = text.strip_suffix("\r\n\r\n").unwrap_or(text).split("\r\n");
@@ -498,6 +563,7 @@ fn parse_headers(bytes: &[u8]) -> Result<(u16, usize), LocalChatError> {
         return Err(LocalChatError::Protocol("unsupported HTTP status".into()));
     }
     let mut length = None;
+    let mut chunked = false;
     let mut json_content_type = None;
     for line in lines {
         if line.is_empty()
@@ -523,9 +589,12 @@ fn parse_headers(bytes: &[u8]) -> Result<(u16, usize), LocalChatError> {
         }
         let value = value.trim();
         if name.eq_ignore_ascii_case("transfer-encoding") {
-            return Err(LocalChatError::Protocol(
-                "Transfer-Encoding is unsupported".into(),
-            ));
+            if !value.eq_ignore_ascii_case("chunked") || chunked {
+                return Err(LocalChatError::Protocol(format!(
+                    "Transfer-Encoding {value} is unsupported"
+                )));
+            }
+            chunked = true;
         }
         if name.eq_ignore_ascii_case("content-length") {
             if length.is_some() || value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
@@ -547,13 +616,24 @@ fn parse_headers(bytes: &[u8]) -> Result<(u16, usize), LocalChatError> {
             );
         }
     }
-    let length = length.ok_or_else(|| LocalChatError::Protocol("missing Content-Length".into()))?;
+    let framing = match (length, chunked) {
+        (Some(_), true) => {
+            return Err(LocalChatError::Protocol(
+                "both Content-Length and chunked framing".into(),
+            ));
+        }
+        (Some(length), false) => BodyFraming::Length(length),
+        (None, true) => BodyFraming::Chunked,
+        (None, false) => {
+            return Err(LocalChatError::Protocol("missing Content-Length".into()));
+        }
+    };
     if status == 200 && json_content_type != Some(true) {
         return Err(LocalChatError::Protocol(
             "completion response must be JSON".into(),
         ));
     }
-    Ok((status, length))
+    Ok((status, framing))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -676,6 +756,35 @@ mod tests {
             requests
         });
         (address, task)
+    }
+
+    #[test]
+    fn a_chunked_response_from_a_router_is_read_whole() {
+        let body = br#"{"choices":[{"message":{"content":"chunked ok"}}]}"#;
+        let (head, tail) = body.split_at(10);
+        let mut chunked = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec();
+        for part in [head, tail] {
+            chunked.extend_from_slice(format!("{:x}\r\n", part.len()).as_bytes());
+            chunked.extend_from_slice(part);
+            chunked.extend_from_slice(b"\r\n");
+        }
+        chunked.extend_from_slice(b"0\r\n\r\n");
+        let (address, server) = fixture(vec![chunked]);
+        let result = endpoint(address)
+            .complete(
+                &json!({"messages": []}),
+                LocalChatLimits::default(),
+                &ProcessCancellation::default(),
+            )
+            .unwrap();
+        assert_eq!(result["choices"][0]["message"]["content"], "chunked ok");
+        server.join().unwrap();
+        assert_eq!(dechunk(b"3\r\nabc\r\n0\r\n\r\n").unwrap(), b"abc");
+        assert!(dechunk(b"3\r\nab").is_err());
+        assert!(
+            parse_headers(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: gzip\r\n\r\n")
+                .is_err()
+        );
     }
 
     #[test]

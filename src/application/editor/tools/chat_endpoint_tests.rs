@@ -364,3 +364,145 @@ fn replacing_document_after_inference_discards_reply_and_context() {
         )
     );
 }
+
+#[test]
+fn proof_images_are_drawn_from_the_live_proposal_and_shown_to_the_model() {
+    let (listener, endpoint) = listener();
+    let mut app = workspace(endpoint, "proof-image");
+    let source = app.font.project.source_id(0).unwrap();
+    let server = std::thread::spawn(move || {
+        let (stream, _first) = request(&listener);
+        respond(
+            stream,
+            call("read_glyph", json!({"source":source.0,"glyph":"A"})),
+        );
+        let (stream, second) = request(&listener);
+        let read: Value = serde_json::from_str(
+            second["messages"].as_array().unwrap().last().unwrap()["content"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        respond(
+            stream,
+            call(
+                "propose_edits",
+                json!({"source":source.0, "task":"wider-a", "reason":"Review a wider advance",
+            "edits":[{"glyph":"A","expected_revision":read["revision"],"operations":[{"op":"set_width","width":500.0}]}]}),
+            ),
+        );
+        let (stream, _third) = request(&listener);
+        respond(stream, call("proof_image", json!({"glyph":"A"})));
+        let (stream, fourth) = request(&listener);
+        let messages = fourth["messages"].as_array().unwrap();
+        let tool: Value =
+            serde_json::from_str(messages[messages.len() - 2]["content"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(tool["ok"], true, "{tool}");
+        assert!(
+            tool["task"].as_str().unwrap().starts_with("wider-a"),
+            "the task the chat made unique: {}",
+            tool["task"]
+        );
+        assert_eq!(tool["advance"], json!({"current":412.0, "proposal":500.0}));
+        assert_eq!(tool["images"][0], json!({"label":"pair", "attached":true}));
+        let pictures = messages.last().unwrap();
+        assert_eq!(pictures["role"], "user");
+        let parts = pictures["content"].as_array().unwrap();
+        assert_eq!(parts.len(), 3);
+        assert!(
+            parts[1]["image_url"]["url"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/png;base64,iVBOR"),
+            "a PNG"
+        );
+        respond(
+            stream,
+            json!({"role":"assistant","content":"B is wider; the drawing is whole."}),
+        );
+        restate(
+            &listener,
+            "B is wider; the drawing is whole.",
+            "The proposal is wider and the drawing is whole.",
+            "",
+        );
+    });
+    app.chat_send("Propose a wider A and check it.".into());
+    assert_eq!(
+        pump(&mut app),
+        [
+            "read_glyph",
+            "propose_edits",
+            "proposal_list",
+            "proof",
+            "proof"
+        ]
+    );
+    let kept = std::env::temp_dir()
+        .join("runebender-proof-images")
+        .join("A-pair.png");
+    assert!(
+        kept.is_file(),
+        "the pair picture is kept at {}",
+        kept.display()
+    );
+    server.join().unwrap();
+}
+
+/// Runs only with `RUNEBENDER_REAL_CHAT_FONT=<designspace>` and the shared
+/// model server up with a vision model: one real turn that proposes a wider
+/// zero, asks for the proof images and reports what it saw. Prints the
+/// transcript; the assertions are only that the turn ends with a reply and
+/// that pictures were drawn.
+#[test]
+#[ignore = "needs a font, the shared model server and a vision model; set RUNEBENDER_REAL_CHAT_FONT"]
+fn a_real_model_checks_its_proposal_with_proof_images() {
+    let Some(font) = std::env::var_os("RUNEBENDER_REAL_CHAT_FONT") else {
+        return;
+    };
+    let model = std::env::var("RUNEBENDER_REAL_CHAT_MODEL").unwrap_or("qwen3.6-35b-a3b".into());
+    let mut app = Workspace::open(Path::new(&font)).unwrap();
+    app.chat.endpoint = Some(Ok(LocalChatEndpoint::parse(
+        "http://127.0.0.1:8080/v1",
+        &model,
+    )
+    .unwrap()));
+    app.chat_send(
+        "Make the zero 64 units wider by moving its right-hand points and adding to the advance. \
+         Then ask for the proof images of zero and tell me, from the pictures: which drawing is \
+         wider, A or B; which side of the glyph changed in the difference image; and whether \
+         the drawing is still whole."
+            .into(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(600);
+    let mut dispatched = Vec::new();
+    while app.chat.job.is_some() {
+        if let Some(pending) = app.live.as_ref().unwrap().try_recv() {
+            pending.respond(|call| {
+                dispatched.push(call.name.clone());
+                app.call_live(call)
+            });
+        }
+        app.chat_pump();
+        assert!(
+            Instant::now() < deadline,
+            "the turn ends within ten minutes"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    for entry in &app.chat.entries {
+        eprintln!("{entry:?}");
+    }
+    eprintln!("dispatched: {dispatched:?}");
+    assert!(
+        dispatched.iter().filter(|name| *name == "proof").count() >= 2,
+        "{dispatched:?}"
+    );
+    assert!(
+        app.chat
+            .entries
+            .iter()
+            .any(|entry| matches!(entry, ChatEntry::Assistant(text) if !text.is_empty()))
+    );
+}
