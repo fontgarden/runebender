@@ -280,10 +280,6 @@ pub(crate) const METRICS_FIELD_GAP: f64 = 6.0;
 pub(crate) const METRICS_FIELD_START: f64 = 70.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-#[expect(
-    dead_code,
-    reason = "the scale is a closed vocabulary: a size nothing uses yet is still part of it"
-)]
 pub(crate) enum Space {
     /// No space.
     None,

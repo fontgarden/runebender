@@ -1,410 +1,427 @@
 // Copyright 2026 the Runebender Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The proof view: the glyph being edited and the proposal waiting for it,
-//! as drawings side by side and in running text, shown in the edit area in
-//! place of the canvas.
+//! Native glyph review, following the Virtua proof's quiet page hierarchy.
 //!
-//! The loop it serves: the model proposes a change in the chat, the designer
-//! reads it here in context, installs it, or goes back to the canvas, draws
-//! it their own way and tells the model to look again.
+//! Compare and Toggle read the same explicit comparison and fit both drawings
+//! together. The pinned Before survives a return to editing; proposals are
+//! chosen by identity and Apply is limited to the glyph actually reviewed.
 
-use std::sync::Arc;
-
-use crate::application::design::recipes;
+use crate::application::design::areas::proof as design;
+use crate::application::design::recipes::{self, proof as page};
 use crate::application::design::theme::Palette;
-use crate::application::design::{
-    ControlKind, ControlSize, ControlStyle, Region, Space, TextSize, column as xcolumn, row as xrow,
-};
-use crate::application::editor::tools::text as text_tool;
+use crate::application::design::{Region, Space, TextSize, column, row};
+use crate::application::editor::tools::review::{ReviewComparison, ReviewDrawing, ReviewMode};
 use crate::application::view::label;
-use crate::application::view::panels::preview::proof_transform;
 use crate::application::widgets::scroll_viewport::portal;
 use crate::application::workspace::Workspace;
 use masonry::imaging::Painter;
-use masonry::kurbo::{Affine, BezPath, Line, Point, Rect, Shape, Size, Stroke};
+use masonry::kurbo::{Affine, Rect, Shape, Size};
 use masonry::layout::{Dim, Length};
-use masonry::peniko::Color;
-use masonry::properties::Dimensions;
+use masonry::properties::{Dimensions, LineBreaking};
 use xilem::WidgetView;
 use xilem::style::Style;
 use xilem::view::{FlexExt as _, FlexSpacer, canvas, sized_box};
 
-/// Reading sizes for the text lines, in pixels per em: display, text, small.
-const TEXT_SIZES: [f64; 3] = [96.0, 48.0, 24.0];
-/// Line height as a share of the em, with the ascender and descender inside.
-const LINE_HEIGHT: f64 = 1.3;
-/// Room for the word that names a line.
-const CAPTION_WIDTH: f64 = 72.0;
-/// The height of the drawings row: tall enough to judge a curve, short
-/// enough that the first text line is in view with it.
-const DRAWING_HEIGHT: f64 = 280.0;
-
-/// What one side of the comparison draws: an outline and its advance.
-#[derive(Clone)]
-struct Side {
-    caption: &'static str,
-    outline: Arc<BezPath>,
-    advance: f64,
-}
-
-/// Running text set with the current drawing, or with the proposal in its place.
-struct Line_ {
-    caption: &'static str,
-    paths: Arc<Vec<BezPath>>,
-}
-
 pub(crate) fn proof_view(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
-    use xilem::core::one_of::Either;
-    let pal = &app.palette;
-    let glyph = app.session.glyph_name.clone();
-    let (ink, paper) = if app.preview_invert {
-        (pal.selected_ink(), pal.selected_bg())
-    } else {
-        (pal.proof_ink(), pal.proof_strip)
-    };
-    let rule = pal.outline;
-    let stroke = pal.stroke;
-
-    // The current drawing, live from the session, with its components.
-    let mut current = (*app.session.outline_arc()).clone();
-    let components = app.session.components_arc();
-    if !components.elements().is_empty() {
-        current.extend((*components).clone());
-    }
-    let current = Side {
-        caption: "Current",
-        outline: Arc::new(current),
-        advance: app.session.advance(),
-    };
-
-    // The proposal waiting for this glyph: the latest one that names it.
-    let task = app
-        .ai
-        .proposals
-        .iter()
-        .rev()
-        .find(|proposal| proposal.glyphs.contains(&glyph))
-        .map(|proposal| proposal.task.clone());
-    let proposed = task.as_deref().and_then(|task| {
-        let outline = app.model_proposal_outline(task, &glyph)?;
-        Some(Side {
-            caption: "Proposal",
-            outline: Arc::new(outline),
-            advance: app
-                .font
-                .proposal_advance(task, &glyph)
-                .unwrap_or(current.advance),
-        })
-    });
-
-    // The heading: the glyph, the proposal if there is one, and its two answers.
-    let title = match &task {
-        Some(task) => format!("{glyph} \u{00b7} proposal {task}"),
-        None => format!("{glyph} \u{00b7} no proposal waiting"),
-    };
-    let actions = task.clone().map(|task| {
-        let install = task.clone();
-        xrow(
-            Region::Inline,
-            (
-                word(pal, ControlKind::Secondary, "Install", move |app| {
-                    app.install_proposal(&install, None);
-                }),
-                word(pal, ControlKind::Quiet, "Discard", move |app| {
-                    app.discard_proposal(&task);
-                }),
-            ),
-        )
-        .gap(Space::Sm)
-    });
-    let header = xrow(
-        Region::Inline,
-        (
-            label(title).text_size(TextSize::Body.px()).color(pal.text),
-            FlexSpacer::Flex(1.0),
-            actions,
-        ),
-    );
-
-    // The drawings, at one scale so a moved point reads as a move.
-    let bounds = [Some(&current), proposed.as_ref()]
-        .into_iter()
-        .flatten()
-        .map(|side| side.outline.bounding_box())
-        .filter(|bounds| bounds.area() > 0.0)
-        .reduce(|a, b| a.union(b))
-        .unwrap_or(Rect::new(0.0, 0.0, current.advance.max(1.0), 1.0));
-    let widest = current
-        .advance
-        .max(proposed.as_ref().map_or(0.0, |side| side.advance));
-    let drawings = match &proposed {
-        Some(proposed) => Either::A(
-            xrow(
-                Region::Inline,
-                (
-                    drawing(pal, &current, bounds, widest, ink, paper, rule, stroke).flex(1.0),
-                    drawing(pal, proposed, bounds, widest, ink, paper, rule, stroke).flex(1.0),
-                ),
-            )
-            .gap(Space::Md),
-        ),
-        None => Either::B(drawing(
-            pal, &current, bounds, widest, ink, paper, rule, stroke,
-        )),
-    };
-
-    // Running text: the open composition, or a sample built around the glyph.
-    let text = if app.has_text_session {
-        app.initial_text.clone()
-    } else {
-        app.preview_text.clone()
-    };
+    let pal = page::palette(app.review.dark);
+    let comparison = app.review_comparison();
+    let family = app
+        .font
+        .font_info()
+        .names
+        .family_name
+        .clone()
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "Untitled".into());
     let codepoint = app
         .font
         .glyphs
         .iter()
-        .find(|entry| entry.name == glyph)
+        .find(|entry| entry.name == comparison.glyph)
         .and_then(|entry| entry.codepoint);
-    let text = if !text.trim().is_empty() {
-        text
-    } else {
-        codepoint.map(sample_text).unwrap_or_default()
-    };
-    let lines: Vec<Line_> = if text.is_empty() {
-        Vec::new()
-    } else {
-        let inputs = text_tool::TextInputs::new(&app.font)
-            .with_location(&app.font, &app.axis_values)
-            .with_direction(app.text_dir)
-            .with_text(&text)
-            .with_shaping_options(
-                &app.text_features_disabled,
-                app.text_script.as_deref(),
-                app.text_language.as_deref(),
-            );
-        let live = app.on_active_master();
-        let mut lines = Vec::new();
-        let before = if live {
-            inputs
-                .clone()
-                .with_live_outline(&glyph, current.outline.clone())
-        } else {
-            inputs.clone()
-        };
-        lines.push(Line_ {
-            caption: current.caption,
-            paths: Arc::new(placed(&before)),
-        });
-        if let Some(proposed) = &proposed {
-            let after = inputs
-                .with_live_outline(&glyph, proposed.outline.clone())
-                .with_live_advance(&glyph, proposed.advance);
-            lines.push(Line_ {
-                caption: proposed.caption,
-                paths: Arc::new(placed(&after)),
-            });
-        }
-        lines
-    };
-    let upm = app.font.units_per_em().max(1.0);
-    let ascender = app.font.ascender();
-    let text_rows: Vec<_> = TEXT_SIZES
-        .iter()
-        .map(|&size| {
-            let rows: Vec<_> = lines
-                .iter()
-                .map(|line| {
-                    text_line(
-                        pal,
-                        line.caption,
-                        line.paths.clone(),
-                        size / upm,
-                        ascender,
-                        size * LINE_HEIGHT,
-                        ink,
-                        paper,
-                    )
-                })
-                .collect();
-            xcolumn(Region::List, rows).gap(Space::Sm)
-        })
-        .collect();
-
-    // A proof is read top to bottom and scrolls, as a printed one would be
-    // turned: the drawings at a fixed height, then the text at each size.
-    portal(
-        sized_box(
-            xcolumn(
-                Region::Panel,
-                (
-                    header,
-                    sized_box(drawings).dims(Dimensions::new(
-                        Dim::Stretch,
-                        Dim::Fixed(Length::px(DRAWING_HEIGHT)),
-                    )),
-                    xcolumn(Region::List, text_rows).gap(Space::Md),
-                ),
-            )
-            .gap(Space::Md),
-        )
-        .padding(Space::Md.length())
-        .dims(Dimensions::new(Dim::Stretch, Dim::Auto)),
-    )
-    .constrain_horizontal(true)
-}
-
-/// A sample that shows a glyph among flat, round and capital neighbours.
-fn sample_text(c: char) -> String {
-    format!("{c}{c}{c} n{c}n o{c}o H{c}H O{c}O {c}")
-}
-
-/// The sorts of a text line as positioned paths.
-fn placed(inputs: &text_tool::TextInputs) -> Vec<BezPath> {
-    text_tool::TextState::new(inputs)
-        .placed()
-        .into_iter()
-        .map(|sort| sort.path)
-        .collect()
-}
-
-/// One drawing in its advance box, with its caption above.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "a drawing is one picture with its colors; a struct would name the same things"
-)]
-fn drawing(
-    pal: &Palette,
-    side: &Side,
-    bounds: Rect,
-    widest: f64,
-    ink: Color,
-    paper: Color,
-    rule: Color,
-    stroke: f64,
-) -> impl WidgetView<Workspace> + use<> {
-    let outline = side.outline.clone();
-    let advance = side.advance;
-    let picture = canvas(move |_: &mut Workspace, _, scene, size: Size| {
-        let mut p = Painter::new(scene);
-        p.fill(size.to_rect(), paper).draw();
-        let t = proof_transform(bounds, widest, size);
-        // The advance box: baseline, left and right sidebearing lines.
-        let pen = Stroke::new(stroke);
-        let baseline = Line::new(t * Point::new(0.0, 0.0), t * Point::new(advance, 0.0));
-        p.stroke(baseline, &pen, rule).draw();
-        for x in [0.0, advance] {
-            let edge = Line::new(
-                t * Point::new(x, bounds.min_y()),
-                t * Point::new(x, bounds.max_y()),
-            );
-            p.stroke(edge, &pen, rule).draw();
-        }
-        p.fill(&(t * &*outline), ink).draw();
-    });
-    xcolumn(
+    let identity = codepoint.map_or_else(
+        || "Unencoded glyph".into(),
+        |c| format!("U+{:04X}", u32::from(c)),
+    );
+    let has_pair = comparison.before.is_some();
+    let toggle = app.review.mode == ReviewMode::Toggle;
+    let show_before = app.review.show_before && has_pair;
+    let mode_bar = column(
         Region::List,
         (
-            label(side.caption)
-                .text_size(TextSize::Caption.px())
-                .color(pal.text_muted),
-            sized_box(picture).dims(Dimensions::new(Dim::Stretch, Dim::Stretch)),
-        ),
-    )
-    .gap(Space::Sm)
-}
-
-/// One line of running text at a reading size, with the word that names it.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "a line is one picture with its colors; a struct would name the same things"
-)]
-fn text_line(
-    pal: &Palette,
-    caption: &'static str,
-    paths: Arc<Vec<BezPath>>,
-    scale: f64,
-    ascender: f64,
-    height: f64,
-    ink: Color,
-    paper: Color,
-) -> impl WidgetView<Workspace> + use<> {
-    let picture = canvas(move |_: &mut Workspace, _, scene, size: Size| {
-        let mut p = Painter::new(scene);
-        p.fill(size.to_rect(), paper).draw();
-        let inset = Space::Md.px();
-        // A line longer than the pane is set smaller, whole, rather than cut.
-        let length = paths
-            .iter()
-            .filter(|path| !path.elements().is_empty())
-            .map(|path| path.bounding_box().max_x())
-            .fold(0.0, f64::max);
-        let room = (size.width - 2.0 * inset).max(1.0);
-        let scale = if length * scale > room {
-            room / length
-        } else {
-            scale
-        };
-        let t = Affine::scale_non_uniform(scale, -scale)
-            .then_translate((inset, inset + ascender * scale).into());
-        for path in paths.iter() {
-            p.fill(&(t * path), ink).draw();
-        }
-    });
-    xrow(
-        Region::Inline,
-        (
-            sized_box(
-                label(caption)
-                    .text_size(TextSize::Caption.px())
-                    .color(pal.text_muted),
+            row(
+                Region::Inline,
+                (
+                    page::tab(pal, "Compare", !toggle, false, |app| {
+                        app.review.mode = ReviewMode::Compare;
+                    }),
+                    page::tab(pal, "Toggle", toggle, false, |app| {
+                        app.review.mode = ReviewMode::Toggle;
+                    }),
+                    FlexSpacer::Flex(1.0),
+                ),
             )
-            .dims(Dimensions::new(
-                Dim::Fixed(Length::px(CAPTION_WIDTH)),
-                Dim::Auto,
-            )),
-            sized_box(picture)
-                .dims(Dimensions::new(
-                    Dim::Stretch,
-                    Dim::Fixed(Length::px(height)),
+            .gap(Space::Xxl),
+            page::rule(pal),
+        ),
+    )
+    .gap(Space::None);
+    let revision_controls = toggle.then(|| {
+        row(
+            Region::Inline,
+            (
+                page::tab(
+                    pal,
+                    comparison.left_caption,
+                    show_before,
+                    !has_pair,
+                    |app| app.review.show_before = true,
+                ),
+                page::tab(pal, comparison.right_caption, !show_before, false, |app| {
+                    app.review.show_before = false;
+                }),
+                FlexSpacer::Flex(1.0),
+            ),
+        )
+        .gap(Space::Xxl)
+    });
+    let actions = comparison.proposal_task.as_ref().map(|task| {
+        let task = task.clone();
+        let discard_label = if comparison.proposal_glyph_count > 1 {
+            format!(
+                "Discard proposal ({} glyphs)",
+                comparison.proposal_glyph_count
+            )
+        } else {
+            "Discard proposal".into()
+        };
+        row(
+            Region::Inline,
+            (
+                sized_box(page::action(
+                    pal,
+                    "Apply glyph".into(),
+                    false,
+                    !comparison.can_apply_glyph,
+                    Workspace::apply_review_glyph,
                 ))
+                .dims(Dimensions::new(Dim::Fixed(Length::ZERO), Dim::Auto))
                 .flex(1.0),
+                sized_box(page::action(pal, discard_label, false, false, move |app| {
+                    app.discard_proposal(&task);
+                }))
+                .dims(Dimensions::new(Dim::Fixed(Length::ZERO), Dim::Auto))
+                .flex(1.0),
+            ),
+        )
+        .gap(Space::Xl)
+    });
+    let hint = comparison.message.clone().or_else(|| {
+        comparison.proposal_task.as_ref().map(|_| {
+            format!(
+                "Apply glyph changes only {} in the active master.",
+                comparison.glyph
+            )
+        })
+    });
+    let captions = if toggle || !has_pair {
+        vec![if show_before {
+            comparison.left_caption
+        } else {
+            comparison.right_caption
+        }]
+    } else {
+        vec![comparison.left_caption, comparison.right_caption]
+    };
+    let captions: Vec<_> = captions
+        .into_iter()
+        .map(|caption| {
+            sized_box(
+                column(
+                    Region::List,
+                    (
+                        page::rule(pal),
+                        label(caption)
+                            .color(pal.text)
+                            .line_break_mode(LineBreaking::WordWrap),
+                    ),
+                )
+                .gap(Space::Lg),
+            )
+            .dims(Dimensions::new(Dim::Fixed(Length::ZERO), Dim::Auto))
+            .flex(1.0)
+        })
+        .collect();
+    page::surface(
+        pal,
+        column(
+            Region::List,
+            (
+                row(
+                    Region::Inline,
+                    (
+                        sized_box(
+                            label(family)
+                                .text_size(TextSize::Display.px())
+                                .color(pal.text)
+                                .line_break_mode(LineBreaking::WordWrap),
+                        )
+                        .dims(Dimensions::new(Dim::Fixed(Length::ZERO), Dim::Auto))
+                        .flex(1.0),
+                        page::tab(pal, "Dark", app.review.dark, false, |app| {
+                            app.review.dark = !app.review.dark;
+                        }),
+                    ),
+                ),
+                page::rule(pal),
+                column(
+                    Region::List,
+                    (
+                        label(comparison.glyph.clone())
+                            .text_size(TextSize::Display.px())
+                            .color(pal.text)
+                            .line_break_mode(LineBreaking::WordWrap),
+                        label(identity).color(pal.text),
+                    ),
+                )
+                .gap(Space::Sm),
+                mode_bar,
+                comparison_picker(app),
+                revision_controls,
+                actions,
+                hint.map(|text| recipes::prose(pal, text)),
+                row(Region::Inline, captions).gap(Length::px(design::COLUMN_GAP)),
+                specimen(pal, comparison, app.review.mode, show_before).flex(1.0),
+            ),
+        )
+        .gap(Space::Xl)
+        .padding(design::PAGE_INSET),
+    )
+}
+
+fn comparison_picker(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
+    let pal = page::palette(app.review.dark);
+    let selected = app.ai.preview_task.clone();
+    let caption = selected.as_ref().map_or_else(
+        || "Before / Working".into(),
+        |task| format!("Working / {task}"),
+    );
+    let choices = app.review.chooser_open.then(|| {
+        let tasks: Vec<Option<String>> = std::iter::once(None)
+            .chain(
+                app.ai
+                    .proposals
+                    .iter()
+                    .filter(|proposal| proposal.glyphs.contains(&app.session.glyph_name))
+                    .map(|proposal| Some(proposal.task.clone())),
+            )
+            .collect();
+        let height = (f64::from(u32::try_from(tasks.len()).unwrap_or(u32::MAX))
+            * crate::application::design::ControlSize::Large.px())
+        .min(crate::application::design::ControlSize::Large.px() * 4.0);
+        let choices: Vec<_> = tasks
+            .into_iter()
+            .map(|task| {
+                let active = task == selected;
+                let title = task.as_ref().map_or_else(
+                    || "Before / Working".into(),
+                    |name| format!("Working / {name}"),
+                );
+                page::action(pal, title, active, false, move |app| {
+                    app.select_review_proposal(task.clone());
+                })
+            })
+            .collect();
+        sized_box(portal(column(Region::List, choices).gap(Space::None)).constrain_horizontal(true))
+            .dims(Dimensions::new(
+                Dim::Stretch,
+                Dim::Fixed(Length::px(height)),
+            ))
+    });
+    column(
+        Region::List,
+        (
+            label("Comparison").color(pal.text),
+            row(
+                Region::Inline,
+                (
+                    sized_box(page::selector(
+                        pal,
+                        caption,
+                        app.review.chooser_open,
+                        |app| app.review.chooser_open = !app.review.chooser_open,
+                    ))
+                    .dims(Dimensions::new(Dim::Fixed(Length::ZERO), Dim::Auto))
+                    .flex(1.0),
+                    page::action(
+                        pal,
+                        "Set Before".into(),
+                        false,
+                        !app.on_active_master(),
+                        Workspace::pin_review_before,
+                    ),
+                ),
+            )
+            .gap(Space::Lg),
+            choices,
         ),
     )
     .gap(Space::Sm)
 }
 
-/// A word on a control at control height.
-fn word<F: Fn(&mut Workspace) + Send + Sync + 'static>(
+/// Draw both sides in one field, so layout cannot give them different fit constraints.
+fn specimen(
     pal: &Palette,
-    kind: ControlKind,
-    text: &'static str,
-    on_click: F,
-) -> impl WidgetView<Workspace> + use<F> {
-    let style = ControlStyle::new(pal, kind);
-    sized_box(
-        recipes::button(
-            style,
-            label(text)
-                .text_size(TextSize::Body.px())
-                .color(style.ink()),
-            on_click,
+    comparison: ReviewComparison,
+    mode: ReviewMode,
+    show_before: bool,
+) -> impl WidgetView<Workspace> + use<> {
+    let ink = pal.text;
+    let bounds = comparison_bounds(&comparison.working, comparison.before.as_ref());
+    let paired = comparison.before.is_some() && mode == ReviewMode::Compare;
+    sized_box(canvas(move |_: &mut Workspace, _, scene, size: Size| {
+        let (left, right) = comparison_transforms(bounds, size, paired);
+        let mut painter = Painter::new(scene);
+        if paired {
+            if let Some(before) = &comparison.before {
+                painter.fill(&(left * &*before.outline), ink).draw();
+            }
+            painter
+                .fill(&(right * &*comparison.working.outline), ink)
+                .draw();
+        } else {
+            let drawing = if show_before {
+                comparison.before.as_ref().unwrap_or(&comparison.working)
+            } else {
+                &comparison.working
+            };
+            painter.fill(&(left * &*drawing.outline), ink).draw();
+        }
+    }))
+    .dims(Dimensions::new(Dim::Stretch, Dim::Stretch))
+}
+
+/// Include sidebearings, overhangs and both revisions, even when Toggle hides one.
+fn comparison_bounds(working: &ReviewDrawing, before: Option<&ReviewDrawing>) -> Rect {
+    let drawings = [Some(working), before];
+    let advance = drawings
+        .iter()
+        .flatten()
+        .map(|drawing| drawing.advance)
+        .fold(1.0, f64::max);
+    let ink = drawings
+        .into_iter()
+        .flatten()
+        .filter(|drawing| !drawing.outline.elements().is_empty())
+        .map(|drawing| drawing.outline.bounding_box())
+        .reduce(|a, b| a.union(b));
+    ink.map_or(Rect::new(0.0, 0.0, advance, 1.0), |ink| {
+        Rect::new(
+            ink.x0.min(0.0),
+            ink.y0.min(0.0),
+            ink.x1.max(advance),
+            ink.y1.max(1.0),
         )
-        .padding(masonry::properties::Padding::horizontal(Space::Md.length())),
-    )
-    .dims(Dimensions::new(Dim::Auto, Dim::from(ControlSize::Swatch)))
+    })
+}
+
+/// Fit one shared ink/advance box into equal fields, with a shared baseline.
+fn comparison_transforms(bounds: Rect, size: Size, paired: bool) -> (Affine, Affine) {
+    let gap = if paired {
+        design::COLUMN_GAP.min(size.width.max(0.0))
+    } else {
+        0.0
+    };
+    let width = if paired {
+        (size.width - gap) / 2.0
+    } else {
+        size.width
+    };
+    let inset = design::INK_INSET
+        .min(width.max(0.0) / 2.0)
+        .min(size.height.max(0.0) / 2.0);
+    let scale = ((width - 2.0 * inset).max(0.0) / bounds.width().max(1.0))
+        .min((size.height - 2.0 * inset).max(0.0) / bounds.height().max(1.0));
+    let x = (width - bounds.width() * scale) / 2.0 - bounds.x0 * scale;
+    let y = (size.height - bounds.height() * scale) / 2.0 + bounds.y1 * scale;
+    let left = Affine::scale_non_uniform(scale, -scale).then_translate((x, y).into());
+    (left, left.then_translate((width + gap, 0.0).into()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use masonry::kurbo::{BezPath, Point};
+    use std::sync::Arc;
+
+    fn drawing(ink: Rect, advance: f64) -> ReviewDrawing {
+        ReviewDrawing {
+            outline: Arc::new(ink.to_path(0.1)),
+            advance,
+        }
+    }
 
     #[test]
-    fn the_sample_puts_the_glyph_among_flat_round_and_capital_neighbours() {
-        let text = sample_text('0');
-        assert!(text.starts_with("000 "), "{text}");
-        for context in ["n0n", "o0o", "H0H", "O0O"] {
-            assert!(text.contains(context), "{text} lacks {context}");
+    fn unequal_revisions_share_scale_baseline_and_room_for_overhangs() {
+        let working = drawing(Rect::new(-120.0, -220.0, 840.0, 900.0), 600.0);
+        let before = drawing(Rect::new(0.0, 0.0, 300.0, 700.0), 700.0);
+        let bounds = comparison_bounds(&working, Some(&before));
+        for size in [
+            Size::new(240.0, 160.0),
+            Size::new(800.0, 500.0),
+            Size::new(1400.0, 900.0),
+        ] {
+            let (a, b) = comparison_transforms(bounds, size, true);
+            assert_eq!(a.as_coeffs()[..4], b.as_coeffs()[..4]);
+            assert_eq!((a * Point::ORIGIN).y, (b * Point::ORIGIN).y);
+            let width = (size.width - design::COLUMN_GAP) / 2.0;
+            for (transform, start) in [(a, 0.0), (b, width + design::COLUMN_GAP)] {
+                let fit = transform.transform_rect_bbox(bounds);
+                assert!(fit.x0 >= start && fit.x1 <= start + width);
+                assert!(fit.y0 >= 0.0 && fit.y1 <= size.height);
+            }
+        }
+    }
+
+    #[test]
+    fn toggle_uses_both_revisions_for_fitting_even_when_one_is_hidden() {
+        let before = drawing(Rect::new(0.0, 0.0, 200.0, 700.0), 300.0);
+        let working = drawing(Rect::new(-100.0, -300.0, 1000.0, 900.0), 900.0);
+        let size = Size::new(500.0, 400.0);
+        let bounds = comparison_bounds(&working, Some(&before));
+        let swapped = comparison_bounds(&before, Some(&working));
+        assert_eq!(
+            comparison_transforms(bounds, size, false),
+            comparison_transforms(swapped, size, false)
+        );
+        assert_ne!(
+            comparison_transforms(bounds, size, false),
+            comparison_transforms(comparison_bounds(&before, None), size, false)
+        );
+    }
+
+    #[test]
+    fn empty_glyphs_and_a_collapsed_specimen_have_finite_transforms() {
+        let empty = ReviewDrawing {
+            outline: Arc::new(BezPath::new()),
+            advance: 0.0,
+        };
+        let bounds = comparison_bounds(&empty, None);
+        for size in [Size::ZERO, Size::new(12.0, 8.0), Size::new(800.0, 400.0)] {
+            for paired in [true, false] {
+                let (a, b) = comparison_transforms(bounds, size, paired);
+                assert!(
+                    a.as_coeffs()
+                        .iter()
+                        .chain(b.as_coeffs().iter())
+                        .all(|v| v.is_finite())
+                );
+            }
         }
     }
 }
+
+#[cfg(test)]
+#[path = "proof_tests.rs"]
+mod layout_tests;

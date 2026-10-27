@@ -23,7 +23,7 @@
 //! asks for the check. Standalone UFO serialization retains the same external layer contract in
 //! the explicit format adapter.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 
 #[cfg(test)]
@@ -493,6 +493,50 @@ pub struct ProjectProposalInstall {
     pub installed: Installed,
 }
 
+/// Check whether one persisted proposal glyph can be installed without changing the project.
+///
+/// This is the same foreground-revision and optional structure check used by [`install_project`].
+/// Review controls can use its error to explain why Apply is unavailable; installation must still
+/// recheck immediately before staging changes.
+pub fn validate_project_glyph_install(
+    project: &Project,
+    source: SourceId,
+    task: &str,
+    glyph: &str,
+    keep_structure: bool,
+) -> Result<(), ProposalError> {
+    let foreground_layer = project
+        .document_source(source)
+        .ok_or_else(|| project_error("unknown source"))?
+        .default_layer();
+    let foreground = project
+        .document_layer(glyph, &foreground_layer)
+        .ok_or_else(|| project_error("not in the font"))?;
+    let proposed = project
+        .document_layer(glyph, &proposal_layer(source, task))
+        .ok_or_else(|| project_error("glyph is not in the selected proposal"))?;
+    let base = super::babelfont::glyph_transactions::proposal_base(proposed).ok_or_else(|| {
+        project_error("unguarded proposal: missing foreground revision; propose again")
+    })?;
+    if crate::font::edit_batch::canonical_glyph_revision(foreground)
+        .ok()
+        .as_deref()
+        != Some(base)
+    {
+        return Err(project_error(
+            "stale proposal: foreground changed; propose again",
+        ));
+    }
+    if keep_structure && !compatible_layers(foreground, proposed) {
+        return Err(project_error(format!(
+            "foreground {} · proposed {}",
+            describe_layer(foreground),
+            describe_layer(proposed),
+        )));
+    }
+    Ok(())
+}
+
 /// Install selected proposal glyphs into one stable source after all revision checks.
 ///
 /// Foreground replacements use Project-owned canonical history. Stale and structurally
@@ -512,7 +556,6 @@ pub fn install_project(
         .default_layer();
     let proposal_layer = proposal_layer(source, task);
     let wanted = |name: &str| only.is_none_or(|list| list.iter().any(|item| item == name));
-    let incompatible: BTreeMap<_, _> = summary.incompatible.iter().cloned().collect();
     let mut staged = Vec::new();
     let mut skipped = Vec::new();
 
@@ -525,35 +568,15 @@ pub fn install_project(
             glyph: name.clone(),
             layer: proposal_layer.clone(),
         };
-        let Some(foreground) = project.document_layer(name, &foreground_layer) else {
-            skipped.push((name.clone(), "not in the font".to_owned()));
+        if let Err(error) =
+            validate_project_glyph_install(project, source, task, name, keep_structure)
+        {
+            skipped.push((name.clone(), error.to_string()));
             continue;
-        };
+        }
         let proposed = project
             .document_layer(name, &proposal_layer)
             .ok_or_else(|| project_error("proposal layer disappeared during validation"))?;
-        let Some(base) = super::babelfont::glyph_transactions::proposal_base(proposed) else {
-            skipped.push((
-                name.clone(),
-                "unguarded proposal: missing foreground revision; propose again".into(),
-            ));
-            continue;
-        };
-        if crate::font::edit_batch::canonical_glyph_revision(foreground)
-            .ok()
-            .as_deref()
-            != Some(base)
-        {
-            skipped.push((
-                name.clone(),
-                "stale proposal: foreground changed; propose again".into(),
-            ));
-            continue;
-        }
-        if keep_structure && let Some(reason) = incompatible.get(name) {
-            skipped.push((name.clone(), reason.clone()));
-            continue;
-        }
         let before = project
             .capture_document_layer(&address)
             .ok_or_else(|| project_error("foreground disappeared during validation"))?;
@@ -950,6 +973,72 @@ mod tests {
             PathBuf::from("CompositionProposal.ufo"),
         ));
         (project, SourceId(0))
+    }
+
+    #[test]
+    fn review_eligibility_and_install_share_revision_and_structure_guards() {
+        for (guarded, changed_structure) in [(true, false), (true, true), (false, false)] {
+            let mut font = font();
+            let original = font.get_glyph("a").unwrap().clone();
+            let mut candidate = original.clone();
+            candidate.width += 20.0;
+            if changed_structure {
+                candidate.contours[0].points.pop();
+            }
+            if guarded {
+                let revision = crate::formats::ufo::glyph_revision(&original).unwrap();
+                crate::formats::metadata::lib_keys::write_proposal_base(
+                    &mut candidate,
+                    &revision,
+                    "eligibility test",
+                );
+            }
+            font.layers
+                .new_layer(&layer_name("review"))
+                .unwrap()
+                .insert_glyph(candidate);
+            let mut project =
+                Project::from_source(SourceInput::from_font(font, "ReviewEligibility.ufo".into()));
+            let source = SourceId(0);
+            let revision = project.document_revision();
+            let eligibility = validate_project_glyph_install(&project, source, "review", "a", true);
+            assert_eq!(eligibility.is_ok(), guarded && !changed_structure);
+            assert_eq!(
+                project.document_revision(),
+                revision,
+                "eligibility is read-only"
+            );
+            if changed_structure {
+                assert!(
+                    validate_project_glyph_install(&project, source, "review", "a", false).is_ok()
+                );
+            }
+            if let Err(error) = eligibility {
+                let install = install_project(&mut project, source, "review", None, true).unwrap();
+                assert!(install.installed.installed.is_empty());
+                assert_eq!(install.installed.skipped[0].1, error.to_string());
+                assert_eq!(project.document_revision(), revision);
+            } else {
+                let address = GlyphLayerAddress {
+                    glyph: "a".into(),
+                    layer: project.document_source(source).unwrap().default_layer(),
+                };
+                project
+                    .edit_document_layer(&address.glyph, &address.layer, |draft| {
+                        draft.set_width(140.0)?;
+                        Ok(())
+                    })
+                    .unwrap();
+                let error = validate_project_glyph_install(&project, source, "review", "a", true)
+                    .unwrap_err();
+                assert!(error.to_string().contains("stale proposal"));
+                let revision = project.document_revision();
+                let install = install_project(&mut project, source, "review", None, true).unwrap();
+                assert!(install.installed.installed.is_empty());
+                assert_eq!(install.installed.skipped[0].1, error.to_string());
+                assert_eq!(project.document_revision(), revision);
+            }
+        }
     }
 
     #[test]

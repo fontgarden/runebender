@@ -111,3 +111,15 @@ pub(crate) mod model_strip {
     pub(crate) const RING: f64 = 3.5;
     pub(crate) const RING_KEYLINE: f64 = 5.5;
 }
+
+/// A review page uses the same inset on its headings, rules, and specimen fields.
+pub(crate) mod proof {
+    use crate::application::design::Space;
+
+    /// A proof needs breathing room around the ink, like the Virtua review page.
+    pub(crate) const PAGE_INSET: Space = Space::Xxl;
+    /// Separation between equal-width comparison columns.
+    pub(crate) const COLUMN_GAP: f64 = Space::Xxl.px();
+    /// Keep ink clear of the field edges, including overhanging accents.
+    pub(crate) const INK_INSET: f64 = Space::Xl.px();
+}

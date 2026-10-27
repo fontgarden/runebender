@@ -32,6 +32,9 @@ pub(crate) fn run(
         && let Some(index) = workspace.font.index_of(&name)
     {
         workspace.open_glyph(index);
+        if workspace.proof_view {
+            workspace.pin_review_before();
+        }
         // RUNEBENDER_PROOF_SAMPLE=1 proposes a wider open glyph through the
         // live tools, so a headless render of the proof view has a proposal
         // to compare.
@@ -66,6 +69,20 @@ pub(crate) fn run(
         workspace.selected_points = sess.point_count();
         workspace.session = Arc::new(sess);
         workspace.refresh_coord_bufs();
+    }
+    // The review mode can be captured without changing the user's running editor.
+    if let Some(workspace) = app.workspace.as_mut()
+        && matches!(
+            std::env::var("RUNEBENDER_PROOF_VIEW").as_deref(),
+            Ok("toggle" | "before")
+        )
+    {
+        workspace.review.mode = crate::application::editor::tools::review::ReviewMode::Toggle;
+        workspace.review.show_before =
+            std::env::var("RUNEBENDER_PROOF_VIEW").as_deref() == Ok("before");
+    }
+    if let Some(workspace) = app.workspace.as_mut() {
+        workspace.review.dark = std::env::var("RUNEBENDER_PROOF_DARK").as_deref() == Ok("1");
     }
     // Headless: render one frame and exit. No window, no event loop.
     if let Ok(path) = std::env::var("RUNEBENDER_SCREENSHOT") {
@@ -393,4 +410,5 @@ fn proof_sample(app: &mut crate::application::workspace::Workspace) {
     });
     eprintln!("proof sample proposal: {proposed}");
     app.refresh_proposals();
+    app.select_review_proposal(Some("wider-sample".into()));
 }

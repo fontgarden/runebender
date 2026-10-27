@@ -83,17 +83,34 @@ Microphone button in Chat. Source: `src/application/editor/tools/voice.rs`,
 
 ### 2.3 Proof view
 
-Editor footer, the fourth button. Source: `src/application/view/canvas/proof.rs`,
-`src/application/view/render.rs`, `src/application/view/chrome.rs`.
+Editor footer, the fourth button.
+Sources: `src/application/view/canvas/proof.rs`, `src/application/editor/tools/review.rs`, and `src/application/design/recipes/proof.rs`.
 
-- Replaces the canvas with a proof of the open glyph; the button switches back.
-- Shows the current drawing and the latest proposal that names the glyph, side by
-  side at one scale in their advance boxes, with Install and Discard.
-- Below them, current and proposal in running text at 96, 48 and 24 px per em: the
-  Text tool's composition, or a sample of the glyph between n, o, H and O.
-- Reads the proposal in the active master only.
-- `RUNEBENDER_PROOF_VIEW=1` opens it, and `RUNEBENDER_PROOF_SAMPLE=1` adds a sample
-  proposal, for headless screenshots.
+- Replaces the canvas with a native review page for the open glyph; the same footer button returns to editing.
+- The outlined Dark toggle switches the proof page between light and dark without changing the surrounding editor theme.
+  Mode, revision, and action buttons use the same outlined controls as other editor sections.
+- Compare shows the two drawings side by side; Toggle switches between them using the revision controls.
+  Both drawings contribute to the shared fit, including overhangs and sidebearings, so switching revisions keeps their scale and baseline fixed.
+- Opening review pins the first Before drawing in memory.
+  Before survives returning to the canvas and editing Working; Set Before deliberately replaces it with the current drawing.
+  A baseline belongs to its document, source, and glyph, and is not saved to the font or restored after quitting.
+- The Comparison chooser selects Before / Working or an explicit waiting proposal for this glyph.
+  It also follows a proposal explicitly selected for comparison in Local AI, rather than automatically choosing the newest task.
+- Apply glyph changes only the displayed glyph and retains the pre-apply drawing as Before.
+  Atomic multi-glyph model candidates must be reviewed and applied together in Local AI.
+  Discard proposal names its batch size when it contains more than one glyph.
+- This first review checkpoint supports the active editable master.
+  Other axis locations show an explanation instead of comparing a master drawing with an interpolated instance.
+- Waterfall, running-text proofs, reference fonts, specimen text copying, and shared chat image artifacts are later checkpoints.
+  The old fixed 96/48/24 text strips have been removed from this pane.
+  The separate Text tool and editor preview strip remain available.
+- `RUNEBENDER_PROOF_VIEW=1` opens Compare; `toggle` opens Toggle on the right-hand revision, and `before` opens Toggle on the left-hand revision.
+  `RUNEBENDER_PROOF_DARK=1` opens the proof page in dark mode.
+  With `RUNEBENDER_GLYPH=<name>`, `RUNEBENDER_PROOF_SAMPLE=1` creates and selects an in-memory sample proposal for headless screenshots.
+
+To test the review loop, open a glyph, open Proof view to pin Before, return to the canvas and edit it, then reopen Proof view and switch between Compare and Toggle.
+Test a different glyph or source as well: it must not inherit another glyph's baseline.
+Review layout and fitting tests run with `cargo test --bin runebender --locked view::canvas::proof -- --test-threads=1`; state and Apply tests run with `cargo test --bin runebender --locked review -- --test-threads=1`.
 
 ### 2.4 Local AI rail
 

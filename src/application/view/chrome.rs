@@ -459,7 +459,7 @@ fn editor_status(app: &Workspace, text: String) -> impl WidgetView<Workspace> + 
                         ControlStyle::new(pal, ControlKind::Tool).selected(pal, app.proof_view),
                         "text",
                         "Proof view",
-                        |app: &mut Workspace| app.proof_view = !app.proof_view,
+                        |app: &mut Workspace| app.toggle_proof_view(),
                     )
                     .icon_size(STATUS_ICON_SIZE)
                     .tile_size(STATUS_ICON_SIZE),

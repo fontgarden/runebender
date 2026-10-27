@@ -310,6 +310,8 @@ pub(crate) struct Workspace {
     /// Show the proof view in the edit area instead of the canvas: the glyph
     /// and the proposal waiting for it, as drawings and in running text.
     pub(crate) proof_view: bool,
+    /// Pinned drawing and explicit comparison preferences for the proof view.
+    pub(crate) review: crate::application::editor::tools::review::ReviewState,
     /// What the proof strip shows for a neural source: the outline, or the labeled pieces.
     pub(crate) preview_view: crate::application::pieces::PreviewView,
     /// The labeled pieces of every sample, for the piece view.

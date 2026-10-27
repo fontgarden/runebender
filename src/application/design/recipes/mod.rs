@@ -10,6 +10,8 @@
 //! Body layouts use `Region::Form`, `Region::Inline`, or `Region::List` without
 //! adding another outer inset. See `docs/UI-DESIGN.md` for a complete contributor example.
 
+pub(crate) mod proof;
+
 use crate::application::design::controls::control::{ControlWidget, control};
 use crate::application::widgets::icon_paint;
 use crate::application::widgets::input_typography;

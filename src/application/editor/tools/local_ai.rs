@@ -529,6 +529,55 @@ impl Workspace {
             })
     }
 
+    /// The advance from the same session candidate or persistent proposal as its outline.
+    pub(crate) fn model_proposal_advance(&self, task: &str, glyph: &str) -> Option<f64> {
+        let source = self.font.project.source_id(self.font.active())?;
+        if let Some(pending) = self.ai.pending.get(&(source, task.to_owned())) {
+            return pending
+                .candidate
+                .snapshots()
+                .iter()
+                .find(|snapshot| snapshot.address().glyph == glyph)
+                .map(|snapshot| snapshot.view().width());
+        }
+        self.font.proposal_advance(task, glyph)
+    }
+
+    /// Explain whether this exact proposal can change only the glyph shown in review.
+    pub(crate) fn review_proposal_eligibility(
+        &self,
+        task: &str,
+        glyph: &str,
+    ) -> Result<(), String> {
+        if self.session.gesture_in_progress() {
+            return Err("Finish the canvas gesture before applying".into());
+        }
+        let source = self
+            .font
+            .project
+            .source_id(self.font.active())
+            .ok_or("The active source is unavailable")?;
+        if let Some(pending) = self.ai.pending.get(&(source, task.to_owned())) {
+            if pending.document_id != self.document_id || pending.source != source {
+                return Err("This candidate belongs to another document or master".into());
+            }
+            self.font
+                .project
+                .preview_document_edit_transaction(pending.candidate.transaction())
+                .map_err(|error| format!("The selected candidate is stale: {error}"))?;
+            let glyphs = &pending.candidate.summary().glyphs;
+            if glyphs.len() != 1 || glyphs[0] != glyph {
+                return Err(format!(
+                    "This candidate contains {} glyphs and must be applied together in Local AI",
+                    glyphs.len(),
+                ));
+            }
+            return Ok(());
+        }
+        proposal::validate_project_glyph_install(&self.font.project, source, task, glyph, true)
+            .map_err(|error| error.to_string())
+    }
+
     #[cfg(target_arch = "wasm32")]
     fn install_model_candidate(&mut self, _task: &str, _only: Option<&[String]>) {
         self.note = "Model candidate installation is available in the desktop application.".into();
@@ -1126,6 +1175,59 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proof_review_cannot_apply_one_glyph_from_an_atomic_model_batch() {
+        use runebender::font::project::{Project, SourceInput};
+
+        let mut app = Workspace::untitled().unwrap();
+        app.open_glyph(app.font.index_of("A").unwrap());
+        let source = app.font.project.source_id(app.font.active()).unwrap();
+        let capture = DetachedProposalCapture::capture(
+            &app.font.project,
+            source,
+            "review-batch",
+            &["A".into(), "B".into()],
+        )
+        .unwrap();
+        let mut external = app.font.font_snapshot();
+        let proposed: Vec<_> = ["A", "B"]
+            .into_iter()
+            .map(|name| {
+                let mut glyph = external.get_glyph(name).unwrap().clone();
+                glyph.width += 80.0;
+                glyph
+            })
+            .collect();
+        let layer = external
+            .layers
+            .new_layer(&proposal::layer_name("review-batch"))
+            .unwrap();
+        for glyph in proposed {
+            layer.insert_glyph(glyph);
+        }
+        let external = Project::from_source(SourceInput::from_font(external, "Review.ufo".into()));
+        let candidate = capture.stage(&app.font.project, &external, source).unwrap();
+        app.ai.pending.insert(
+            (source, "review-batch".into()),
+            PendingModelProposal {
+                document_id: app.document_id,
+                source,
+                candidate,
+            },
+        );
+        app.refresh_proposals();
+        app.select_review_proposal(Some("review-batch".into()));
+        let comparison = app.review_comparison();
+        assert_eq!(comparison.proposal_glyph_count, 2);
+        assert!(!comparison.can_apply_glyph);
+        assert_eq!(comparison.working.advance, app.session.advance() + 80.0);
+        let revision = app.font.project.document_revision();
+        app.apply_review_glyph();
+        assert_eq!(app.font.project.document_revision(), revision);
+        assert!(app.note.contains("applied together"));
+        assert!(app.ai.installed_order.is_empty());
+    }
 
     fn copy_tree(source: &Path, destination: &Path) {
         std::fs::create_dir_all(destination).expect("the destination directory is created");
