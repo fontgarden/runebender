@@ -625,7 +625,7 @@ pub(crate) fn save_indicator(pal: &Palette, unsaved: bool) -> impl WidgetView<Wo
     sized_box(
         label(if unsaved { "Not saved" } else { "Saved" })
             .text_size(TextSize::Body.px())
-            .color(pal.save_status_ink(unsaved)),
+            .color(pal.tool_active_ink()),
     )
     .dims(Dimensions::new(Dim::Fixed(Length::px(width)), Dim::Auto))
 }
