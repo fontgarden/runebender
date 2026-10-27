@@ -43,7 +43,7 @@ use crate::application::design::{
     POINT_GRID_COARSE_LINE_WIDTH, POINT_GRID_FINE_LINE_WIDTH, POINT_HALO_EXTRA, POINT_RING_WIDTH,
     POINT_SELECTED_GROW, START_MARKER_BACK, START_MARKER_HALF_WIDTH, START_MARKER_SCALE,
     START_MARKER_SMOOTH_CUT, START_MARKER_TIP, Stroke as DesignStroke, TEXT_CURSOR_CAP_FRACTION,
-    TEXT_CURSOR_CAP_MAX, TEXT_CURSOR_CAP_MIN, TextSize, point_marker_scale,
+    TEXT_CURSOR_CAP_MAX, TEXT_CURSOR_CAP_MIN, TextSize, point_grid_dot_sizes, point_marker_scale,
 };
 
 const HIT_RADIUS_PX: f64 = 8.0;
@@ -85,14 +85,6 @@ fn grid_alphas(zoom: f64) -> (f64, f64) {
     (
         smoothstep((zoom - 0.8) / 0.8),
         smoothstep((zoom - 8.0) / 8.0),
-    )
-}
-
-/// The design grid's coarse and fine dot diameters at this zoom.
-fn grid_dot_sizes(zoom: f64) -> (f64, f64) {
-    (
-        (8.0 * zoom * 0.2).clamp(1.5, 5.0),
-        (2.0 * zoom * 0.125).clamp(1.0, 3.5),
     )
 }
 
@@ -2174,8 +2166,8 @@ impl Widget for EditorWidget {
 
         // The design grid, as dots or lines according to View > Grid.
         // 8-unit intersection once the zoom passes 0.8x, and a finer
-        // 2-unit dot past 8x. The dots grow with the pitch, a fifth of
-        // the coarse one and an eighth of the fine one, within limits.
+        // 2-unit dot past 8x. Dot sizes share the point-marker scale,
+        // keeping the colored space inside markers proportional at every zoom.
         {
             let zoom = self.session.viewport.zoom;
             let (mid, close) = grid_alphas(zoom);
@@ -2235,7 +2227,7 @@ impl Widget for EditorWidget {
                         painter.fill(&marks, color).draw();
                     }
                 };
-                let (coarse, fine) = grid_dot_sizes(zoom);
+                let (coarse, fine) = point_grid_dot_sizes(zoom);
                 let spacing = runebender::outline::point_ops::DOT_GRID_SPACING;
                 level(spacing, 0, coarse, mid);
                 if close > 0.0 {
@@ -2450,7 +2442,7 @@ impl Widget for EditorWidget {
                 // marker after its interior and before its ring. This makes
                 // exact grid alignment readable without weakening the point.
                 let (coarse_alpha, fine_alpha) = grid_alphas(self.session.viewport.zoom);
-                let (coarse_dot, fine_dot) = grid_dot_sizes(self.session.viewport.zoom);
+                let (coarse_dot, fine_dot) = point_grid_dot_sizes(self.session.viewport.zoom);
                 let grid_color = if selected || pal.points_filled {
                     fill
                 } else {
@@ -5083,6 +5075,20 @@ mod tests {
             true,
         );
         assert_eq!(marks.bounding_box(), Rect::new(3.5, 3.5, 12.5, 12.5));
+    }
+
+    #[test]
+    fn grid_dots_keep_their_colored_clearance_inside_point_markers() {
+        for zoom in [0.1, 0.8, 1.6, 3.2, 8.0, 12.0, 16.0, 28.0, 64.0] {
+            let scale = point_marker_scale(zoom);
+            let (coarse, fine) = point_grid_dot_sizes(zoom);
+            let ring = (POINT_RING_WIDTH * scale).max(DesignStroke::Hairline.px());
+            for (radius, expected_gap) in [(POINT_CORNER_RADIUS, 1.5), (POINT_CURVE_RADIUS, 2.5)] {
+                let gap = radius * scale - ring / 2.0 - coarse / 2.0;
+                assert!((gap / scale - expected_gap).abs() < 1e-9, "zoom {zoom}");
+            }
+            assert!((fine / coarse - 0.6).abs() < 1e-9);
+        }
     }
 
     #[test]

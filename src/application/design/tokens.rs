@@ -67,6 +67,15 @@ pub(crate) fn point_marker_scale(zoom: f64) -> f64 {
     }
 }
 
+/// Grid dots share the point-marker scale rather than growing with grid spacing.
+/// A 2.5 px coarse dot leaves 1.5 px of color inside the corner marker's ring
+/// at unit scale, matching the preferred zoomed-out treatment.
+/// Fine dots stay subordinate, with the same proportions at every zoom.
+pub(crate) fn point_grid_dot_sizes(zoom: f64) -> (f64, f64) {
+    let scale = point_marker_scale(zoom);
+    (2.5 * scale, 1.5 * scale)
+}
+
 /// Initial and minimum dock width shared by the glyph rail and inspector.
 pub(crate) const DOCK_WIDTH: f64 = 246.0;
 /// Background visible around and between the workspace's floating panels.
