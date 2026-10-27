@@ -218,13 +218,7 @@ fn document_readout(app: &Workspace, note: String) -> impl WidgetView<Workspace>
         "Saved"
     };
     let ink = app.palette.text_muted;
-    // Saved is the resting state and stays as quiet as the name beside it;
-    // only an unsaved document asks for attention.
-    let status_ink = if app.modified {
-        app.palette.save_status_ink(true)
-    } else {
-        ink
-    };
+    let status_ink = app.palette.save_status_ink(app.modified || app.untitled);
     let description = if note.is_empty() {
         format!("{name}, {status}")
     } else {

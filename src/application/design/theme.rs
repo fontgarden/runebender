@@ -429,17 +429,13 @@ impl Palette {
             .unwrap_or(self.header_ink)
     }
 
-    /// Save-state text can use contrasting ink independently of filled glyph marks.
-    /// Themes without these roles retain their existing red and green status colors.
+    /// Save-state text uses the same red and green as the glyph mark palette.
     pub(crate) fn save_status_ink(&self, modified: bool) -> Color {
-        let role = if modified { "unsavedInk" } else { "savedInk" };
-        self.roles.get(role).copied().unwrap_or_else(|| {
-            if modified {
-                self.mark("red").unwrap_or_else(|| self.role("warning"))
-            } else {
-                self.mark("green").unwrap_or(self.text_muted)
-            }
-        })
+        if modified {
+            self.mark("red").unwrap_or_else(|| self.role("warning"))
+        } else {
+            self.mark("green").unwrap_or(self.text_muted)
+        }
     }
 
     /// The ink of a field's placeholder: the text ink faded by the
@@ -703,8 +699,7 @@ mod tests {
             );
         }
         let mut palette = Palette::load("gray");
-        // A loaded theme fills the saved inks from its marks, so both
-        // have to go for the fallback branch to be reached.
+        // A theme without mark colors falls back to neutral saved text and a warning.
         palette.roles.remove("savedInk");
         palette.roles.remove("unsavedInk");
         palette.marks.remove("green");
@@ -714,16 +709,14 @@ mod tests {
     }
 
     #[test]
-    fn pale_theme_save_status_uses_its_own_ink_instead_of_tile_colors() {
-        for id in ["light", "light-gray", "strawberry"] {
+    fn save_status_matches_glyph_palette_colors() {
+        for &id in runebender::ui::theme::BUILTIN_THEME_IDS {
             let palette = Palette::load(id);
-            assert_eq!(palette.save_status_ink(false), palette.role("savedInk"));
-            assert_eq!(palette.save_status_ink(true), palette.role("unsavedInk"));
-            assert_ne!(
+            assert_eq!(
                 palette.save_status_ink(false),
                 palette.mark("green").expect("green mark")
             );
-            assert_ne!(
+            assert_eq!(
                 palette.save_status_ink(true),
                 palette.mark("red").expect("red mark")
             );
