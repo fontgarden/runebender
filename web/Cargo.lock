@@ -2345,6 +2345,7 @@ dependencies = [
 name = "runebender-browser"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "console_error_panic_hook",
  "image",
  "imaging_vello_cpu",
