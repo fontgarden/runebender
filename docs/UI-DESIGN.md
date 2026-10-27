@@ -44,6 +44,7 @@ Captions and titles are title case, never all caps. Nothing in the view uppercas
 | `Quiet` | Muted text button | Rare or reversible: Stop, Cancel, Undo |
 | `Status` | One sentence and a thin bar | Something in progress |
 | `Tiles` | Squares with a caption each | Samples, layers, masters |
+| `Specimen` | Shaped font proof lines | Sidebar spacing, waterfall, and script previews |
 | `KeyValue` | Name left, value right | Facts: steps, loss, folder |
 | `Details` | Disclosure, closed by default | Rows nobody needs every day |
 | `Slider` | Caption and a slider | A value on a range |

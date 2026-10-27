@@ -786,16 +786,16 @@ fn category_sidebar(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
         )
         .padding(Space::Md),
         recipes::hairline(pal),
-        // The groups take their natural height, and the specimen fills what they leave,
-        // as the outline preview does under the inspector.
+        // All sidebar sections share one scrolling area and the same folding headers.
         portal(recipes::panel_stack((
             sidebar_group(app, "Categories", cat_rows),
             (!lang_rows.is_empty()).then(|| sidebar_group(app, "Global Scripts", lang_rows)),
             sidebar_group(app, "Filters", filters),
+            crate::application::view::canvas::specimen::glyph_specimen(app),
         )))
         .trailing_rule_clearance(design::PANEL_SECTION_INSET.px())
-        .constrain_horizontal(true),
-        crate::application::view::canvas::specimen::glyph_specimen(app).flex(1.0),
+        .constrain_horizontal(true)
+        .flex(1.0),
     ))
     .cross_axis_alignment(CrossAxisAlignment::Stretch)
     .gap(Space::None)

@@ -131,6 +131,13 @@ pub(crate) enum Row {
     Status { text: String, fraction: Option<f64> },
     /// Square previews with a caption each.
     Tiles(Vec<Tile>),
+    /// Shaped font proof lines, sized by their existing spacing or waterfall layout.
+    /// This keeps each sidebar proof inside the standard folding section vocabulary.
+    Specimen {
+        block: crate::application::view::canvas::specimen::Block,
+        ascender: f64,
+        descender: f64,
+    },
     /// Facts: name left, value right, one row each.
     KeyValue(Vec<(String, String)>),
     /// Rows nobody needs every day, behind a disclosure. The key is the
@@ -170,7 +177,7 @@ impl Group {
 pub(crate) fn section_of(
     app: &Workspace,
     key: &'static str,
-    title: &'static str,
+    title: &str,
     groups: Vec<Group>,
 ) -> impl WidgetView<Workspace> + use<> {
     super::panel_section(app, key, title, body_of(app, groups))
@@ -239,6 +246,14 @@ fn caption(pal: &Palette, text: &'static str) -> impl WidgetView<Workspace> + us
 fn row_view(app: &Workspace, row: Row) -> Box<AnyWidgetView<Workspace>> {
     let pal = &app.palette;
     match row {
+        Row::Specimen {
+            block,
+            ascender,
+            descender,
+        } => {
+            crate::application::view::canvas::specimen::block_view(app, block, ascender, descender)
+                .boxed()
+        }
         Row::Meta(text) => prose_muted(pal, text).boxed(),
         Row::Prose(text) => prose(pal, text).boxed(),
         Row::Field {

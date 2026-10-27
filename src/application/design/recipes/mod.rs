@@ -48,7 +48,7 @@ where
 /// A section header with an explicit tokenized content height.
 pub(crate) fn section_toggle_height<F>(
     pal: &Palette,
-    text: &'static str,
+    text: &str,
     open: bool,
     height: f64,
     on_click: F,
@@ -68,7 +68,9 @@ where
                 Region::Inline,
                 (
                     marker(if open { Marker::Open } else { Marker::Closed }, muted),
-                    label(text).text_size(TextSize::Caption.px()).color(muted),
+                    label(text.to_owned())
+                        .text_size(TextSize::Caption.px())
+                        .color(muted),
                     FlexSpacer::Flex(1.0),
                 ),
             ),
@@ -150,7 +152,7 @@ where
 pub(crate) fn section<V>(
     app: &Workspace,
     key: &'static str,
-    title: &'static str,
+    title: &str,
     body: V,
 ) -> impl WidgetView<Workspace, Widget = masonry::widgets::Flex> + use<V>
 where
@@ -163,7 +165,7 @@ where
 pub(crate) fn section_with_header_height<V>(
     app: &Workspace,
     key: &'static str,
-    title: &'static str,
+    title: &str,
     body: V,
     height: f64,
 ) -> impl WidgetView<Workspace, Widget = masonry::widgets::Flex> + use<V>
@@ -196,7 +198,7 @@ where
 pub(crate) fn panel_section<V>(
     app: &Workspace,
     key: &'static str,
-    title: &'static str,
+    title: &str,
     body: V,
 ) -> impl WidgetView<Workspace> + use<V>
 where
