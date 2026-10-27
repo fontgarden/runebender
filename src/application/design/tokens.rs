@@ -399,6 +399,8 @@ pub(crate) enum Alpha {
     /// A field's placeholder: the hint has to read as a hint beside
     /// typed text, so it is well under the text ink in every theme.
     Placeholder,
+    /// A reference glyph in an empty grid cell: barely above its background.
+    GridReference,
 }
 
 impl Alpha {
@@ -414,6 +416,7 @@ impl Alpha {
             Self::HeaderInk => 0.7,
             Self::HeaderKeyline => 0.5,
             Self::Placeholder => 0.5,
+            Self::GridReference => 0.12,
         }
     }
 }

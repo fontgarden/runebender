@@ -450,6 +450,12 @@ impl Palette {
             .with_alpha(crate::application::design::Alpha::Placeholder.value())
     }
 
+    /// Empty-cell references follow the tile's ink, including selected and marked cells,
+    /// but remain much fainter than real outlines and captions.
+    pub(crate) fn grid_reference_ink(&self, tile_ink: Color) -> Color {
+        tile_ink.with_alpha(crate::application::design::Alpha::GridReference.value())
+    }
+
     /// The surface of a problem report: the field's lightness with a low
     /// chroma of the danger hue, so the normal text ink stays legible on it
     /// in light and dark themes alike, and red reads as the surface, not as

@@ -174,6 +174,71 @@ fn ink_aspect(outline: &kurbo::BezPath) -> f64 {
     }
 }
 
+/// A reference drawing from the bundled UI font, never part of the document.
+/// Missing characters and whitespace have no drawing; do not substitute `.notdef`.
+fn reference_outline(character: char) -> Option<Arc<kurbo::BezPath>> {
+    use skrifa::{
+        MetadataProvider as _,
+        instance::{LocationRef, Size},
+        outline::{DrawSettings, OutlinePen},
+    };
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    #[derive(Default)]
+    struct Pen(kurbo::BezPath);
+    impl OutlinePen for Pen {
+        fn move_to(&mut self, x: f32, y: f32) {
+            self.0.move_to((f64::from(x), f64::from(y)));
+        }
+        fn line_to(&mut self, x: f32, y: f32) {
+            self.0.line_to((f64::from(x), f64::from(y)));
+        }
+        fn quad_to(&mut self, x: f32, y: f32, x1: f32, y1: f32) {
+            self.0
+                .quad_to((f64::from(x), f64::from(y)), (f64::from(x1), f64::from(y1)));
+        }
+        fn curve_to(&mut self, x: f32, y: f32, x1: f32, y1: f32, x2: f32, y2: f32) {
+            self.0.curve_to(
+                (f64::from(x), f64::from(y)),
+                (f64::from(x1), f64::from(y1)),
+                (f64::from(x2), f64::from(y2)),
+            );
+        }
+        fn close(&mut self) {
+            self.0.close_path();
+        }
+    }
+    thread_local! {
+        static REFERENCES: RefCell<HashMap<char, Option<Arc<kurbo::BezPath>>>> = RefCell::new(HashMap::new());
+    }
+    REFERENCES.with(|cache| {
+        cache
+            .borrow_mut()
+            .entry(character)
+            .or_insert_with(|| {
+                if character.is_whitespace() || character.is_control() {
+                    return None;
+                }
+                let font = skrifa::FontRef::new(crate::application::view::UI_FONT).ok()?;
+                let glyph = font.charmap().map(character)?;
+                if glyph == skrifa::GlyphId::NOTDEF {
+                    return None;
+                }
+                let mut pen = Pen::default();
+                font.outline_glyphs()
+                    .get(glyph)?
+                    .draw(
+                        DrawSettings::unhinted(Size::new(1000.0), LocationRef::default()),
+                        &mut pen,
+                    )
+                    .ok()?;
+                (!pen.0.elements().is_empty()).then(|| Arc::new(pen.0))
+            })
+            .clone()
+    })
+}
+
 /// One drawable cell: what the grid needs without touching the font model.
 #[derive(Clone)]
 pub(crate) struct Cell {
@@ -805,6 +870,14 @@ impl Widget for GridWidget {
                     // Glyphs and captions share the resolved tile ink: its
                     // mark hue for outlined tiles, contrasting ink for filled ones.
                     painter.fill(&outline, ink).draw();
+                } else if let Some(reference) = cell.codepoint.and_then(reference_outline) {
+                    let preview = fit_transform(preview_rect, reference.bounding_box(), 1000.0);
+                    painter
+                        .fill(
+                            &(preview * (*reference).clone()),
+                            self.palette.grid_reference_ink(ink),
+                        )
+                        .draw();
                 }
                 if label_lines == 0 {
                     continue;
@@ -1612,6 +1685,21 @@ mod thumbnail_tests {
         let interior = rendered.get_pixel(1, 20);
         assert_eq!(rendered.get_pixel(1, 1), interior);
         assert_eq!(rendered.get_pixel(1, 536), interior);
+    }
+
+    #[test]
+    fn reference_glyphs_cover_letters_without_inventing_missing_outlines() {
+        for character in ['A', 'a', '0', 'é'] {
+            let outline = reference_outline(character).expect("bundled reference glyph");
+            assert!(!outline.elements().is_empty());
+            assert!(Arc::ptr_eq(
+                &outline,
+                &reference_outline(character).unwrap()
+            ));
+        }
+        for character in [' ', '\n', '\u{10FFFF}'] {
+            assert!(reference_outline(character).is_none());
+        }
     }
 
     #[test]

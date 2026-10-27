@@ -2360,6 +2360,7 @@ dependencies = [
  "runebender-xilem-browser",
  "serde",
  "serde_json",
+ "skrifa 0.46.2",
  "tokio",
  "toml",
  "wasm-bindgen",
