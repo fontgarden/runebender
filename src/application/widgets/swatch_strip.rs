@@ -1,7 +1,7 @@
 // Copyright 2026 the Runebender Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! A width-fitted strip of square swatch buttons with one uniform gutter.
+//! A left-aligned strip of square swatches, capped at the normal dock width.
 
 use masonry::accesskit::{Node, Role};
 use masonry::core::{
@@ -50,7 +50,13 @@ impl<W: Widget> Widget for SwatchStrip<W> {
         }
     }
     fn layout(&mut self, ctx: &mut LayoutCtx<'_>, _: &PropertiesRef<'_>, size: Size) {
-        ctx.run_layout(&mut self.child, size);
+        let child_size = if self.count == 0 {
+            size
+        } else {
+            let width = size.width.min(crate::application::design::DOCK_WIDTH);
+            Size::new(width, strip_height(width, self.count))
+        };
+        ctx.run_layout(&mut self.child, child_size);
         ctx.place_child(&mut self.child, Point::ORIGIN);
         ctx.derive_baselines(&self.child);
     }
@@ -71,6 +77,7 @@ impl<W: Widget> Widget for SwatchStrip<W> {
 }
 
 fn strip_height(width: f64, count: usize) -> f64 {
+    let width = width.min(crate::application::design::DOCK_WIDTH);
     let gap = crate::application::design::MARK_SWATCH_GAP;
     ((width - gap * (count + 1) as f64) / count.max(1) as f64).max(1.0) + 2.0 * gap
 }

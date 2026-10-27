@@ -1337,7 +1337,7 @@ mod panel_resize_tests {
     }
 
     #[test]
-    fn palette_circles_have_equal_outer_and_inner_gaps_when_the_dock_grows() {
+    fn palette_circles_keep_their_size_and_left_alignment_when_the_dock_grows() {
         use xilem::core::View;
         use xilem::style::Style;
         let mut app = super::tab_tests::app();
@@ -1351,14 +1351,15 @@ mod panel_resize_tests {
             pod.new_widget,
             (246, 100),
         );
-        for width in [246, 384] {
+        for width in [246, 384, 800, 246] {
             harness.process_window_event(WindowEvent::Resize(PhysicalSize::new(width, 100)));
             let root = harness.root_widget();
             let strip = root.children()[0].children()[0].children()[1];
             let row = strip.children()[0];
             let buttons = row.children();
             let gap = super::design::MARK_SWATCH_GAP;
-            let diameter = (f64::from(width) - 9.0 * gap) / 8.0;
+            let diameter = (super::design::DOCK_WIDTH - 9.0 * gap) / 8.0;
+            assert_eq!(strip.ctx().border_box().height(), diameter + 2.0 * gap);
             assert_eq!(buttons.len(), 8);
             for (i, button) in buttons.iter().enumerate() {
                 let rect = button.ctx().border_box();
