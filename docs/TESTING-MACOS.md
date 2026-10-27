@@ -50,7 +50,8 @@ Support for double-clicking font sources or dropping them onto the app icon need
 Use the signed command in [RELEASING.md](RELEASING.md#signed-public-package), not the local wrapper.
 Verify the app's Developer ID signature, hardened runtime, notarization acceptance, and stapled ticket, and verify the signed DMG and its ticket.
 Build all resources into the bundle before signing; never modify the application contents afterward.
-If frameworks or helpers are added later, sign the nested code explicitly before signing the outer app rather than using recursive signing as a substitute.
+The packager signs Sparkle's nested executables and helpers explicitly before signing the framework and outer app.
+Verify the copied application after ejecting the DMG, including `Contents/Frameworks/Sparkle.framework`.
 
 Download the final DMG with a browser on a separate Mac or clean test environment that has not already approved this build.
 Keep the download's quarantine metadata, install using Finder, eject, and launch the installed copy.
@@ -62,6 +63,29 @@ Record any VM or hardware coverage limits rather than treating them as equivalen
 Test the oldest advertised macOS version and each advertised architecture.
 The Mach-O minimum version is a compatibility constraint, not proof that the app works on that OS.
 Do not publish an Intel download solely because `lipo` confirms an Intel binary.
+
+## Native updates
+
+The alpha uses the feed and public verification key in `release.toml`.
+The release version is `0.1.0-alpha.1`; its numeric `CFBundleVersion` is `1`.
+Test update installation with two distinct build numbers and the same bundle identifier and signing identities.
+Use disposable app copies and font sources; keep test feeds and test builds out of the public alpha feed.
+
+1. Launch the installed candidate and confirm that Runebender > Check for Updates… is enabled.
+   With the published empty alpha feed, a manual check should report that no update is available.
+2. Repeat the manual check with networking unavailable and confirm that an understandable error leaves the editor usable.
+3. Configure an isolated older test app to read a private test feed containing the exact newer candidate DMG and its generated EdDSA signature.
+   Confirm that startup offers the newer build and that the menu can request the same update.
+4. Download the update, leave a disposable font unsaved, and request installation.
+   Cancel the document prompt and confirm that the editor and unsaved drawing remain open.
+   Save the font, resume through Check for Updates…, and verify that the new app relaunches and the saved edits persist.
+5. In a separate disposable run, exercise Discard and confirm that only the deliberately unsaved edits are discarded.
+6. Confirm that the installed app has the intended version, numeric build number, Developer ID signature, and stapled ticket after replacement.
+   Test that a modified archive with the original EdDSA signature is rejected before installation.
+
+The unit test for restart decisions covers Save, Discard, and Cancel state transitions.
+It does not prove Sparkle's native dialogs, helper processes, downloaded archive verification, or actual replacement and relaunch.
+Record these interactive results separately before advertising automatic updates as validated.
 
 ## Automated checks and their limits
 
@@ -85,4 +109,4 @@ Run these against public signed candidates; a local ad-hoc signature is not expe
 - [Apple DTS: Testing a Notarised Product](https://developer.apple.com/forums/thread/130560)
 - [Apple: macOS Code Signing In Depth](https://developer.apple.com/library/archive/technotes/tn2206/_index.html), especially bundle layout and nested code
 - [Apple: App icons](https://developer.apple.com/design/human-interface-guidelines/app-icons)
-
+- [Sparkle: Testing updates](https://sparkle-project.org/documentation/#6-test-sparkle-out)

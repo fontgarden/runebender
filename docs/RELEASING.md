@@ -25,13 +25,19 @@ The macOS build number in `release.toml` starts at `1` and must increase for eve
 The public application is initially Apple Silicon only, with a minimum macOS requirement of 12 because the pinned Sparkle framework requires it.
 The minimum OS declaration is not proof of testing on that OS; retain the actual tested OS and hardware with each candidate.
 
-### Preparation status on October 25, 2026
+### Preparation status on October 27, 2026
 
-Apple Developer individual membership is active, but this Mac still has no usable Developer ID Application identity and no `runebender-notary` credential profile.
+Apple Developer individual membership is active, and this Mac has a valid Developer ID Application identity with its private key in the login Keychain.
+The `runebender-notary` credential profile has been saved and validated with Apple.
+The first clean candidate at `d887f8deebe88e52903bff21fa758c7d30631fd1` passed app and nested-framework signing and was submitted for notarization.
+Its submission is still pending; signing success alone is not notarization acceptance.
+That source commit also exposed a missing browser dependency in CI, so the final release must use a corrected commit and artifacts built from that commit.
 The separate Runebender Sparkle archive-signing key has been created in the login Keychain under account `org.runebender.Runebender`.
 Only its public key is stored in `release.toml`; keep the private key and the Apple certificate's private key backed up securely, outside Git.
 The updater-enabled application compiles, and its locked dependencies pass the advisory check after updating Tokio.
-A signed, notarized candidate and an actual two-version update still need to be validated before public distribution.
+A completed notarized DMG, passing CI for the final source commit, installation testing, and an actual two-version update still need to be validated before public distribution.
+The download preparation page and empty alpha feed are deployed at [runebender.org/download.html](https://runebender.org/download.html).
+The website manifest remains unavailable until the public release assets are verified.
 Existing local DMGs made before the updater was added need one manual replacement; they cannot acquire an updater by themselves.
 
 ### Commands
@@ -81,11 +87,11 @@ Homebrew and crates.io publication are later milestones; this alpha includes the
 | Component | Initial approach | Status |
 | --- | --- | --- |
 | Local macOS packages | `./scripts/build_dmg.sh`, using the temporary icon | Implemented; local test signing |
-| Public macOS packages | Developer ID Application, notarization, stapling | Packaging commands exist; signed path awaits validation |
+| Public macOS packages | Developer ID Application, notarization, stapling | App signing verified; first notarization pending |
 | Release validation | Existing Linux/macOS CI plus installation tests | CI needs repair; manual checklist below |
 | Release orchestration | `scripts/release.py prepare`, `draft`, and `publish` | Implemented; public end-to-end validation pending |
 | Hosting | Versioned GitHub prerelease assets | Publisher implemented; no public alpha yet |
-| Website | `/download.html` reads verified release metadata | Source prepared; deployment follows verified public assets |
+| Website | `/download.html` reads verified release metadata | Preparation page and empty feed live; downloads unavailable |
 | Linux installation | Cargo from the exact release tag, with `--locked` | Must be tested outside the checkout |
 | Changelog | Curated [CHANGELOG.md](CHANGELOG.md) | Started; first release notes still need curation |
 | Updates | Sparkle checks at launch and through the menu, with user-confirmed installation | Native integration implemented; two-version signed validation pending |
