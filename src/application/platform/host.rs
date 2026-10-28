@@ -410,7 +410,7 @@ impl Workspace {
             preview_invert: std::env::var("RUNEBENDER_PREVIEW_INVERT").as_deref() == Ok("1"),
             proof_view: matches!(
                 std::env::var("RUNEBENDER_PROOF_VIEW").as_deref(),
-                Ok("1" | "toggle" | "before")
+                Ok("1" | "toggle" | "before" | "waterfall" | "text")
             ),
             review: crate::application::editor::tools::review::ReviewState::default(),
             search_mode: 0,

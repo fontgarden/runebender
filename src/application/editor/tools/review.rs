@@ -21,6 +21,10 @@ pub(crate) enum ReviewMode {
     Compare,
     /// Show either version in the same drawing field.
     Toggle,
+    /// Read the same sample at descending sizes.
+    Waterfall,
+    /// Read selectable, wrapped text.
+    Text,
 }
 
 /// The geometry and spacing of one frozen or live review drawing.
@@ -41,6 +45,7 @@ struct ReviewIdentity {
 struct ReviewBaseline {
     identity: ReviewIdentity,
     drawing: ReviewDrawing,
+    font: super::review_reading::CompileJob,
 }
 
 /// View preferences and one bounded, in-memory Before snapshot.
@@ -49,8 +54,8 @@ pub(crate) struct ReviewState {
     pub(crate) mode: ReviewMode,
     /// Proof-only appearance; the surrounding editor retains its selected theme.
     pub(crate) dark: bool,
+    pub(crate) reading: super::review_reading::ReadingState,
     pub(crate) show_before: bool,
-    pub(crate) chooser_open: bool,
     baseline: Option<ReviewBaseline>,
 }
 
@@ -92,13 +97,38 @@ impl Workspace {
         Some(ReviewBaseline {
             identity: self.review_identity()?,
             drawing: self.review_working_drawing(),
+            font: super::review_reading::CompileJob::new(
+                runebender::font::compiler::proof::capture(&self.font.project),
+            ),
         })
+    }
+
+    pub(crate) fn review_before_font(&self) -> Option<&super::review_reading::CompileJob> {
+        self.review
+            .baseline
+            .as_ref()
+            .filter(|before| before.identity.document == self.document_id)
+            .map(|before| &before.font)
+    }
+
+    pub(crate) fn review_compile_pending(&self) -> bool {
+        self.proof_view
+            && (self.review_before_font().is_some_and(|font| font.pending())
+                || self.review.reading.pending())
     }
 
     /// Open review with an initial Before, or return to editing without losing that snapshot.
     pub(crate) fn toggle_proof_view(&mut self) {
         self.proof_view = !self.proof_view;
-        if self.proof_view && self.review.baseline.is_none() {
+        self.refresh_review_references();
+        if self.proof_view
+            && self
+                .review
+                .baseline
+                .as_ref()
+                .map(|baseline| &baseline.identity)
+                != self.review_identity().as_ref()
+        {
             self.review.baseline = self.capture_review_before();
         }
     }
@@ -111,14 +141,12 @@ impl Workspace {
         };
         self.review.baseline = Some(baseline);
         self.review.show_before = false;
-        self.review.chooser_open = false;
         self.ai.preview_task = None;
         self.note = format!("Before pinned for {}", self.session.glyph_name);
     }
 
     /// Choose a proposal by identity, or return to the pinned Before and Working comparison.
     pub(crate) fn select_review_proposal(&mut self, task: Option<String>) {
-        self.review.chooser_open = false;
         if let Some(task) = &task
             && !self.ai.proposals.iter().any(|proposal| {
                 proposal.task == *task && proposal.glyphs.contains(&self.session.glyph_name)
@@ -129,6 +157,25 @@ impl Workspace {
         }
         self.ai.preview_task = task;
         self.review.show_before = false;
+    }
+
+    /// Choose the presentation without changing the revision being inspected.
+    pub(crate) fn select_review_mode(&mut self, mode: ReviewMode) {
+        self.review.mode = mode;
+    }
+
+    /// Flip the visible revision in place, keeping Before frozen and the controls stationary.
+    pub(crate) fn toggle_review_revision(&mut self) {
+        if self.review.mode == ReviewMode::Toggle && self.review_comparison().before.is_some() {
+            self.review.show_before = !self.review.show_before;
+        }
+    }
+
+    /// Select a revision directly without a menu or a layout change.
+    pub(crate) fn show_review_revision(&mut self, before: bool) {
+        if self.review.mode == ReviewMode::Toggle {
+            self.review.show_before = before && self.review_comparison().before.is_some();
+        }
     }
 
     /// Describe the selected review without changing the font or replacing its pinned baseline.
@@ -191,7 +238,8 @@ impl Workspace {
         {
             result.before = Some(baseline.drawing.clone());
         } else {
-            result.message = Some("Set Before to start comparing this glyph's edits".into());
+            result.message =
+                Some("Return to editing and reopen Proof to capture Before for this glyph".into());
         }
         result
     }
@@ -256,6 +304,33 @@ mod tests {
             app.review_comparison().before.unwrap().advance,
             original + 80.0
         );
+    }
+
+    #[test]
+    fn reopening_review_on_another_glyph_starts_a_new_comparison() {
+        let mut app = workspace();
+        app.toggle_proof_view();
+        app.toggle_proof_view();
+        app.open_glyph(app.font.index_of("B").unwrap());
+        let before = app.session.advance();
+        app.toggle_proof_view();
+        Arc::make_mut(&mut app.session).set_advance(before + 40.0);
+        app.toggle_review_revision();
+        app.show_review_revision(true);
+        assert_eq!(app.review.mode, ReviewMode::Compare);
+        assert!(!app.review.show_before);
+        app.select_review_mode(ReviewMode::Toggle);
+        app.toggle_review_revision();
+        assert!(app.review.show_before);
+        assert_eq!(app.review_comparison().before.unwrap().advance, before);
+        app.select_review_mode(ReviewMode::Toggle);
+        assert!(
+            app.review.show_before,
+            "mode selection does not flip revisions"
+        );
+        app.toggle_review_revision();
+        assert!(!app.review.show_before);
+        assert_eq!(app.review_comparison().working.advance, before + 40.0);
     }
 
     #[test]

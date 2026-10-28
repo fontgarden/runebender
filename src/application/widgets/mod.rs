@@ -36,3 +36,5 @@ pub(crate) mod swatch_strip;
 
 pub(crate) mod quiet_split;
 mod quiet_split_widget;
+
+pub(crate) mod proof_text;

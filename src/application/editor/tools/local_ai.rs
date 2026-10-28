@@ -529,6 +529,27 @@ impl Workspace {
             })
     }
 
+    /// Capture the exact selected proposal for an immutable native reading specimen.
+    pub(crate) fn review_proposal_input(
+        &self,
+        task: &str,
+    ) -> Result<runebender::font::compiler::proof::CompileProofInput, String> {
+        let input = runebender::font::compiler::proof::capture(&self.font.project)?;
+        let source = self
+            .font
+            .project
+            .source_id(self.font.active())
+            .ok_or("missing source")?;
+        if let Some(pending) = self.ai.pending.get(&(source, task.to_owned())) {
+            if pending.document_id != self.document_id || pending.source != source {
+                return Err("Proposal belongs to another document or source".into());
+            }
+            input.with_staged_edit(&self.font.project, pending.candidate.transaction())
+        } else {
+            input.with_proposal_glyph(&self.font.project, source, task, &self.session.glyph_name)
+        }
+    }
+
     /// The advance from the same session candidate or persistent proposal as its outline.
     pub(crate) fn model_proposal_advance(&self, task: &str, glyph: &str) -> Option<f64> {
         let source = self.font.project.source_id(self.font.active())?;

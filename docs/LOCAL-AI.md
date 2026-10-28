@@ -87,24 +87,46 @@ Editor footer, the fourth button.
 Sources: `src/application/view/canvas/proof.rs`, `src/application/editor/tools/review.rs`, and `src/application/design/recipes/proof.rs`.
 
 - Replaces the canvas with a native review page for the open glyph; the same footer button returns to editing.
-- The outlined Dark toggle switches the proof page between light and dark without changing the surrounding editor theme.
+- The outlined Dark toggle changes the entire center proof area above the editor footer, including its heading, controls, fields, and unused space.
+  It derives the softer paper and ink from the active theme and keeps the shared button geometry and interaction styling.
   Mode, revision, and action buttons use the same outlined controls as other editor sections.
-- Compare shows the two drawings side by side; Toggle switches between them using the revision controls.
+- Compare shows the two drawings side by side with captions and no revision-switching controls.
+  In Toggle mode, Before and Working select the visible revision, and the separate Toggle action on the right switches between them in place.
+  The selected Before or Working button shows what is visible; only the mode tabs change modes.
   Both drawings contribute to the shared fit, including overhangs and sidebearings, so switching revisions keeps their scale and baseline fixed.
 - Opening review pins the first Before drawing in memory.
-  Before survives returning to the canvas and editing Working; Set Before deliberately replaces it with the current drawing.
+  Before survives returning to the canvas and editing Working; toggling revisions never replaces it.
+  If you switch glyphs, return to editing and reopen Proof to capture a Before for that glyph.
   A baseline belongs to its document, source, and glyph, and is not saved to the font or restored after quitting.
-- The Comparison chooser selects Before / Working or an explicit waiting proposal for this glyph.
+- When proposals are available, Comparison source lists Before / Working and the waiting proposals as persistent choices.
+  Choosing a source leaves the revision buttons available for repeated switching.
   It also follows a proposal explicitly selected for comparison in Local AI, rather than automatically choosing the newest task.
 - Apply glyph changes only the displayed glyph and retains the pre-apply drawing as Before.
   Atomic multi-glyph model candidates must be reviewed and applied together in Local AI.
   Discard proposal names its batch size when it contains more than one glyph.
-- This first review checkpoint supports the active editable master.
+- Compare and Toggle support the active editable master.
   Other axis locations show an explanation instead of comparing a master drawing with an interpolated instance.
-- Waterfall, running-text proofs, reference fonts, specimen text copying, and shared chat image artifacts are later checkpoints.
-  The old fixed 96/48/24 text strips have been removed from this pane.
+- Waterfall and Text show compiled font specimens with native shaping, wrapping, selection, and Cmd+C (Ctrl+C on Linux).
+  Waterfall uses 72/48/36/24/18/12 px rows; Text has a size field and slider.
+  Choose Glyph, Spacing, Alphabet, or Custom in Sample; Custom accepts multiline Unicode text.
+  The spacing preset is a Latin context starter; use Custom for script-specific review strings.
+- Capturing Before also keeps an immutable full-font snapshot for reading proofs.
+  That full-font snapshot remains available across glyph selections in the same document; the outline comparison still requires a matching glyph and source.
+  Working recompiles as the document changes; selecting a proposal compares Working with a private compiled replacement, without applying it.
+  Compilation failures and missing character coverage are reported beside the affected specimen.
+  A specimen with missing character coverage is withheld rather than displaying system-font substitutes.
+- Variable fonts expose proof-only axis controls in Waterfall and Text; these do not move the editor's location or edit the font.
+  References come from the project's `reference-fonts/` directory and appear in all four modes; References hides or shows them.
+  The folder is at the nearest Git root, or next to the opened font outside Git.
+  Files are grouped by family, width and slope, with real weight selection and no synthetic bold.
+  Samples and proof settings are session-only; reference choices persist as the files in that folder.
+  See [Proof reference fonts](PROOF-REFERENCES.md) for the shared native/live-web convention.
+- Shared chat/Graph proof images remain a later checkpoint.
   The separate Text tool and editor preview strip remain available.
 - `RUNEBENDER_PROOF_VIEW=1` opens Compare; `toggle` opens Toggle on the right-hand revision, and `before` opens Toggle on the left-hand revision.
+  `waterfall` and `text` open the reading modes.
+  `RUNEBENDER_PROOF_TEXT` sets a custom screenshot sample (up to 4096 characters).
+  Headless screenshots use the same project reference directory as the interactive editor.
   `RUNEBENDER_PROOF_DARK=1` opens the proof page in dark mode.
   With `RUNEBENDER_GLYPH=<name>`, `RUNEBENDER_PROOF_SAMPLE=1` creates and selects an in-memory sample proposal for headless screenshots.
 

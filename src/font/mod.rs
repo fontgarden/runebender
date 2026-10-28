@@ -37,6 +37,7 @@ pub mod new_font;
 pub mod persistence;
 pub mod project;
 pub mod proposal;
+pub mod reference;
 pub mod source;
 pub mod var_model;
 pub mod variable;

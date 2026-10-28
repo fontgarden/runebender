@@ -89,6 +89,17 @@ Until then: `panel_group` owns an 8-pixel inset and the full-width divider; `sec
 Read colors from `design::theme::Palette` and measurements from `design` instead of assigning local colors, radii, or pixel values.
 Let the dock own its width; section contents fit the available width.
 
+## Center proof page
+
+The proof page uses the shared spacing scale through `design::areas::proof`.
+One unit is 8 pixels: compact button and label gaps are half a unit, content bands have one unit above and below, and section and specimen-column gaps are two units.
+The outer page inset uses the existing three-unit `Space::Xxl` token.
+`recipes::proof::band` owns vertical padding; the containing stack has no additional gap.
+Rules sit between bands, so a control row has equal clearance above and below.
+Optional sections return no widget when absent, instead of leaving empty wrappers that add phantom gaps.
+Mode and revision buttons share the same standard control height and compact gap.
+The separate Toggle action changes only the visible revision, keeping its controls, specimen scale, and baseline stationary.
+
 ## Built-in theme baseline
 
 Theme files begin with `formatVersion`, `id`, and `name`, followed by the Base UI and Rainbow palette definitions.

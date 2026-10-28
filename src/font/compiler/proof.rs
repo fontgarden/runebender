@@ -206,6 +206,57 @@ impl CompileProofInput {
         &self.canonical_input_sha256
     }
 
+    /// Derive a full-font specimen with only the reviewed persisted proposal glyph replaced.
+    /// Foreground revision guards are identical to Apply; the canonical project is unchanged.
+    pub fn with_proposal_glyph(
+        &self,
+        project: &Project,
+        source: crate::font::variable::SourceId,
+        task: &str,
+        glyph: &str,
+    ) -> Result<Self, String> {
+        use crate::font::variable::GlyphLayerAddress;
+        if project.document_revision() != self.document_revision {
+            return Err("document changed after proof capture".into());
+        }
+        if capture(project)?.canonical_input_sha256 != self.canonical_input_sha256 {
+            return Err("compiler inputs changed after proof capture".into());
+        }
+        crate::font::proposal::validate_project_glyph_install(project, source, task, glyph, true)
+            .map_err(|error| error.to_string())?;
+        let address = GlyphLayerAddress {
+            glyph: glyph.into(),
+            layer: project
+                .document_source(source)
+                .ok_or("unknown source")?
+                .default_layer(),
+        };
+        let before = project
+            .capture_document_layer(&address)
+            .ok_or("missing foreground")?;
+        let proposed = project
+            .document_layer(glyph, &crate::font::proposal::proposal_layer(source, task))
+            .ok_or("missing proposal")?;
+        let replacement = crate::font::proposal::install_replacement(&address, proposed, &before);
+        let mut derived = self.clone();
+        let key = crate::font::babelfont::layer_key(&address.layer);
+        let target = derived
+            .font
+            .glyphs
+            .0
+            .iter_mut()
+            .find(|item| item.name.as_str() == glyph)
+            .and_then(|item| item.get_layer_mut(&key))
+            .ok_or("missing compiler layer")?;
+        let (layer, _) = replacement.into_parts();
+        target.width = layer.width;
+        target.shapes = layer.shapes;
+        target.anchors = layer.anchors;
+        derived.canonical_input_sha256 =
+            sha256(&serde_json::to_vec(&derived.font).map_err(|error| error.to_string())?);
+        Ok(derived)
+    }
+
     /// Derive a complete family proof input from one guarded, unpublished edit transaction.
     ///
     /// The original input remains the baseline for both branches.
@@ -300,6 +351,11 @@ impl CompiledProofSnapshot {
     /// SHA-256 of the exact OpenType bytes shaped and rendered by this snapshot.
     pub fn font_sha256(&self) -> &str {
         &self.font_sha256
+    }
+
+    /// The exact compiled font for native selectable specimens and shaping.
+    pub fn compiled_font(&self) -> Arc<CompiledFont> {
+        self.font.clone()
     }
 
     /// Final compiler glyph order, indexed by OpenType glyph ID.

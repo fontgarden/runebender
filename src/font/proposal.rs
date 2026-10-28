@@ -196,7 +196,7 @@ fn validate_task(task: &str) -> Result<(), ProposalError> {
     Ok(())
 }
 
-fn proposal_layer(source: SourceId, task: &str) -> LayerId {
+pub(super) fn proposal_layer(source: SourceId, task: &str) -> LayerId {
     LayerId {
         source,
         name: layer_name(task),

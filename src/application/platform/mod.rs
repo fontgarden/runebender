@@ -11,6 +11,7 @@ pub(crate) mod dialogs;
 pub(crate) mod dialogs;
 pub(crate) mod export;
 pub(crate) mod model;
+pub(crate) mod reference_fonts;
 pub(crate) mod train;
 
 pub(crate) mod host;

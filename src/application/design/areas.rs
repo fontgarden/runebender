@@ -116,10 +116,20 @@ pub(crate) mod model_strip {
 pub(crate) mod proof {
     use crate::application::design::Space;
 
-    /// A proof needs breathing room around the ink, like the Virtua review page.
-    pub(crate) const PAGE_INSET: Space = Space::Xxl;
+    /// All proof spacing derives from the editor's standard eight-pixel unit.
+    pub(crate) const UNIT: f64 = Space::Md.px();
+    /// Half a unit separates adjacent buttons and closely related labels.
+    pub(crate) const COMPACT_GAP: f64 = UNIT / 2.0;
+    /// Two units separate groups of related content.
+    pub(crate) const SECTION_GAP: f64 = UNIT * 2.0;
+    /// Three units keep headings, rules, and specimens on one page margin.
+    pub(crate) const PAGE_INSET: f64 = Space::Xxl.px();
+    /// Space for a multiline custom reading sample.
+    pub(crate) const SAMPLE_HEIGHT: f64 = 80.0;
+    /// Equal-height glyph fields when references add scrollable comparison rows.
+    pub(crate) const REFERENCE_HEIGHT: f64 = UNIT * 30.0;
     /// Separation between equal-width comparison columns.
-    pub(crate) const COLUMN_GAP: f64 = Space::Xxl.px();
+    pub(crate) const COLUMN_GAP: f64 = SECTION_GAP;
     /// Keep ink clear of the field edges, including overhanging accents.
-    pub(crate) const INK_INSET: f64 = Space::Xl.px();
+    pub(crate) const INK_INSET: f64 = SECTION_GAP;
 }

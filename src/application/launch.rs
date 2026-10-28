@@ -84,6 +84,24 @@ pub(crate) fn run(
     if let Some(workspace) = app.workspace.as_mut() {
         workspace.review.dark = std::env::var("RUNEBENDER_PROOF_DARK").as_deref() == Ok("1");
     }
+    if let Some(workspace) = app.workspace.as_mut() {
+        match std::env::var("RUNEBENDER_PROOF_VIEW").as_deref() {
+            Ok("waterfall") => {
+                workspace.review.mode =
+                    crate::application::editor::tools::review::ReviewMode::Waterfall;
+            }
+            Ok("text") => {
+                workspace.review.mode = crate::application::editor::tools::review::ReviewMode::Text;
+            }
+            _ => {}
+        }
+        if let Ok(text) = std::env::var("RUNEBENDER_PROOF_TEXT") {
+            workspace.review.reading.custom = text.chars().take(4096).collect();
+            workspace.review.reading.sample =
+                crate::application::editor::tools::review_reading::Sample::Custom;
+        }
+        workspace.refresh_review_references();
+    }
     // Headless: render one frame and exit. No window, no event loop.
     if let Ok(path) = std::env::var("RUNEBENDER_SCREENSHOT") {
         if let Ok(name) = std::env::var("RUNEBENDER_SELECTED")

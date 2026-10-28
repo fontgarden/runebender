@@ -16,6 +16,7 @@ pub(crate) mod local_ai;
 pub(crate) mod metaballs;
 pub(crate) mod proof_image;
 pub(crate) mod review;
+pub(crate) mod review_reading;
 pub(crate) mod scripts;
 pub(crate) mod sketch;
 pub(crate) mod text;

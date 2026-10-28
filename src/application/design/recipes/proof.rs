@@ -2,33 +2,22 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Review-page controls using the editor's outlined buttons on a continuous paper surface.
-//! The page uses the panel's paired paper/ink, so headings and controls never
-//! inherit the dark window ground behind the editor canvas.
+//! The whole page uses a local appearance derived from the active editor palette.
+//! Controls keep the shared geometry and interaction states in either appearance.
 
 use super::{Marker, button, marker};
+use crate::application::design::areas::proof as design;
 use crate::application::design::theme::Palette;
 use crate::application::design::{
-    ControlKind, ControlSize, ControlStyle, Region, Space, TextSize, row,
+    ControlKind, ControlSize, ControlStyle, Region, Space, TextSize, column, row,
 };
 use crate::application::view::label;
 use crate::application::workspace::Workspace;
 use masonry::layout::{Dim, Length};
-use masonry::properties::{Dimensions, LineBreaking};
-use std::sync::OnceLock;
+use masonry::properties::{Dimensions, LineBreaking, Padding};
 use xilem::WidgetView;
 use xilem::style::Style;
 use xilem::view::{FlexExt as _, sized_box};
-
-/// Proof appearance is independent of the editor theme and shared across review modes.
-pub(crate) fn palette(dark: bool) -> &'static Palette {
-    static LIGHT: OnceLock<Palette> = OnceLock::new();
-    static DARK: OnceLock<Palette> = OnceLock::new();
-    if dark {
-        DARK.get_or_init(|| Palette::load("dark"))
-    } else {
-        LIGHT.get_or_init(|| Palette::load("light"))
-    }
-}
 
 /// One continuous, opaque review page, including the unused space below its contents.
 pub(crate) fn surface<V: WidgetView<Workspace>>(
@@ -38,6 +27,18 @@ pub(crate) fn surface<V: WidgetView<Workspace>>(
     sized_box(child)
         .dims(Dimensions::new(Dim::Stretch, Dim::Stretch))
         .background_color(pal.panel)
+}
+
+/// A content band owns its vertical spacing; adjacent bands never add hidden stack gaps.
+pub(crate) fn band<V: WidgetView<Workspace>>(child: V) -> impl WidgetView<Workspace> + use<V> {
+    sized_box(child)
+        .dims(Dimensions::new(Dim::Stretch, Dim::Auto))
+        .padding(Padding::vertical(Length::px(design::UNIT)))
+}
+
+/// A specimen heading with the same rule-to-content distance as the controls above it.
+pub(crate) fn caption(pal: &Palette, text: String) -> impl WidgetView<Workspace> + use<> {
+    column(Region::List, (rule(pal), band(super::prose(pal, text)))).gap(Space::None)
 }
 
 /// A rule aligned with the page's common content margins.
@@ -116,4 +117,54 @@ pub(crate) fn selector<F: Fn(&mut Workspace) + Send + Sync + 'static>(
         on_click,
     )
     .padding(Space::Md)
+}
+
+/// Native, selectable lettering from the exact compiled specimen font.
+pub(crate) fn text(
+    pal: &Palette,
+    bytes: std::sync::Arc<Vec<u8>>,
+    text: String,
+    size: f32,
+    variations: String,
+) -> impl WidgetView<Workspace> + use<> {
+    crate::application::widgets::proof_text::ProofText {
+        bytes,
+        text,
+        size,
+        variations,
+        color: pal.proof_ink(),
+    }
+}
+
+/// A proof-local field: stock control geometry with the page's own paper, ink and caret.
+pub(crate) fn field_enter<F, G>(
+    pal: &Palette,
+    name: &'static str,
+    value: String,
+    on_change: F,
+    on_enter: G,
+) -> impl WidgetView<Workspace> + use<F, G>
+where
+    F: Fn(&mut Workspace, String) + Send + Sync + 'static,
+    G: Fn(&mut Workspace, String) + Send + Sync + 'static,
+{
+    use crate::application::view::text_input;
+    use crate::application::widgets::input_typography::input_typography;
+    super::labeled_control(
+        pal,
+        name,
+        sized_box(input_typography(
+            text_input(value, on_change)
+                .on_enter(on_enter)
+                .text_color(pal.text)
+                .caret_color(pal.text)
+                .background_color(pal.field())
+                .border_color(pal.field_outline),
+            pal.text,
+        ))
+        .dims(Dimensions::new(
+            Dim::Stretch,
+            Dim::from(ControlSize::Control),
+        )),
+    )
 }

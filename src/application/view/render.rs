@@ -462,7 +462,9 @@ pub(crate) fn app_logic(app: &mut Workspace) -> impl WidgetView<Workspace> + use
                                             preview_pump(
                                                 shapes_pump(content, app.shapes.pump.clone())
                                                     .boxed(),
-                                                app.font.project.preview_pending(),
+                                                app.font.project.preview_pending()
+                                                    || app.review_compile_pending(),
+                                                app.proof_view,
                                             )
                                             .boxed(),
                                             app.graph.job.clone(),
@@ -844,10 +846,11 @@ fn graph_pump<V: WidgetView<Workspace>>(
 fn preview_pump<V: WidgetView<Workspace>>(
     view: V,
     pending: bool,
+    references: bool,
 ) -> impl WidgetView<Workspace> + use<V> {
     use xilem::core::{MessageProxy, fork};
     use xilem::view::task;
-    fork(
+    let view = fork(
         view,
         pending.then(|| {
             task(
@@ -862,6 +865,22 @@ fn preview_pump<V: WidgetView<Workspace>>(
                 |app: &mut Workspace, ()| {
                     let _ = app.font.project.request_preview();
                 },
+            )
+        }),
+    );
+    fork(
+        view,
+        references.then(|| {
+            task(
+                |proxy: MessageProxy<()>, _: &mut Workspace| async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        if proxy.message(()).is_err() {
+                            return;
+                        }
+                    }
+                },
+                |app: &mut Workspace, ()| app.refresh_review_references(),
             )
         }),
     )

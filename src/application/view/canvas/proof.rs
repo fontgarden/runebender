@@ -13,7 +13,6 @@ use crate::application::design::theme::Palette;
 use crate::application::design::{Region, Space, TextSize, column, row};
 use crate::application::editor::tools::review::{ReviewComparison, ReviewDrawing, ReviewMode};
 use crate::application::view::label;
-use crate::application::widgets::scroll_viewport::portal;
 use crate::application::workspace::Workspace;
 use masonry::imaging::Painter;
 use masonry::kurbo::{Affine, Rect, Shape, Size};
@@ -24,8 +23,13 @@ use xilem::style::Style;
 use xilem::view::{FlexExt as _, FlexSpacer, canvas, sized_box};
 
 pub(crate) fn proof_view(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
-    let pal = page::palette(app.review.dark);
+    if matches!(app.review.mode, ReviewMode::Waterfall | ReviewMode::Text) {
+        return reading::reading_view(app).boxed();
+    }
+    let appearance = app.palette.proof_page(app.review.dark);
+    let pal = appearance.as_ref();
     let comparison = app.review_comparison();
+    let glyph_name = comparison.glyph.clone();
     let family = app
         .font
         .font_info()
@@ -47,26 +51,7 @@ pub(crate) fn proof_view(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
     let has_pair = comparison.before.is_some();
     let toggle = app.review.mode == ReviewMode::Toggle;
     let show_before = app.review.show_before && has_pair;
-    let mode_bar = column(
-        Region::List,
-        (
-            row(
-                Region::Inline,
-                (
-                    page::tab(pal, "Compare", !toggle, false, |app| {
-                        app.review.mode = ReviewMode::Compare;
-                    }),
-                    page::tab(pal, "Toggle", toggle, false, |app| {
-                        app.review.mode = ReviewMode::Toggle;
-                    }),
-                    FlexSpacer::Flex(1.0),
-                ),
-            )
-            .gap(Space::Xxl),
-            page::rule(pal),
-        ),
-    )
-    .gap(Space::None);
+    let mode_bar = mode_bar(app, pal);
     let revision_controls = toggle.then(|| {
         row(
             Region::Inline,
@@ -76,15 +61,22 @@ pub(crate) fn proof_view(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
                     comparison.left_caption,
                     show_before,
                     !has_pair,
-                    |app| app.review.show_before = true,
+                    |app| app.show_review_revision(true),
                 ),
                 page::tab(pal, comparison.right_caption, !show_before, false, |app| {
-                    app.review.show_before = false;
+                    app.show_review_revision(false);
                 }),
                 FlexSpacer::Flex(1.0),
+                page::tab(
+                    pal,
+                    "Toggle",
+                    false,
+                    !has_pair,
+                    Workspace::toggle_review_revision,
+                ),
             ),
         )
-        .gap(Space::Xxl)
+        .gap(Length::px(design::COMPACT_GAP))
     });
     let actions = comparison.proposal_task.as_ref().map(|task| {
         let task = task.clone();
@@ -115,7 +107,7 @@ pub(crate) fn proof_view(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
                 .flex(1.0),
             ),
         )
-        .gap(Space::Xl)
+        .gap(Length::px(design::COMPACT_GAP))
     });
     let hint = comparison.message.clone().or_else(|| {
         comparison.proposal_task.as_ref().map(|_| {
@@ -137,91 +129,123 @@ pub(crate) fn proof_view(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
     let captions: Vec<_> = captions
         .into_iter()
         .map(|caption| {
-            sized_box(
-                column(
-                    Region::List,
-                    (
-                        page::rule(pal),
-                        label(caption)
-                            .color(pal.text)
-                            .line_break_mode(LineBreaking::WordWrap),
-                    ),
-                )
-                .gap(Space::Lg),
-            )
-            .dims(Dimensions::new(Dim::Fixed(Length::ZERO), Dim::Auto))
-            .flex(1.0)
+            sized_box(page::caption(pal, caption.into()))
+                .dims(Dimensions::new(Dim::Fixed(Length::ZERO), Dim::Auto))
+                .flex(1.0)
         })
         .collect();
+    let show_references =
+        app.review.reading.show_references && !app.review.reading.references.faces.is_empty();
+    let specimens = if show_references {
+        references::specimens(app, pal, comparison, codepoint).boxed()
+    } else {
+        column(
+            Region::List,
+            (
+                row(Region::Inline, captions).gap(Length::px(design::COLUMN_GAP)),
+                specimen(pal, comparison, app.review.mode, show_before).flex(1.0),
+            ),
+        )
+        .gap(Space::None)
+        .boxed()
+    };
     page::surface(
         pal,
         column(
             Region::List,
             (
-                row(
-                    Region::Inline,
-                    (
-                        sized_box(
-                            label(family)
+                page::band(
+                    row(
+                        Region::Inline,
+                        (
+                            sized_box(
+                                label(family)
+                                    .text_size(TextSize::Display.px())
+                                    .color(pal.text)
+                                    .line_break_mode(LineBreaking::WordWrap),
+                            )
+                            .dims(Dimensions::new(Dim::Fixed(Length::ZERO), Dim::Auto))
+                            .flex(1.0),
+                            reading::reference_button(app, pal),
+                            page::tab(pal, "Dark", app.review.dark, false, |app| {
+                                app.review.dark = !app.review.dark;
+                            }),
+                        ),
+                    )
+                    .gap(Length::px(design::COMPACT_GAP)),
+                ),
+                page::rule(pal),
+                page::band(
+                    column(
+                        Region::List,
+                        (
+                            label(glyph_name)
                                 .text_size(TextSize::Display.px())
                                 .color(pal.text)
                                 .line_break_mode(LineBreaking::WordWrap),
-                        )
-                        .dims(Dimensions::new(Dim::Fixed(Length::ZERO), Dim::Auto))
-                        .flex(1.0),
-                        page::tab(pal, "Dark", app.review.dark, false, |app| {
-                            app.review.dark = !app.review.dark;
-                        }),
-                    ),
+                            label(identity).color(pal.text),
+                        ),
+                    )
+                    .gap(Length::px(design::COMPACT_GAP)),
                 ),
-                page::rule(pal),
-                column(
-                    Region::List,
-                    (
-                        label(comparison.glyph.clone())
-                            .text_size(TextSize::Display.px())
-                            .color(pal.text)
-                            .line_break_mode(LineBreaking::WordWrap),
-                        label(identity).color(pal.text),
-                    ),
-                )
-                .gap(Space::Sm),
                 mode_bar,
-                comparison_picker(app),
-                revision_controls,
-                actions,
-                hint.map(|text| recipes::prose(pal, text)),
-                row(Region::Inline, captions).gap(Length::px(design::COLUMN_GAP)),
-                specimen(pal, comparison, app.review.mode, show_before).flex(1.0),
+                comparison_picker(app, pal),
+                revision_controls.map(page::band),
+                actions.map(page::band),
+                hint.map(|text| page::band(recipes::prose(pal, text))),
+                reading::reference_errors(app, pal).map(page::band),
+                specimens.flex(1.0),
             ),
         )
-        .gap(Space::Xl)
-        .padding(design::PAGE_INSET),
+        .gap(Space::None)
+        .padding(Length::px(design::PAGE_INSET)),
     )
+    .boxed()
 }
 
-fn comparison_picker(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
-    let pal = page::palette(app.review.dark);
+fn mode_bar(app: &Workspace, pal: &Palette) -> impl WidgetView<Workspace> + use<> {
+    let modes = [
+        ("Compare", ReviewMode::Compare),
+        ("Toggle", ReviewMode::Toggle),
+        ("Waterfall", ReviewMode::Waterfall),
+        ("Text", ReviewMode::Text),
+    ];
+    let tabs: Vec<_> = modes
+        .into_iter()
+        .map(|(name, mode)| {
+            page::tab(pal, name, app.review.mode == mode, false, move |app| {
+                app.select_review_mode(mode);
+            })
+        })
+        .collect();
+    column(
+        Region::List,
+        (
+            page::band(row(Region::Inline, tabs).gap(Length::px(design::COMPACT_GAP))),
+            // Compare's specimen captions supply the next rule without a revision toolbar.
+            (app.review.mode != ReviewMode::Compare).then(|| page::rule(pal)),
+        ),
+    )
+    .gap(Space::None)
+}
+
+mod reading;
+mod references;
+
+fn comparison_picker(app: &Workspace, pal: &Palette) -> Option<impl WidgetView<Workspace> + use<>> {
     let selected = app.ai.preview_task.clone();
-    let caption = selected.as_ref().map_or_else(
-        || "Before / Working".into(),
-        |task| format!("Working / {task}"),
-    );
-    let choices = app.review.chooser_open.then(|| {
-        let tasks: Vec<Option<String>> = std::iter::once(None)
-            .chain(
-                app.ai
-                    .proposals
-                    .iter()
-                    .filter(|proposal| proposal.glyphs.contains(&app.session.glyph_name))
-                    .map(|proposal| Some(proposal.task.clone())),
-            )
-            .collect();
-        let height = (f64::from(u32::try_from(tasks.len()).unwrap_or(u32::MAX))
-            * crate::application::design::ControlSize::Large.px())
-        .min(crate::application::design::ControlSize::Large.px() * 4.0);
-        let choices: Vec<_> = tasks
-            .into_iter()
+    let tasks: Vec<_> = app
+        .ai
+        .proposals
+        .iter()
+        .filter(|proposal| proposal.glyphs.contains(&app.session.glyph_name))
+        .map(|proposal| proposal.task.clone())
+        .collect();
+    // A comparison source is not a revision switch. Keep sources visible and omit
+    // the redundant chooser entirely when only Before / Working is available.
+    (!tasks.is_empty()).then(|| {
+        let choices: Vec<_> = std::iter::once(None)
+            .chain(tasks.into_iter().map(Some))
             .map(|task| {
                 let active = task == selected;
                 let title = task.as_ref().map_or_else(
@@ -233,41 +257,17 @@ fn comparison_picker(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
                 })
             })
             .collect();
-        sized_box(portal(column(Region::List, choices).gap(Space::None)).constrain_horizontal(true))
-            .dims(Dimensions::new(
-                Dim::Stretch,
-                Dim::Fixed(Length::px(height)),
-            ))
-    });
-    column(
-        Region::List,
-        (
-            label("Comparison").color(pal.text),
-            row(
-                Region::Inline,
+        page::band(
+            column(
+                Region::List,
                 (
-                    sized_box(page::selector(
-                        pal,
-                        caption,
-                        app.review.chooser_open,
-                        |app| app.review.chooser_open = !app.review.chooser_open,
-                    ))
-                    .dims(Dimensions::new(Dim::Fixed(Length::ZERO), Dim::Auto))
-                    .flex(1.0),
-                    page::action(
-                        pal,
-                        "Set Before".into(),
-                        false,
-                        !app.on_active_master(),
-                        Workspace::pin_review_before,
-                    ),
+                    label("Comparison source").color(pal.text),
+                    column(Region::List, choices).gap(Length::px(design::COMPACT_GAP)),
                 ),
             )
-            .gap(Space::Lg),
-            choices,
-        ),
-    )
-    .gap(Space::Sm)
+            .gap(Length::px(design::COMPACT_GAP)),
+        )
+    })
 }
 
 /// Draw both sides in one field, so layout cannot give them different fit constraints.
@@ -277,7 +277,7 @@ fn specimen(
     mode: ReviewMode,
     show_before: bool,
 ) -> impl WidgetView<Workspace> + use<> {
-    let ink = pal.text;
+    let ink = pal.proof_ink();
     let bounds = comparison_bounds(&comparison.working, comparison.before.as_ref());
     let paired = comparison.before.is_some() && mode == ReviewMode::Compare;
     sized_box(canvas(move |_: &mut Workspace, _, scene, size: Size| {

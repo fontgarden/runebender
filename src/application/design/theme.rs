@@ -67,6 +67,7 @@ pub(crate) fn set_translucency_override(translucent: Option<bool>) {
 }
 
 /// A resolved palette: named surfaces, text, roles, and mark colors.
+#[derive(Clone)]
 pub(crate) struct Palette {
     pub app: Color,
     /// Independent gray overlay for the translucent macOS window ground.
@@ -521,6 +522,45 @@ impl Palette {
     /// quieter than Gray's shared dark ink for keylines and controls.
     pub(crate) fn editor_ink(&self) -> Color {
         self.role("previewFill")
+    }
+
+    /// A proof-local appearance derived from the current theme, never another installed theme.
+    /// The reversed page keeps normal control geometry and states with a softer paper/ink pair.
+    pub(crate) fn proof_page(&self, dark: bool) -> std::borrow::Cow<'_, Self> {
+        if !dark {
+            return std::borrow::Cow::Borrowed(self);
+        }
+        let mut page = self.clone();
+        let paper = self.proof_ink();
+        let ink = self.canvas;
+        page.panel = paper;
+        page.canvas = paper;
+        page.control = paper;
+        page.question = paper;
+        page.field = paper;
+        page.button = paper;
+        page.button_hover = self.selected_bg();
+        page.button_pressed = self.text_muted;
+        page.text = ink;
+        page.text_muted = ink;
+        page.text_subdued = ink;
+        page.control_ink = ink;
+        page.outline = ink;
+        page.field_outline = ink;
+        page.focus_ring = ink;
+        page.slider_track_color = ink;
+        page.slider_thumb = paper;
+        page.slider_thumb_active = ink;
+        for (name, color) in [
+            ("proofInk", ink),
+            ("controlSelected", ink),
+            ("controlSelectedInk", paper),
+            ("controlSelectedOutline", ink),
+        ] {
+            page.roles.insert(name.into(), color);
+        }
+        page.widget_properties = std::sync::OnceLock::new();
+        std::borrow::Cow::Owned(page)
     }
 
     /// Proof type can have its own ink without recoloring outlines in the editing canvas.
