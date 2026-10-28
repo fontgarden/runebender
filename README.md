@@ -82,48 +82,72 @@ Published downloads and version-specific notes are on [GitHub Releases](https://
 
 ## Local AI
 
-Runebender's native editor works with models running on your computer.
-Chat can inspect the open font, read glyphs and metrics, and propose edits for you to review.
-It works with the live, unsaved document; model proposals do not automatically apply or save changes.
+Runebender can talk to a language model that runs on your own computer.
+The model reads the open font, measures glyphs and proposes edits.
+You review every proposal in Proof and decide what to apply and save.
+Nothing is sent anywhere, and no account or key is needed.
 
-To get started:
+Setup is four steps on a Mac with Apple Silicon and 8 GB of memory or more.
 
-1. Install `llama-server` from [llama.cpp](https://github.com/ggml-org/llama.cpp) and place a compatible GGUF chat model in its own folder under `~/Runebender/models/`.
-   Models are installed separately; Runebender does not download them.
-   On a Mac with Homebrew, this installs the server and a 3 GB model that runs on 8 GB of memory:
+### 1. Install the model server
 
-   ```sh
-   brew install llama.cpp
-   mkdir -p ~/Runebender/models/qwen3.5-4b
-   curl -L -o ~/Runebender/models/qwen3.5-4b/model.gguf \
-     https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-UD-Q4_K_XL.gguf
-   ```
+The model runs inside `llama-server`, a program from the llama.cpp project.
+Runebender does not include it yet.
+Install it with [Homebrew](https://brew.sh):
 
-   The folder name is the name shown in the Chat panel; any GGUF chat model works the same way.
-   On Linux, unpack a [llama.cpp release](https://github.com/ggml-org/llama.cpp/releases) and set `RUNEBENDER_LLAMA_SERVER` to its `llama-server`.
-2. Open a font in the native editor, open the **Chat** panel, and choose the installed model.
-   Runebender can start a local server for it, or reuse a compatible shared server on `127.0.0.1:8080`.
-3. Start with a specific request such as “Inspect the selected glyph and explain its spacing.”
-   For changes, ask for a proposal, inspect the result in Proof, and apply it only when you are satisfied.
-   Save the font yourself when you want to keep the changes.
+```sh
+brew install llama.cpp
+```
 
-Proof provides **Compare**, **Toggle**, **Waterfall**, and **Text** views for reviewing drawings and reading samples.
-Put reference TTF/OTF fonts in the project's `reference-fonts/` directory to share them between native proofs and the agent proof workflow; see [reference font setup](docs/PROOF-REFERENCES.md).
-For model feedback on pictures, use a vision-capable chat model with its matching `mmproj*.gguf` projector.
-The native comparison-image tool `review_proof` also requires [Designbot](https://github.com/eliheuer/designbot) to be installed separately.
+### 2. Download a model
+
+A model is one file.
+Put it in its own folder under `~/Runebender/models`, named `model.gguf`.
+This downloads a 3 GB model that runs well on 8 GB of memory:
+
+```sh
+mkdir -p ~/Runebender/models/qwen3.5-4b
+curl -L -o ~/Runebender/models/qwen3.5-4b/model.gguf \
+  https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-UD-Q4_K_XL.gguf
+```
+
+The folder name is the name you will see in the editor.
+Any GGUF chat model from Hugging Face works the same way; with 32 GB of memory or more, [the local AI setup guide](https://runebender.org/docs/local-ai-setup.html) names stronger ones.
+
+### 3. Ask the model about your font
+
+Open a font in Runebender and open the **Chat** tab in the left rail.
+Pick your model with the button under the text field.
+Type a question and press Return, for example: "Inspect the selected glyph and explain its spacing."
+The first answer takes about fifteen seconds while the model loads.
+
+### 4. Review a proposal
+
+Ask for a change, for example: "Make the zero 64 units wider."
+The model proposes an edit; it does not change your font.
+Press the **Proof** button at the bottom left of the editor to see the proposal beside the current drawing.
+Apply it there if you agree, or go back to the canvas and draw it your way.
+Save the font yourself when you want to keep the result.
+
+### If something is wrong
+
+- **"Neither llama-server nor font-ml found"** in the status line: step 1 did not run, or Homebrew is not installed.
+- **No model in the Chat tab:** the file must be inside its own folder under `~/Runebender/models`, with the `.gguf` extension.
+- **The first answer is slow:** the model is loading. The second is fast.
+- **A small model gets an edit wrong:** ask again in plainer words, or use a larger model.
+
+### Going further
+
+- **Pictures:** a model can look at the proof when its folder also holds the matching `mmproj*.gguf` file from the same download page.
+- **Voice:** `brew install whisper.cpp` and a whisper model as `~/Runebender/models/whisper-small/model.bin` add a microphone button to Chat.
+- **Reference fonts:** put TTF or OTF files in the project's `reference-fonts/` folder to see them in Proof; see [reference font setup](docs/PROOF-REFERENCES.md).
+- **Agents:** Pi, Codex and other agents connect to the live editor through `runebender mcp --live`; see [MCP setup](https://runebender.org/docs/mcp.html).
+  MCP supplies editor tools, not a model; the agent's own setup decides whether its model is local or remote.
+- **One server for everything:** a `llama-server` in router mode on port 8080 can serve Runebender and your agents from one copy of the model; see [model packages and shared servers](docs/LOCAL-MODELS.md).
+- **Linux:** unpack a [llama.cpp release](https://github.com/ggml-org/llama.cpp/releases) and set `RUNEBENDER_LLAMA_SERVER` to its `llama-server`.
+
+The [local AI reference](docs/LOCAL-AI.md) lists every local AI feature, tool and limitation.
 A model's assessment is feedback, not design approval.
-
-External agents such as Pi or Codex can connect to the same live editor through `runebender mcp --live`.
-The repository's `.mcp.json` and `.codex/config.toml` declare that command.
-The agent must select the intended editor session and source before inspecting or proposing changes; see [MCP setup](https://runebender.org/docs/mcp.html).
-MCP provides editor tools, not a model: the agent's own configuration determines whether its inference is local or remote.
-
-Optional tools include voice input through whisper.cpp, specialized font models through `font-ml`, and **Draft with Virtua** in the Brush panel.
-These require their own runtimes and model packages; they are not prerequisites for ordinary Chat.
-Graph supports custom workflows, but live model nodes are still unfinished.
-Local AI and live-editor agent connections target native macOS and Linux; they are unavailable in the browser editor.
-
-See [local AI setup](https://runebender.org/docs/local-ai-setup.html) for installation, [model packages and shared servers](docs/LOCAL-MODELS.md) for configuration, and the [local AI reference](docs/LOCAL-AI.md) for capabilities and limitations.
 
 ## External workflow worker contract
 
