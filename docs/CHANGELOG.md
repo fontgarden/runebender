@@ -1,9 +1,45 @@
 # Changelog
 
-Notable user-facing changes will be recorded here and copied into each GitHub Release's notes.
-Entries under Unreleased describe work being prepared, not an available public release.
+Record notable user-facing changes here as they land.
+See [the release runbook](RELEASING.md#changelog-practice) for how these entries become versioned release notes.
 
 ## Unreleased
+
+No application changes have landed since `0.1.0-alpha.1` at this documentation checkpoint.
+The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work belong in [the next-alpha checklist](RELEASING.md#next-alpha-010-alpha2), not in the list of shipped changes.
+
+## 0.1.0-alpha.1 — 2026-10-28
+
+[GitHub release](https://github.com/fontgarden/runebender/releases/tag/v0.1.0-alpha.1) · [Full release notes](releases/0.1.0-alpha.1.md)
+
+### Added
+
+- First Developer ID signed and Apple-notarized DMG for Apple Silicon, with a drag-to-Applications installation and bundled editor resources.
+- Untitled startup font in the normal glyph grid, with 324 empty Latin Core slots and faint placeholder glyphs.
+- Native Before/Working Compare and Toggle modes, plus selectable Waterfall and Text proofs.
+- Project-local `reference-fonts/` discovery shared with Virtua's live proof workflow, with consistent family and weight selection.
+- Guarded `review_proof` MCP comparison images for agents and local Chat through separately installed Designbot; real Pi image transport was tested.
+- Sparkle alpha update checks at launch and through the macOS application menu.
+
+### Changed
+
+- Collapsible sidebar sections, a fixed-size glyph color palette, neutral save status in the top bar, and coordinated grid-dot/point-marker sizing.
+- Proof controls, spacing and light/dark appearance follow the native gray interface.
+- Versioned GitHub downloads, website installation guidance and a signed alpha update feed are available.
+
+### Validation and limitations
+
+- Exact-source Linux/macOS CI passed; the native local suite passed 1,401 tests with 10 ignored.
+- Finder installation and launch were confirmed on Apple Silicon macOS 26.6.2; declared minimum macOS 12.0 has not been tested.
+- Full manual editing/save/reopen regression and a real two-version updater installation were deferred by the maintainer and remain outstanding.
+- Intel/Windows installers and Cargo/Homebrew registry packages are not included.
+- Local AI models, llama-server and Designbot are separate installations; work on copies of important font sources.
+
+## Pre-release development notes (historical)
+
+The following record preserves earlier development history, including intermediate designs that were superseded before alpha.1.
+It is not a list of changes waiting for alpha.2 or a definitive description of the shipped package.
+Use the dated release notes above for the public feature and support claims.
 
 ### Added
 
@@ -92,11 +128,3 @@ Entries under Unreleased describe work being prepared, not an available public r
 
 - The canonical source repository is now [fontgarden/runebender](https://github.com/fontgarden/runebender).
   Existing GitHub repository links redirect to the new location.
-
-### Known limitations
-
-- The first public release is still in preparation; the local DMG is ad-hoc signed, and Developer ID distribution has not yet been validated.
-- Windows desktop installation is not a supported release target.
-
-Before v0.1 is published, curate the editor's initial feature list, tested platforms and source formats, installation requirements, and remaining limitations here.
-See [RELEASING.md](RELEASING.md) for the release workflow and publication gates.

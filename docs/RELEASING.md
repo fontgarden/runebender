@@ -1,45 +1,70 @@
 # Releasing Runebender
 
-The first native alpha release is being prepared as `0.1.0-alpha.1`.
+Runebender `0.1.0-alpha.1` was published on October 28, 2026 as an Apple Silicon macOS prerelease.
 The canonical repository is [fontgarden/runebender](https://github.com/fontgarden/runebender).
-It was transferred from `eliheuer/runebender-xilem` on October 17, 2026, preserving its history and GitHub identity.
-Keep the old GitHub repository path unused so its redirects continue to work.
-The packaging command below creates a macOS application bundle and a disk image with an Applications shortcut.
-Packaging alone does not establish that the editor is ready for release.
+It was transferred from `eliheuer/runebender-xilem`; keep the old path unused so its redirects continue to work.
 
-Initial validation on October 16, 2026 passed for a local Apple Silicon package: release build, bundle signature verification, DMG integrity, mounting, copying the app out, and ejecting the image.
-That earlier copied app reported `0.1.0` and rendered both the no-document screen and a copied Babelfont fixture through the headless path, from a temporary working directory with no user configuration or developer environment.
-That earlier artifact verifies packaging and headless startup for its source state; it does not validate later source or packaging changes.
-Interactive Finder launch, file dialogs, saving, Intel compatibility, Developer ID signing, and notarization remain release gates.
+## Shipped alpha.1
 
-On October 17, 2026, the canonical checkout produced an Apple Silicon test DMG with the temporary icon and bundled Shapes font.
-Two consecutive invocations preserved separate output directories; the second reused the compiled binary.
-The second image passed checksum, mount/copy/eject, copied-app signature, bundle-icon and sample-font checks, `--version`, and visually inspected headless welcome and Shapes captures in an isolated environment.
-This was a dirty-tree local test build at `b338d2a`, not a public release candidate or an interactive installation test.
-Its artifacts, build receipt, and validation results are under the corresponding timestamped `target/macos/` directory.
+- [Public release and notes](https://github.com/fontgarden/runebender/releases/tag/v0.1.0-alpha.1), built from `f4ad9e3a39be1f45f96615a7b729a8efb3d09248` in a clean checkout.
+- Bundle build number: `1`.
+- Artifact: `Runebender-0.1.0-alpha.1-macos-apple-silicon-notarized.dmg`.
+- SHA-256: `2818eb2d02e9ee920020510675ad43ca175608b3e09115ce9e1f3d4773a73622`.
+- [Downloads](https://runebender.org/download.html) and the signed [alpha appcast](https://runebender.org/updates/alpha/appcast.xml) are live.
+- Website deployment: `d3b3507e82bc863160fd45c487e943b9361223e5`.
+
+The app and DMG passed Developer ID signing, Apple notarization, stapling and Gatekeeper assessment.
+Mount/copy/eject, isolated headless startup and bundled-font captures passed; the maintainer confirmed normal Finder launch from Applications.
+The public download's checksum matches the tested artifact.
+[Required CI](https://github.com/fontgarden/runebender/actions/runs/40624925341) passed for the exact release commit on Linux and macOS, including formatting and security checks.
+The local native suite passed 1,401 tests with 10 ignored; ignored tests are not runtime coverage.
+Native proof captures, actual Pi 1.4.0 MCP image transport, and local Chat image transport through an HTTP fixture were checked without modifying the font.
+That fixture does not establish compatibility with every local vision model.
+
+The declared minimum is macOS 12.0 because of Sparkle; the actual installation test used Apple Silicon with macOS 26.6.2.
+Older macOS versions, Intel installation and Linux desktop use have not been validated.
+The maintainer explicitly authorized this first alpha with the remaining manual editing and two-version updater checks deferred.
+This exception is recorded in the public release notes and does not mark those checks passed or waive them for future releases.
+
+Signing remains on the maintainer's Mac.
+The notarization credential profile is `runebender-notary`; Sparkle's signing key uses Keychain account `org.runebender.Runebender`.
+Keep both signing private keys securely backed up outside Git; this record does not confirm that backup has been completed.
+Earlier unsigned development DMGs need a manual replacement to acquire the updater.
+
+## Next alpha: 0.1.0-alpha.2
+
+The next planned release is `0.1.0-alpha.2`, with bundle build number `2` if no intervening build is published.
+The version and build configuration have not been bumped yet; do that with the next candidate's release-preparation commit.
+Do not rebuild or replace the published alpha.1 assets, or move its tag.
+
+- [ ] Test the installed alpha.1 on disposable UFO and Designspace copies: edit, undo/redo, save, close and reopen; verify retained source data.
+- [ ] Check the installed menu update action, startup checking and offline behavior.
+- [ ] Test a real signed alpha.1-to-alpha.2 update, including clean restart, unsaved-work save/discard/cancel, cancellation, and rejected signatures.
+  Use an isolated test feed and test installation before promoting the public feed; keep the public alpha.1 archive immutable.
+- [ ] Complete browser-download quarantine and offline first-launch checks on a separate Mac or clean user account.
+- [ ] Test the oldest claimed macOS version or narrow the documented support claim.
+- [ ] Validate the tagged Cargo install outside the checkout and perform Linux desktop smoke testing before claiming supported installation there.
+- [ ] Confirm secure backups of the Developer ID private key and Sparkle archive-signing private key.
+- [ ] Triage reported defects and record completed user-visible fixes under [Unreleased](CHANGELOG.md#unreleased).
+- [ ] Prepare the next version's notes, bump Cargo version/lockfile and bundle build number together, then freeze and validate its own source commit.
+
+Intel/Windows installers, crates.io, Homebrew and browser-editor catch-up remain separate follow-up work.
+They are not prerequisites for a scoped Apple Silicon bug-fix alpha.
+
+### Changelog practice
+
+Keep `docs/CHANGELOG.md` current in the same commit as each user-visible change.
+Use Added, Changed, Fixed, and Removed headings when they have entries; describe the user's observable result rather than a raw commit list.
+Unreleased contains completed changes since alpha.1, not planned work or repeated alpha.1 features.
+Keep outstanding tests and plans in this runbook.
+At release preparation, turn Unreleased into the dated version section and start a fresh Unreleased section.
+Curate `docs/releases/<version>.md` from that section, including installation requirements and actual validation limits.
+The release script reads that versioned file for GitHub and Sparkle notes; review it rather than assuming changelog text is copied automatically.
 
 ## Current alpha workflow
 
-The release version is `0.1.0-alpha.1` and the intended GitHub tag is `v0.1.0-alpha.1`.
-The macOS build number in `release.toml` starts at `1` and must increase for every published build, including each alpha.
-The public application is initially Apple Silicon only, with a minimum macOS requirement of 12 because the pinned Sparkle framework requires it.
-The minimum OS declaration is not proof of testing on that OS; retain the actual tested OS and hardware with each candidate.
-
-### Preparation status on October 28, 2026
-
-Apple Developer individual membership is active, and this Mac has a valid Developer ID Application identity with its private key in the login Keychain.
-The `runebender-notary` credential profile has been saved and validated with Apple.
-The first clean candidate at `d887f8deebe88e52903bff21fa758c7d30631fd1` passed app and nested-framework signing and was submitted for notarization.
-Apple has accepted that app submission and both later DMG submissions, as verified in notarization history on October 28.
-Those receipts cover earlier source states; the final candidate must be rebuilt and notarized from its own frozen commit.
-That source commit also exposed a missing browser dependency in CI, so the final release must use a corrected commit and artifacts built from that commit.
-The separate Runebender Sparkle archive-signing key has been created in the login Keychain under account `org.runebender.Runebender`.
-Only its public key is stored in `release.toml`; keep the private key and the Apple certificate's private key backed up securely, outside Git.
-The updater-enabled application compiles, and its locked dependencies pass the advisory check after updating Tokio.
-A completed notarized DMG, passing CI for the final source commit, installation testing, and an actual two-version update still need to be validated before public distribution.
-The download preparation page and empty alpha feed are deployed at [runebender.org/download.html](https://runebender.org/download.html).
-The website manifest remains unavailable until the public release assets are verified.
-Existing local DMGs made before the updater was added need one manual replacement; they cannot acquire an updater by themselves.
+The commands below apply to a new candidate, not to republishing alpha.1.
+Increase the bundle build number for every published build, including alphas.
 
 ### Commands
 
@@ -88,13 +113,13 @@ Homebrew and crates.io publication are later milestones; this alpha includes the
 | Component | Initial approach | Status |
 | --- | --- | --- |
 | Local macOS packages | `./scripts/build_dmg.sh`, using the temporary icon | Implemented; local test signing |
-| Public macOS packages | Developer ID Application, notarization, stapling | Earlier app and DMG submissions accepted; final candidate pending |
-| Release validation | Existing Linux/macOS CI plus installation tests | CI repairs under validation; manual checklist below |
-| Release orchestration | `scripts/release.py prepare`, `draft`, and `publish` | Implemented; public end-to-end validation pending |
-| Hosting | Versioned GitHub prerelease assets | Publisher implemented; no public alpha yet |
-| Website | `/download.html` reads verified release metadata | Preparation page and empty feed live; downloads unavailable |
+| Public macOS packages | Developer ID Application, notarization, stapling | Alpha.1 signed, notarized and stapled |
+| Release validation | Existing Linux/macOS CI plus installation tests | Exact-source CI passed; remaining manual checks listed above |
+| Release orchestration | `scripts/release.py prepare`, `draft`, and `publish` | Alpha.1 publication and public checksum verification completed |
+| Hosting | Versioned GitHub prerelease assets | Alpha.1 prerelease published |
+| Website | `/download.html` reads verified release metadata | Download button, manifest and signed alpha feed deployed |
 | Linux installation | Cargo from the exact release tag, with `--locked` | Must be tested outside the checkout |
-| Changelog | Curated [CHANGELOG.md](CHANGELOG.md) | Started; first release notes still need curation |
+| Changelog | Curated [CHANGELOG.md](CHANGELOG.md) | Alpha.1 recorded; Unreleased reserved for subsequent changes |
 | Updates | Sparkle checks at launch and through the menu, with user-confirmed installation | Native integration implemented; two-version signed validation pending |
 
 Keep signing on the maintainer's Mac for the first release.
@@ -246,29 +271,19 @@ Pin its version, architecture-specific URL, minimum macOS requirement, and SHA-2
 Test installation, upgrade, and uninstall before advertising it; updates for those installations should go through Homebrew.
 Submission to Homebrew's main cask repository can come later.
 
-### Work order toward the first release
+### Completed release infrastructure
 
-- [x] Build and inspect an icon-bearing local DMG, including copied-app headless smoke checks.
-- [ ] Complete the manual Finder installation and editing checklist.
-- [ ] Obtain passing supported-platform checks on the chosen release SHA.
-- [x] Pin the font-fixture revision and make external test dependencies explicit in CI.
-- [x] Confirm Apple membership is active.
-- [x] Install the Developer ID identity and notarization profile; validate signing and notarization on earlier candidates.
-- [ ] Repeat signing, notarization, stapling, and browser-download Gatekeeper checks for the final candidate.
-- [x] Implement release commands, numeric bundle versions, clean-source checks, draft upload, and a public manifest.
-- [ ] Validate the complete signed release and two-version update path.
-- [ ] Curate v0.1 notes, verify Linux installation and runtime assets, and decide the tested OS/architecture support matrix.
-- [ ] Stage a release, finish installation review, publish explicitly, verify the public downloads, and deploy the website download page.
-- [ ] Follow up separately with registry dependencies/crates.io and a Homebrew tap.
-
-Aim the first week at the signed Apple Silicon DMG and a reliable source-install route.
-If Intel hardware, Linux desktop validation, or Apple activation is unavailable, narrow the advertised support or keep the build a test candidate rather than inventing a passing result.
+- [x] Freeze a clean source commit and pass required Linux/macOS CI.
+- [x] Sign, notarize, staple and assess the final app and DMG.
+- [x] Confirm installed Finder launch on the tested Apple Silicon Mac.
+- [x] Publish the versioned prerelease and verify its public artifact checksum.
+- [x] Deploy and verify the website download links and signed alpha appcast.
+- [x] Record actual testing limits and maintain the next-alpha checklist above.
 
 CI installs a pinned Designbot renderer and uses the recorded Virtua fixture revision.
-The October 28 repairs resolve a fixture-specific glyph filename, a reversed dependency in a template test, incomplete Sparkle extraction caches, and a skipped macOS updater lint check.
-The final source SHA still needs its own passing CI run; local success does not substitute for that result.
-Windows diagnostics are separate from the supported-platform release gates.
-
+The alpha.1 repairs resolved a fixture-specific glyph filename, a reversed dependency in a template test, incomplete Sparkle extraction caches, and a skipped macOS updater lint check.
+Every subsequent candidate still needs passing checks on its own SHA.
+Windows diagnostics remain separate from the supported-platform release gates.
 
 ## Local macOS package
 
@@ -380,5 +395,5 @@ The package script uses `syspolicy_check distribution` where available, falling 
 - Write release notes covering supported source formats, known limitations, backup advice, and separately installed AI features.
 - Publish the validated DMGs and checksums on a tagged GitHub Release, then update the website's installation instructions to link to those artifacts.
 
-Do not create the `v0.1.0-alpha.1` tag or publish a release until these gates have been reviewed.
+Review these gates before creating each new release tag; record any maintainer-approved deferrals explicitly.
 Signing and notarization have not been validated merely by successfully creating a local test DMG.
