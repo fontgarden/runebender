@@ -88,8 +88,19 @@ It works with the live, unsaved document; model proposals do not automatically a
 
 To get started:
 
-1. Install `llama-server` from [llama.cpp](https://github.com/ggml-org/llama.cpp) and place a compatible GGUF chat model in its own folder under `~/Runebender/models/`, for example `~/Runebender/models/my-model/model.gguf`.
+1. Install `llama-server` from [llama.cpp](https://github.com/ggml-org/llama.cpp) and place a compatible GGUF chat model in its own folder under `~/Runebender/models/`.
    Models are installed separately; Runebender does not download them.
+   On a Mac with Homebrew, this installs the server and a 3 GB model that runs on 8 GB of memory:
+
+   ```sh
+   brew install llama.cpp
+   mkdir -p ~/Runebender/models/qwen3.5-4b
+   curl -L -o ~/Runebender/models/qwen3.5-4b/model.gguf \
+     https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-UD-Q4_K_XL.gguf
+   ```
+
+   The folder name is the name shown in the Chat panel; any GGUF chat model works the same way.
+   On Linux, unpack a [llama.cpp release](https://github.com/ggml-org/llama.cpp/releases) and set `RUNEBENDER_LLAMA_SERVER` to its `llama-server`.
 2. Open a font in the native editor, open the **Chat** panel, and choose the installed model.
    Runebender can start a local server for it, or reuse a compatible shared server on `127.0.0.1:8080`.
 3. Start with a specific request such as “Inspect the selected glyph and explain its spacing.”
