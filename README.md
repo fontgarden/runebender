@@ -1,9 +1,34 @@
 # Runebender
 
-Runebender is an experimental font editor built on the
-[Linebender ecosystem](https://linebender.org/) of Rust crates.
+Runebender is an experimental font editor built on the [Linebender ecosystem](https://linebender.org/) of Rust crates.
 
 For documentation and installation instructions, see [runebender.org](https://runebender.org), or point your AI agent there for the context it needs to help you.
+
+## Download
+
+[Download the macOS DMG — 0.1.0-alpha.1](https://github.com/fontgarden/runebender/releases/download/v0.1.0-alpha.1/Runebender-0.1.0-alpha.1-macos-apple-silicon-notarized.dmg)
+
+The first alpha is a Developer ID signed, Apple-notarized application for Apple Silicon Macs.
+See [installation instructions and requirements](https://runebender.org/download.html), [release notes](https://github.com/fontgarden/runebender/releases/tag/v0.1.0-alpha.1), and the [changelog](docs/CHANGELOG.md).
+Work on copies of important fonts; the release notes record the remaining testing limits.
+
+For a source installation of the current default branch, with Rust 1.96 or newer and the [platform prerequisites](https://runebender.org/docs/install.html):
+
+```sh
+cargo install --git https://github.com/fontgarden/runebender
+```
+
+This installs development source rather than the frozen alpha release.
+Linux source builds and the [browser editor](https://runebender.org/wasm-editor/) are experimental; this release has no Intel Mac or Windows installer.
+
+## Font formats
+
+Runebender opens and saves UFO and Designspace sources.
+Glyphs files, Glyphs packages and Fontra folders open through converted working copies, with limited write-back to the original format.
+Python `.babelfont` directories and compiled TTF/OTF fonts are import-only formats.
+See [supported formats and preservation limits](https://runebender.org/docs/opening.html) before editing an existing source.
+
+## Screenshots
 
 ![Runebender glyph overview](https://runebender.org/images/runebender-xilem-grid.png)
 
@@ -17,10 +42,12 @@ For documentation and installation instructions, see [runebender.org](https://ru
 
 ## Documentation
 
-Start with the [documentation index](docs/README.md) for release, testing, interface, and local-model guides.
+Start with the [user documentation](https://runebender.org/docs/) for editing and installation, or the [repository documentation index](docs/README.md) for release, testing, interface, and local-model guides.
+Contributors and coding agents should read [AGENTS.md](AGENTS.md).
 
 ## Local native builds
 
+Run these commands from a checkout of this repository; Cargo uses the pinned Rust toolchain.
 For UI development, use an optimized build with incremental compilation:
 
 ```sh
@@ -59,27 +86,17 @@ The native Brush panel can draft with an installed Virtua model and compare the 
 Put compatible model packages in `~/runebender/models`; see [Local models](docs/LOCAL-MODELS.md) for the package layout and runtime requirements.
 Use the [Virtua testing guide](docs/VIRTUA-REGULAR-TESTING.md) for the first Arabic trial.
 
-## Persistent local chat
+## Local chat and agents
 
-The native Chat panel can reuse an already running `font-ml serve` model through its loopback HTTP endpoint.
-Start the server separately with a model that is already installed, then launch this Runebender build with the endpoint configured:
+The native Chat panel works with local models through `llama-server`, an explicitly configured loopback endpoint, or the `font-ml` fallback.
+It can reuse a compatible running llama server or start a supervised server for a selected installed GGUF model.
+Models and external tools are installed separately; see [local AI setup](https://runebender.org/docs/local-ai-setup.html) and the [local AI reference](docs/LOCAL-AI.md) for runtime selection and configuration.
 
-```sh
-font-ml serve --model /path/to/model --bind 127.0.0.1:8790
-# In a second terminal:
-RUNEBENDER_CHAT_ENDPOINT=http://127.0.0.1:8790 RUNEBENDER_CHAT_MODEL=font-ml cargo run --locked -- /path/to/font.ufo
-```
-
-`RUNEBENDER_CHAT_MODEL` defaults to `font-ml`; an optional `/v1` endpoint suffix is accepted.
-This adapter supports fixed-length, non-streaming chat completions on a literal loopback address or `localhost` with an explicit port.
-It does not connect to cloud providers, launch the server, or download models.
-Without `RUNEBENDER_CHAT_ENDPOINT`, Chat retains the existing per-turn local process path.
-A configured invalid endpoint reports an error instead of selecting another backend.
-
-Runebender owns the read/proposal tool loop and pins calls to the open document's lifetime; inference state remains in the external server.
-Cancel closes the request and discards late results, but the server may continue computing and already dispatched tool operations are not undone.
-The server stays running across turns and when Runebender closes; stop it separately when finished.
-This route requires the native Unix live-editor endpoint and is unavailable in the browser.
+External coding agents connect through `runebender mcp --live`.
+The repository's `.mcp.json` and `.codex/config.toml` declare that command; see [MCP setup](https://runebender.org/docs/mcp.html) for connecting to the intended open document.
+The native proof view supports Before/Working comparison, toggle, waterfall and text views, with [project-local reference fonts](docs/PROOF-REFERENCES.md).
+With Designbot installed, `review_proof` can return comparison images to an agent for review.
+These live-editor workflows require native macOS or Linux; the browser editor does not provide local AI.
 
 ## External workflow worker contract
 
