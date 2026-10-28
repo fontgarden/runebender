@@ -80,23 +80,39 @@ Follow [Testing a Runebender DMG](docs/TESTING-MACOS.md) to install and exercise
 See [Releasing Runebender](docs/RELEASING.md) for the release plan, signing, notarization, Cargo distribution, and website downloads, and the [Changelog](docs/CHANGELOG.md) for changes by version.
 Published downloads and version-specific notes are on [GitHub Releases](https://github.com/fontgarden/runebender/releases).
 
-## Local sketch models
+## Local AI
 
-The native Brush panel can draft with an installed Virtua model and compare the result before applying it.
-Put compatible model packages in `~/runebender/models`; see [Local models](docs/LOCAL-MODELS.md) for the package layout and runtime requirements.
-Use the [Virtua testing guide](docs/VIRTUA-REGULAR-TESTING.md) for the first Arabic trial.
+Runebender's native editor works with models running on your computer.
+Chat can inspect the open font, read glyphs and metrics, and propose edits for you to review.
+It works with the live, unsaved document; model proposals do not automatically apply or save changes.
 
-## Local chat and agents
+To get started:
 
-The native Chat panel works with local models through `llama-server`, an explicitly configured loopback endpoint, or the `font-ml` fallback.
-It can reuse a compatible running llama server or start a supervised server for a selected installed GGUF model.
-Models and external tools are installed separately; see [local AI setup](https://runebender.org/docs/local-ai-setup.html) and the [local AI reference](docs/LOCAL-AI.md) for runtime selection and configuration.
+1. Install `llama-server` from [llama.cpp](https://github.com/ggml-org/llama.cpp) and place a compatible GGUF chat model in its own folder under `~/Runebender/models/`, for example `~/Runebender/models/my-model/model.gguf`.
+   Models are installed separately; Runebender does not download them.
+2. Open a font in the native editor, open the **Chat** panel, and choose the installed model.
+   Runebender can start a local server for it, or reuse a compatible shared server on `127.0.0.1:8080`.
+3. Start with a specific request such as “Inspect the selected glyph and explain its spacing.”
+   For changes, ask for a proposal, inspect the result in Proof, and apply it only when you are satisfied.
+   Save the font yourself when you want to keep the changes.
 
-External coding agents connect through `runebender mcp --live`.
-The repository's `.mcp.json` and `.codex/config.toml` declare that command; see [MCP setup](https://runebender.org/docs/mcp.html) for connecting to the intended open document.
-The native proof view supports Before/Working comparison, toggle, waterfall and text views, with [project-local reference fonts](docs/PROOF-REFERENCES.md).
-With Designbot installed, `review_proof` can return comparison images to an agent for review.
-These live-editor workflows require native macOS or Linux; the browser editor does not provide local AI.
+Proof provides **Compare**, **Toggle**, **Waterfall**, and **Text** views for reviewing drawings and reading samples.
+Put reference TTF/OTF fonts in the project's `reference-fonts/` directory to share them between native proofs and the agent proof workflow; see [reference font setup](docs/PROOF-REFERENCES.md).
+For model feedback on pictures, use a vision-capable chat model with its matching `mmproj*.gguf` projector.
+The native comparison-image tool `review_proof` also requires [Designbot](https://github.com/eliheuer/designbot) to be installed separately.
+A model's assessment is feedback, not design approval.
+
+External agents such as Pi or Codex can connect to the same live editor through `runebender mcp --live`.
+The repository's `.mcp.json` and `.codex/config.toml` declare that command.
+The agent must select the intended editor session and source before inspecting or proposing changes; see [MCP setup](https://runebender.org/docs/mcp.html).
+MCP provides editor tools, not a model: the agent's own configuration determines whether its inference is local or remote.
+
+Optional tools include voice input through whisper.cpp, specialized font models through `font-ml`, and **Draft with Virtua** in the Brush panel.
+These require their own runtimes and model packages; they are not prerequisites for ordinary Chat.
+Graph supports custom workflows, but live model nodes are still unfinished.
+Local AI and live-editor agent connections target native macOS and Linux; they are unavailable in the browser editor.
+
+See [local AI setup](https://runebender.org/docs/local-ai-setup.html) for installation, [model packages and shared servers](docs/LOCAL-MODELS.md) for configuration, and the [local AI reference](docs/LOCAL-AI.md) for capabilities and limitations.
 
 ## External workflow worker contract
 
