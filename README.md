@@ -114,6 +114,22 @@ curl -L -o ~/Runebender/models/qwen3.5-4b/model.gguf \
 The folder name is the name you will see in the editor.
 Any GGUF chat model from Hugging Face works the same way; with 32 GB of memory or more, [the local AI setup guide](https://runebender.org/docs/local-ai-setup.html) names stronger ones.
 
+### When the server runs
+
+You do not start `llama-server` yourself.
+Runebender starts it the first time you send a question, loads the model you picked, and keeps it running until you pick another model, close the Chat tab or quit.
+It listens on this computer only.
+
+To share one model between Runebender and other programs, such as Pi, start the server yourself before opening Runebender:
+
+```sh
+llama-server --models-dir ~/Runebender/models --port 8080
+```
+
+It lists every model folder and loads a model when a program asks for it.
+While it runs on port 8080, Runebender uses it instead of starting its own.
+Stop it with Ctrl-C.
+
 ### 3. Ask the model about your font
 
 Open a font in Runebender and open the **Chat** tab in the left rail.
@@ -143,7 +159,7 @@ Save the font yourself when you want to keep the result.
 - **Reference fonts:** put TTF or OTF files in the project's `reference-fonts/` folder to see them in Proof; see [reference font setup](docs/PROOF-REFERENCES.md).
 - **Agents:** Pi, Codex and other agents connect to the live editor through `runebender mcp --live`; see [MCP setup](https://runebender.org/docs/mcp.html).
   MCP supplies editor tools, not a model; the agent's own setup decides whether its model is local or remote.
-- **One server for everything:** a `llama-server` in router mode on port 8080 can serve Runebender and your agents from one copy of the model; see [model packages and shared servers](docs/LOCAL-MODELS.md).
+- **Per-model settings** for a shared server go in a `presets.ini` beside the models; see [model packages and shared servers](docs/LOCAL-MODELS.md).
 - **Linux:** unpack a [llama.cpp release](https://github.com/ggml-org/llama.cpp/releases) and set `RUNEBENDER_LLAMA_SERVER` to its `llama-server`.
 
 The [local AI reference](docs/LOCAL-AI.md) lists every local AI feature, tool and limitation.
