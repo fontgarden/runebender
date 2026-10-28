@@ -50,7 +50,8 @@ To build a local `.app` and drag-to-Applications DMG on macOS:
 Each invocation builds the current source with the temporary application icon and writes a fresh DMG under `target/macos/`.
 This is a local test package with ad-hoc signing.
 Follow [Testing a Runebender DMG](docs/TESTING-MACOS.md) to install and exercise it.
-See [Releasing Runebender](docs/RELEASING.md) for the release plan, signing, notarization, Cargo distribution, and website downloads, and [CHANGELOG.md](docs/CHANGELOG.md) for release notes.
+See [Releasing Runebender](docs/RELEASING.md) for the release plan, signing, notarization, Cargo distribution, and website downloads, and the [Changelog](docs/CHANGELOG.md) for changes by version.
+Published downloads and version-specific notes are on [GitHub Releases](https://github.com/fontgarden/runebender/releases).
 
 ## Local sketch models
 
