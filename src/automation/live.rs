@@ -221,6 +221,19 @@ pub fn tools() -> Vec<agent::Tool> {
             }
         }
     }
+    result.push(agent::Tool {
+        name: "review_proof".into(),
+        description: "Capture the active glyph review as a PNG comparison: the same pinned Before or selected proposal, Working, and project reference drawings as the native page. Read editor_context first and supply its source, glyph, revision and document epoch. Does not open Proof, pin Before, change modes, edit or save. Uses neutral light paper; returns both revisions even in Toggle. Only Compare/Toggle at editable masters are supported; use proof_start for shaped text. Requires Designbot for MCP/chat image transport. References are paged four at a time with reference_offset.".into(),
+        parameters: json!({"type":"object","additionalProperties":false,
+            "required":["source","glyph","expected_document_epoch","expected_document_revision"],
+            "properties":{
+                "source":{"type":"integer","minimum":0},
+                "glyph":{"type":"string","minLength":1},
+                "expected_document_epoch":{"type":"string","minLength":1},
+                "expected_document_revision":{"type":"integer","minimum":0},
+                "reference_offset":{"type":"integer","minimum":0}
+            }}),
+    });
     result.extend(super::agent_edit::tools());
     result.extend(super::agent_graph::tools());
     result.extend(super::agent_proof::tools());
@@ -385,7 +398,7 @@ fn handle(project: &mut Project, name: &str, args: &Value) -> Result<Value, Stri
     }
     if matches!(
         name,
-        "editor_context" | "editor_open_glyph" | "editor_set_text"
+        "editor_context" | "editor_open_glyph" | "editor_set_text" | "review_proof"
     ) {
         return Ok(
             json!({"ok":false,"error":"application context is unavailable in this host", "error_code":"unsupported_context"}),

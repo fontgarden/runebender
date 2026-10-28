@@ -20,21 +20,16 @@ use xilem::style::Style;
 use xilem::view::{FlexExt as _, canvas, sized_box};
 use xilem::{AnyWidgetView, WidgetView};
 
-struct Card {
-    label: String,
-    drawing: Option<ReviewDrawing>,
-    error: Option<String>,
+pub(crate) struct Card {
+    pub(crate) label: String,
+    pub(crate) drawing: Option<ReviewDrawing>,
+    pub(crate) error: Option<String>,
 }
 
-pub(super) fn specimens(
-    app: &Workspace,
-    pal: &Palette,
-    comparison: ReviewComparison,
-    character: Option<char>,
-) -> impl WidgetView<Workspace> + use<> {
+/// The exact reference drawings shared by the native page and agent proof capture.
+pub(crate) fn cards(app: &Workspace, character: Option<char>) -> Vec<Card> {
     let weight = app.review_reference_weight();
-    let references: Vec<_> = app
-        .review
+    app.review
         .reading
         .references
         .selected(weight)
@@ -68,7 +63,16 @@ pub(super) fn specimens(
                 },
             }
         })
-        .collect();
+        .collect()
+}
+
+pub(super) fn specimens(
+    app: &Workspace,
+    pal: &Palette,
+    comparison: ReviewComparison,
+    character: Option<char>,
+) -> impl WidgetView<Workspace> + use<> {
+    let references = cards(app, character);
     // Include the hidden revision as well: Toggle never changes scale or reference positions.
     let bounds = references
         .iter()

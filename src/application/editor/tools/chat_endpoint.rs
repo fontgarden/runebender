@@ -34,6 +34,7 @@ const ALLOWED_TOOLS: &[&str] = &[
     "read_kerning",
     "proof",
     "specimen",
+    "review_proof",
     "proposal_list",
     "propose_edits",
 ];
@@ -690,14 +691,18 @@ pub(super) fn run_chat_endpoint(
             if name == "proof_image" {
                 return proof_image_call(session, &args);
             }
-            runebender::automation::live_socket::call(
+            let mut result = runebender::automation::live_socket::call(
                 session,
                 &agent::ToolCall {
                     name: name.into(),
                     arguments: args,
                 },
             )
-            .map_err(|error| format!("live {name} call failed: {error}; its outcome is unknown"))
+            .map_err(|error| format!("live {name} call failed: {error}; its outcome is unknown"))?;
+            if name == "review_proof" && result["ok"] == true {
+                attach_review_image(&mut result)?;
+            }
+            Ok(result)
         },
         |event| {
             job.events
@@ -744,6 +749,20 @@ fn chosen_proposal<'a>(
                 .rev()
                 .find(|proposal| names_glyph(proposal))
         })
+}
+
+/// Render outside the editor thread and use the chat's existing image attachment transport.
+fn attach_review_image(result: &mut Value) -> Result<(), String> {
+    use base64::Engine as _;
+    let scene = result.get("scene").ok_or("review proof has no scene")?;
+    let png = runebender::formats::designbot::render(scene, false)?;
+    result
+        .as_object_mut()
+        .ok_or("review result is not an object")?
+        .remove("scene");
+    result["images"] = json!([{"label":"Native review comparison",
+        "png_base64":base64::engine::general_purpose::STANDARD.encode(png)}]);
+    Ok(())
 }
 
 /// Answer a `proof_image` call: the glyph's current drawing and its

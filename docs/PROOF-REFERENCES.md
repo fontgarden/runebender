@@ -61,3 +61,28 @@ The convention aligns file discovery and face selection, not rasterization acros
 Before/Working also retain their existing sources: Runebender uses the open document and in-memory baseline; Virtua uses the review's verified snapshots.
 Virtua's archived reviews preserve their original embedded reference files for reproduction.
 Changing the live reference folder does not rewrite that evidence.
+
+## Agents, including Pi
+
+The native `review_proof` MCP tool captures the open glyph's comparison and the same project references.
+Read `editor_context`, then supply the exact `expected_document_epoch`, `expected_document_revision`, `source`, and `glyph`.
+It does not open the page, reset Before, switch sources, apply a proposal, or save the font.
+A missing Before is labeled explicitly.
+Use Compare or Toggle at an editable master; shaped text uses `proof_start` instead.
+The image always includes both available revisions, uses neutral light paper, and contains up to four references per page.
+Follow `next_reference_offset` to inspect more references; every page retains the same scale.
+Designbot must be installed for image transport.
+Local Chat uses this same capture and sends the image to its configured vision model.
+Graph's existing retained compiled proof images are separate from this active-glyph comparison.
+
+Pi reads `.pi/mcp.json` rather than the root `.mcp.json`.
+With a current Runebender executable on PATH, register it from the font project's directory:
+
+```sh
+pi mcp add runebender -l --exposure direct -- runebender mcp --live
+pi
+```
+
+Trust the project configuration in Pi, then use `editor_sessions` and `editor_connect` to select the intended open document.
+During Cargo development, use the absolute `target/debug/runebender` path in place of `runebender` so Pi uses the build being tested.
+The reference folder itself requires no agent-specific configuration.

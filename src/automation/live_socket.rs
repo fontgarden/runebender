@@ -106,6 +106,7 @@ impl Pending {
                 "agent_apply"
                     | "agent_receipt"
                     | "agent_history"
+                    | "review_proof"
                     | "proof_start"
                     | "proof_status"
                     | "proof_cancel"

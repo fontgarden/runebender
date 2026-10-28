@@ -117,6 +117,9 @@ impl Workspace {
         if let Some(result) = self.call_agent_edit(call) {
             return result;
         }
+        if call.name == "review_proof" {
+            return self.capture_review_proof(&call.arguments);
+        }
         if call.name == "editor_context" {
             if !call
                 .arguments

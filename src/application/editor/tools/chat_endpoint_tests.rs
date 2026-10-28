@@ -506,3 +506,58 @@ fn a_real_model_checks_its_proposal_with_proof_images() {
             .any(|entry| matches!(entry, ChatEntry::Assistant(text) if !text.is_empty()))
     );
 }
+
+#[test]
+fn native_review_comparison_reaches_chat_as_an_image_without_font_edits() {
+    let (listener, endpoint) = listener();
+    let mut app = workspace(endpoint, "review-image");
+    app.pin_review_before();
+    let revision = app.font.project.document_revision();
+    let epoch = app.live.as_ref().unwrap().document_epoch().to_string();
+    let server = std::thread::spawn(move || {
+        let (stream, first) = request(&listener);
+        assert!(
+            first["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["function"]["name"] == "review_proof")
+        );
+        respond(
+            stream,
+            call(
+                "review_proof",
+                json!({"source":0,"glyph":"A",
+            "expected_document_revision":revision,"expected_document_epoch":epoch}),
+            ),
+        );
+        let (stream, second) = request(&listener);
+        let messages = second["messages"].as_array().unwrap();
+        let result: Value =
+            serde_json::from_str(messages[messages.len() - 2]["content"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(result["ok"], true, "{result}");
+        assert_eq!(result["root_changed"], false);
+        assert_eq!(result["images"][0]["attached"], true);
+        assert!(
+            messages.last().unwrap()["content"][1]["image_url"]["url"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/png;base64,iVBOR")
+        );
+        respond(
+            stream,
+            json!({"role":"assistant","content":"The comparison is visible."}),
+        );
+        restate(
+            &listener,
+            "The comparison is visible.",
+            "The comparison is visible.",
+            "",
+        );
+    });
+    app.chat_send("Inspect the current review without changing the font.".into());
+    assert_eq!(pump(&mut app), ["review_proof"]);
+    assert_eq!(app.font.project.document_revision(), revision);
+    server.join().unwrap();
+}

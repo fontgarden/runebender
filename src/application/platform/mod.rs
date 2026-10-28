@@ -41,6 +41,8 @@ pub(crate) mod live;
 pub(crate) mod live_edits;
 #[cfg(unix)]
 pub(crate) mod live_proofs;
+#[cfg(unix)]
+pub(crate) mod review_proof;
 
 #[cfg(unix)]
 pub(crate) mod live_fixture;

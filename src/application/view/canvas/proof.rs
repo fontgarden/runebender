@@ -230,7 +230,7 @@ fn mode_bar(app: &Workspace, pal: &Palette) -> impl WidgetView<Workspace> + use<
 }
 
 mod reading;
-mod references;
+pub(crate) mod references;
 
 fn comparison_picker(app: &Workspace, pal: &Palette) -> Option<impl WidgetView<Workspace> + use<>> {
     let selected = app.ai.preview_task.clone();
@@ -303,7 +303,7 @@ fn specimen(
 }
 
 /// Include sidebearings, overhangs and both revisions, even when Toggle hides one.
-fn comparison_bounds(working: &ReviewDrawing, before: Option<&ReviewDrawing>) -> Rect {
+pub(crate) fn comparison_bounds(working: &ReviewDrawing, before: Option<&ReviewDrawing>) -> Rect {
     let drawings = [Some(working), before];
     let advance = drawings
         .iter()
@@ -327,7 +327,7 @@ fn comparison_bounds(working: &ReviewDrawing, before: Option<&ReviewDrawing>) ->
 }
 
 /// Fit one shared ink/advance box into equal fields, with a shared baseline.
-fn comparison_transforms(bounds: Rect, size: Size, paired: bool) -> (Affine, Affine) {
+pub(crate) fn comparison_transforms(bounds: Rect, size: Size, paired: bool) -> (Affine, Affine) {
     let gap = if paired {
         design::COLUMN_GAP.min(size.width.max(0.0))
     } else {

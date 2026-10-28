@@ -121,7 +121,13 @@ Sources: `src/application/view/canvas/proof.rs`, `src/application/editor/tools/r
   Files are grouped by family, width and slope, with real weight selection and no synthetic bold.
   Samples and proof settings are session-only; reference choices persist as the files in that folder.
   See [Proof reference fonts](PROOF-REFERENCES.md) for the shared native/live-web convention.
-- Shared chat/Graph proof images remain a later checkpoint.
+- Agents and local Chat can call `review_proof` after reading `editor_context`.
+  It captures the same Before/Working or selected proposal and reference drawings, with a shared fit and explicit source/glyph/revision guards.
+  Designbot renders the captured scene outside the editor thread; the model receives an image attachment, not base64 text.
+  Both revisions remain visible in the exported comparison even when the page is in Toggle.
+  References are paged four at a time with immutable font hashes; missing coverage remains explicit.
+  This glyph comparison requires Compare/Toggle at an editable master; shaped text images use the existing `proof_start` workflow.
+  Graph keeps its existing retained compiled proof images; neither image route applies or saves a font.
   The separate Text tool and editor preview strip remain available.
 - `RUNEBENDER_PROOF_VIEW=1` opens Compare; `toggle` opens Toggle on the right-hand revision, and `before` opens Toggle on the left-hand revision.
   `waterfall` and `text` open the reading modes.
@@ -240,12 +246,12 @@ The `design_context` tool and the Chat prompt read these files.
 ### 3.2 Live tools
 
 <!-- check: live-tools -->
-The live server publishes 47 tools.
+The live server publishes 48 tools.
 
 | Group | Tools |
 | --- | --- |
 | Connection and state | `editor_sessions`, `editor_connect`, `project_info`, `editor_context`, `editor_open_glyph`, `editor_set_text` |
-| Read and analysis | `font_info`, `read_glyph`, `glyph_inventory`, `design_context`, `analyze_glyph`, `analyze_font`, `read_kerning`, `proof`, `specimen`, `export_proof` |
+| Read and analysis | `font_info`, `read_glyph`, `glyph_inventory`, `design_context`, `analyze_glyph`, `analyze_font`, `read_kerning`, `proof`, `specimen`, `review_proof`, `export_proof` |
 | Proposals and marks | `propose_edits`, `proposal_list`, `proposal_discard`, `proposal_install`, `flag_glyph` |
 | Experiments | `experiment_fork`, `experiment_list`, `experiment_kern`, `experiment_apply`, `experiment_undo_apply` |
 | Guarded apply | `agent_apply`, `agent_receipt`, `agent_cancel`, `agent_history` |
