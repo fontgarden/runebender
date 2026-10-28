@@ -8,6 +8,9 @@ import base64
 import hashlib
 from pathlib import Path
 import subprocess
+import sys
+import tempfile
+import uuid
 import tarfile
 import tomllib
 import urllib.request
@@ -47,13 +50,29 @@ def framework():
     if hashlib.sha256(archive.read_bytes()).hexdigest() != config["sha256"]:
         raise RuntimeError(f"Modified Sparkle archive: {archive}")
     extracted = cache / "distribution"
-    if not extracted.exists():
-        # Python's data filter rejects traversal and links escaping the extraction root.
-        extracted.mkdir()
+    if extracted.exists():
+        verified = subprocess.run(
+            ["codesign", "--verify", "--deep", "--strict", str(extracted / "Sparkle.framework")],
+            capture_output=True, text=True,
+        )
+        if verified.returncode == 0:
+            return extracted
+        # Only this generated cache is replaced. Keep the failed tree for diagnosis.
+        rejected = cache / f"distribution-invalid-{uuid.uuid4().hex}"
+        extracted.rename(rejected)
+        print(f"Rebuilding invalid Sparkle cache; retained {rejected}", file=sys.stderr)
+        print(verified.stderr.strip(), file=sys.stderr)
+    # Never publish a partial extraction, including after cancellation or verification failure.
+    with tempfile.TemporaryDirectory(prefix="extract-", dir=cache) as temporary:
+        staging = Path(temporary) / "distribution"
+        staging.mkdir()
         with tarfile.open(archive) as source:
-            source.extractall(extracted, filter="data")
-    bundled = extracted / "Sparkle.framework"
-    subprocess.run(["codesign", "--verify", "--deep", "--strict", str(bundled)], check=True)
+            source.extractall(staging, filter="data")
+        subprocess.run(
+            ["codesign", "--verify", "--deep", "--strict", str(staging / "Sparkle.framework")],
+            check=True,
+        )
+        staging.rename(extracted)
     return extracted
 
 

@@ -1993,7 +1993,11 @@ mod tests {
                 .expect("fixture n top anchor");
             (anchor.id(), anchor.position())
         };
-        let disk = fs::read(crate::testing::fonts::regular_ufo().join("glyphs/n_.glif")).unwrap();
+        let glyphs = crate::testing::fonts::regular_ufo().join("glyphs");
+        let contents: std::collections::BTreeMap<String, PathBuf> =
+            plist::from_file(glyphs.join("contents.plist")).unwrap();
+        let glyph_path = glyphs.join(&contents["n"]);
+        let disk = fs::read(&glyph_path).unwrap();
         project
             .edit_document_layer("n", &layer, |draft| {
                 draft.set_width(width + 12.0).map(|_| ())
@@ -2015,10 +2019,7 @@ mod tests {
         let old = compile(before).unwrap();
         let new = compile(after).unwrap();
         assert_ne!(old.font_sha256(), new.font_sha256());
-        assert_eq!(
-            disk,
-            fs::read(crate::testing::fonts::regular_ufo().join("glyphs/n_.glif")).unwrap()
-        );
+        assert_eq!(disk, fs::read(glyph_path).unwrap());
     }
 
     #[test]

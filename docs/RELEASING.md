@@ -25,12 +25,13 @@ The macOS build number in `release.toml` starts at `1` and must increase for eve
 The public application is initially Apple Silicon only, with a minimum macOS requirement of 12 because the pinned Sparkle framework requires it.
 The minimum OS declaration is not proof of testing on that OS; retain the actual tested OS and hardware with each candidate.
 
-### Preparation status on October 27, 2026
+### Preparation status on October 28, 2026
 
 Apple Developer individual membership is active, and this Mac has a valid Developer ID Application identity with its private key in the login Keychain.
 The `runebender-notary` credential profile has been saved and validated with Apple.
 The first clean candidate at `d887f8deebe88e52903bff21fa758c7d30631fd1` passed app and nested-framework signing and was submitted for notarization.
-Its submission is still pending; signing success alone is not notarization acceptance.
+Apple has accepted that app submission and both later DMG submissions, as verified in notarization history on October 28.
+Those receipts cover earlier source states; the final candidate must be rebuilt and notarized from its own frozen commit.
 That source commit also exposed a missing browser dependency in CI, so the final release must use a corrected commit and artifacts built from that commit.
 The separate Runebender Sparkle archive-signing key has been created in the login Keychain under account `org.runebender.Runebender`.
 Only its public key is stored in `release.toml`; keep the private key and the Apple certificate's private key backed up securely, outside Git.
@@ -87,8 +88,8 @@ Homebrew and crates.io publication are later milestones; this alpha includes the
 | Component | Initial approach | Status |
 | --- | --- | --- |
 | Local macOS packages | `./scripts/build_dmg.sh`, using the temporary icon | Implemented; local test signing |
-| Public macOS packages | Developer ID Application, notarization, stapling | App signing verified; first notarization pending |
-| Release validation | Existing Linux/macOS CI plus installation tests | CI needs repair; manual checklist below |
+| Public macOS packages | Developer ID Application, notarization, stapling | Earlier app and DMG submissions accepted; final candidate pending |
+| Release validation | Existing Linux/macOS CI plus installation tests | CI repairs under validation; manual checklist below |
 | Release orchestration | `scripts/release.py prepare`, `draft`, and `publish` | Implemented; public end-to-end validation pending |
 | Hosting | Versioned GitHub prerelease assets | Publisher implemented; no public alpha yet |
 | Website | `/download.html` reads verified release metadata | Preparation page and empty feed live; downloads unavailable |
@@ -115,9 +116,9 @@ Do not follow a moving branch during packaging or substitute the latest successf
 Record the toolchain, dependency lockfile hash, test-fixture revision, source SHA, architecture, minimum macOS version, icon hash, signing identity, artifact hashes, and validation results.
 The result should be traceable and repeatable; signing timestamps mean that repeated builds need not have identical bytes.
 
-The current package script permits dirty source for local experiments and records that fact in `build-info.json`.
-That receipt is diagnostic information, not a guarantee of an immutable source snapshot or a successful public-release review.
-The planned release wrapper must enforce a clean source snapshot and reject changes detected during a public build.
+The package script permits dirty source for local experiments and records that fact in `build-info.json`.
+Public builds require a clean checkout and reject changes to its source or commit during compilation.
+The receipt establishes artifact provenance; it does not replace installation testing or release review.
 
 ### The release sequence
 
@@ -249,10 +250,11 @@ Submission to Homebrew's main cask repository can come later.
 
 - [x] Build and inspect an icon-bearing local DMG, including copied-app headless smoke checks.
 - [ ] Complete the manual Finder installation and editing checklist.
-- [ ] Repair Linux Clippy and macOS tests, update the browser adapter for the current Xilem pin, and obtain passing checks on the chosen release SHA.
-- [ ] Pin or record the font-fixture revision and make external test dependencies explicit.
+- [ ] Obtain passing supported-platform checks on the chosen release SHA.
+- [x] Pin the font-fixture revision and make external test dependencies explicit in CI.
 - [x] Confirm Apple membership is active.
-- [ ] Install the Developer ID identity and notarization profile, then validate signing, notarization, stapling, and browser-download Gatekeeper behavior.
+- [x] Install the Developer ID identity and notarization profile; validate signing and notarization on earlier candidates.
+- [ ] Repeat signing, notarization, stapling, and browser-download Gatekeeper checks for the final candidate.
 - [x] Implement release commands, numeric bundle versions, clean-source checks, draft upload, and a public manifest.
 - [ ] Validate the complete signed release and two-version update path.
 - [ ] Curate v0.1 notes, verify Linux installation and runtime assets, and decide the tested OS/architecture support matrix.
@@ -262,9 +264,9 @@ Submission to Homebrew's main cask repository can come later.
 Aim the first week at the signed Apple Silicon DMG and a reliable source-install route.
 If Intel hardware, Linux desktop validation, or Apple activation is unavailable, narrow the advertised support or keep the build a test candidate rather than inventing a passing result.
 
-As of October 17, 2026, [CI at `b338d2a`](https://github.com/fontgarden/runebender/actions/runs/39061911415) passes formatting and advisories but fails Linux Clippy and four macOS proof tests that require an unavailable Designbot executable.
-The browser adapter also still expects an older Xilem revision.
-Resolve these dependencies deliberately and preserve meaningful coverage; do not disable failing checks to label the release ready.
+CI installs a pinned Designbot renderer and uses the recorded Virtua fixture revision.
+The October 28 repairs resolve a fixture-specific glyph filename, a reversed dependency in a template test, incomplete Sparkle extraction caches, and a skipped macOS updater lint check.
+The final source SHA still needs its own passing CI run; local success does not substitute for that result.
 Windows diagnostics are separate from the supported-platform release gates.
 
 

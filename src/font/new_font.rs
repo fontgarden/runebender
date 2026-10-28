@@ -118,12 +118,20 @@ mod tests {
     fn canonical_specification_carries_the_template() {
         let specification = specification("Untitled", "Regular", 400).unwrap();
         assert_eq!(specification.glyphs.len(), 324);
-        let core = crate::ui::sidebar::gf_glyphsets()
+        let sets: serde_json::Value =
+            serde_json::from_str(include_str!("../../assets/data/gf-glyphsets.json")).unwrap();
+        let core = sets
+            .as_array()
+            .unwrap()
             .iter()
-            .find(|set| set.id == "GF_Latin_Core")
+            .find(|set| set["id"] == "GF_Latin_Core")
             .expect("bundled GF Latin Core");
-        let expected: std::collections::BTreeSet<_> =
-            core.glyph_names.iter().map(String::as_str).collect();
+        let expected: std::collections::BTreeSet<_> = core["glyphNames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|name| name.as_str().unwrap())
+            .collect();
         let actual: std::collections::BTreeSet<_> = specification
             .glyphs
             .iter()

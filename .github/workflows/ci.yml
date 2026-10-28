@@ -30,7 +30,9 @@ jobs:
       - name: cargo fmt
         run: cargo fmt --all --check
       - name: Release publication gates
-        run: python3 scripts/test_release.py
+        run: |
+          python3 scripts/test_release.py
+          python3 scripts/test_sparkle.py
       - name: Copyright headers
         run: bash .github/scripts/copyright.sh
 
@@ -66,11 +68,14 @@ jobs:
           toolchain: ${{ env.RUST_STABLE_VER }}
           components: clippy
           targets: wasm32-unknown-unknown
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
       - uses: Swatinem/rust-cache@v2
       - name: clippy
         run: cargo clippy --workspace --all-targets --locked
       - name: Check native macOS updater
-        if: runner.os == 'macos-latest'
+        if: runner.os == 'macOS'
         run: |
           SPARKLE_FRAMEWORK_PATH="$(python3 scripts/sparkle.py)" \
             cargo clippy --workspace --all-targets --features macos-updater --locked -- -D warnings
