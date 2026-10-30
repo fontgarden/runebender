@@ -579,6 +579,9 @@ impl Workspace {
                     return false;
                 };
                 self.refresh_changed_glyphs(&change);
+                if crate::application::editor::session::moves_anchors(label) {
+                    self.realign_composites_using(&change);
+                }
                 if !self.reload_canonical_layer(address) {
                     return false;
                 }
@@ -1593,10 +1596,11 @@ mod size_tests {
 
         let mut session = (*app.session).clone();
         let anchor = session.anchor_id_at(0).expect("canonical anchor identity");
-        session.selected_anchor = Some(anchor);
-        session.move_anchor(anchor, 340.0, 560.0);
-        session.move_anchor(anchor, 360.0, 580.0);
-        session.end_anchor_drag();
+        session.selected_anchors = std::collections::HashSet::from([anchor]);
+        session.begin_point_drag();
+        session.drag_points_to((40.0, 60.0), false);
+        session.drag_points_to((60.0, 80.0), false);
+        session.end_point_drag();
         app.sync_session_from(&mut session);
         app.session = Arc::new(session);
         assert_eq!(app.metadata_undo.len(), 1);
@@ -1613,7 +1617,7 @@ mod size_tests {
 
         let mut session = (*app.session).clone();
         let anchor = session.anchor_id_at(0).expect("canonical anchor identity");
-        session.selected_anchor = Some(anchor);
+        session.selected_anchors = std::collections::HashSet::from([anchor]);
         assert!(session.delete_selected_anchor());
         app.sync_session_from(&mut session);
         app.session = Arc::new(session);

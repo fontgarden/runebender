@@ -109,6 +109,12 @@ pub fn realign_component_offsets(components: &[AlignInput], seed: &[(String, Poi
     out
 }
 
+/// The anchors a layer carries itself, as `(name, position)`: what alignment reads from a
+/// component's base glyph.
+pub fn layer_anchors(layer: LayerView<'_>) -> Vec<(String, Point)> {
+    document_anchors(layer)
+}
+
 fn document_anchors(layer: LayerView<'_>) -> Vec<(String, Point)> {
     layer
         .anchors()
@@ -163,6 +169,16 @@ pub fn document_align_inputs<'layer, 'base>(
     layer: LayerView<'layer>,
     mut resolve: impl FnMut(&str) -> Option<LayerView<'base>>,
 ) -> Vec<(ComponentId, AlignInput)> {
+    align_inputs_with(layer, |base| {
+        resolve(base).map(document_anchors).unwrap_or_default()
+    })
+}
+
+/// Alignment inputs with each base glyph's anchors supplied by `base_anchors`.
+fn align_inputs_with(
+    layer: LayerView<'_>,
+    mut base_anchors: impl FnMut(&str) -> Vec<(String, Point)>,
+) -> Vec<(ComponentId, AlignInput)> {
     layer
         .components()
         .map(|component| {
@@ -171,9 +187,7 @@ pub fn document_align_inputs<'layer, 'base>(
             (
                 component.id(),
                 AlignInput {
-                    anchors: resolve(component.reference())
-                        .map(document_anchors)
-                        .unwrap_or_default(),
+                    anchors: base_anchors(component.reference()),
                     offset: Vec2::new(coefficients[4], coefficients[5]),
                     aligned: !component.alignment_disabled(),
                 },
@@ -188,11 +202,25 @@ pub fn document_align_inputs<'layer, 'base>(
 /// remain attached to their stable identities.
 pub fn realign_document_layer<'a>(
     draft: &mut LayerEditDraft,
-    resolve: impl FnMut(&str) -> Option<LayerView<'a>>,
+    mut resolve: impl FnMut(&str) -> Option<LayerView<'a>>,
+    seed_own_anchors: bool,
+) -> Result<bool, DocumentEditError> {
+    realign_document_layer_with(
+        draft,
+        |base| resolve(base).map(document_anchors).unwrap_or_default(),
+        seed_own_anchors,
+    )
+}
+
+/// [`realign_document_layer`] with each base glyph's anchors supplied directly, so an editor
+/// can realign while a drag is in progress, from anchors it captured when the glyph opened.
+pub fn realign_document_layer_with(
+    draft: &mut LayerEditDraft,
+    base_anchors: impl FnMut(&str) -> Vec<(String, Point)>,
     seed_own_anchors: bool,
 ) -> Result<bool, DocumentEditError> {
     let layer = draft.view();
-    let components = document_align_inputs(layer, resolve);
+    let components = align_inputs_with(layer, base_anchors);
     if components.is_empty() {
         return Ok(false);
     }

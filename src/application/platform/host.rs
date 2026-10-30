@@ -2259,8 +2259,10 @@ mod tests {
         assert_eq!(glyph.components[0].transform.y_offset, 470.0);
         workspace.apply_op(|session| {
             let anchor = session.anchor_id_at(0).expect("canonical anchor identity");
-            session.move_anchor(anchor, 400.0, 600.0);
-            session.end_anchor_drag();
+            session.selected_anchors = std::collections::HashSet::from([anchor]);
+            session.begin_point_drag();
+            session.drag_points_to((100.0, 100.0), false);
+            session.end_point_drag();
             true
         });
         let glyph = projected_glyph(&workspace.session);

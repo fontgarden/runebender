@@ -59,7 +59,7 @@ impl Session {
             return false;
         };
         self.selection.clear();
-        self.selected_anchor = None;
+        self.selected_anchors.clear();
         self.selected_component = None;
         self.metaballs.drafts.clear();
         if shift {
@@ -112,7 +112,7 @@ impl Session {
             }
             let mut source = self.metaball_data().map_err(|error| error.to_string())?;
             self.selection.clear();
-            self.selected_anchor = None;
+            self.selected_anchors.clear();
             self.selected_component = None;
             self.metaballs.drafts.clear();
             let group_index = self

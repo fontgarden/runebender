@@ -210,7 +210,7 @@ impl Workspace {
             "layer": address.map(|address| json!({"source_id":address.layer.source.0,"name":address.layer.name})),
             "selection": {
                 "points": points,
-                "anchor": editing.then_some(self.session.selected_anchor).flatten().map(|id| id.to_wire()),
+                "anchor": editing.then(|| self.session.selected_anchor()).flatten().map(|id| id.to_wire()),
                 "component": editing.then_some(self.session.selected_component).flatten().map(|id| id.to_wire()),
                 "overview_glyphs": overview,
             },

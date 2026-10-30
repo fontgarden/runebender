@@ -139,7 +139,6 @@ pub(crate) struct Session {
     sync_rejected: bool,
     active_point_drag: Option<CanonicalPointDrag>,
     active_component_drag: Option<CanonicalComponentDrag>,
-    active_anchor_drag: Option<CanonicalGesture>,
     active_metric_drag: Option<CanonicalGesture>,
     active_metaball_drag: Option<CanonicalGesture>,
     pub metrics: Metrics,
@@ -153,8 +152,11 @@ pub(crate) struct Session {
     pen: Vec<PenPt>,
     /// The stable canonical contour the hyperbezier pen is extending.
     active_hyper_contour: Option<ContourId>,
-    /// The currently selected anchor, if any.
-    pub selected_anchor: Option<AnchorId>,
+    /// Selected anchors. They select, move, nudge and delete with the selected points.
+    pub selected_anchors: HashSet<AnchorId>,
+    /// Anchors of each component base the open glyph places, by base glyph name, so
+    /// anchor-locked components can follow a drag before it is committed.
+    alignment_bases: Arc<HashMap<String, Vec<(String, Point)>>>,
     /// The selected top-level component, if any.
     pub selected_component: Option<ComponentId>,
     /// Last flip or rotation, re-applied by Duplicate + Repeat.
@@ -163,12 +165,20 @@ pub(crate) struct Session {
     pub(crate) host: Option<ComponentHost>,
     /// The root composite's other parts, drawn around the open glyph.
     pub(crate) parts: Arc<Vec<Part>>,
+    /// How the root composite's components align, when the open glyph is one of them.
+    pub(crate) host_alignment: Option<Arc<component_host::HostAlignment>>,
 }
 
 #[derive(Clone)]
 struct CanonicalPointDrag {
     transaction: CanonicalLayerTransaction,
     origins: Vec<(PointId, Point)>,
+    /// Where each selected anchor began.
+    anchor_origins: Vec<(AnchorId, Point)>,
+    /// Components and composite parts as the drag began, which aligned components and parts
+    /// are moved from as the anchors move.
+    component_cache: Vec<runebender::outline::component_ops::ResolvedDocumentComponent>,
+    parts: Arc<Vec<Part>>,
     changed: bool,
     /// Whether on-curve points move without their handles (Option held).
     independent: bool,
@@ -217,7 +227,6 @@ impl Session {
             sync_rejected: false,
             active_point_drag: None,
             active_component_drag: None,
-            active_anchor_drag: None,
             active_metric_drag: None,
             active_metaball_drag: None,
             metaballs: metaballs::MetaballSelection::default(),
@@ -232,11 +241,13 @@ impl Session {
             active_contour: None,
             pen: Vec::new(),
             active_hyper_contour: None,
-            selected_anchor: None,
+            selected_anchors: HashSet::new(),
+            alignment_bases: Arc::default(),
             selected_component: None,
             last_transform: None,
             host: None,
             parts: Arc::default(),
+            host_alignment: None,
         }
     }
 
@@ -277,7 +288,6 @@ impl Session {
             sync_rejected: false,
             active_point_drag: None,
             active_component_drag: None,
-            active_anchor_drag: None,
             active_metric_drag: None,
             active_metaball_drag: None,
             metaballs: metaballs::MetaballSelection::default(),
@@ -292,11 +302,13 @@ impl Session {
             active_contour: None,
             pen: Vec::new(),
             active_hyper_contour: None,
-            selected_anchor: None,
+            selected_anchors: HashSet::new(),
+            alignment_bases: Arc::new(alignment_bases(project, &address)),
             selected_component: None,
             last_transform: None,
             host: None,
             parts: Arc::default(),
+            host_alignment: None,
         };
         session.refresh_placement(project, &address.layer);
         session.refresh_metaball_preview();
@@ -604,11 +616,6 @@ impl Session {
                     .map(|drag| &drag.gesture.transaction)
             })
             .or_else(|| {
-                self.active_anchor_drag
-                    .as_ref()
-                    .map(|drag| &drag.transaction)
-            })
-            .or_else(|| {
                 self.active_metric_drag
                     .as_ref()
                     .map(|drag| &drag.transaction)
@@ -805,12 +812,15 @@ impl Session {
     }
 
     pub(crate) fn select_component(&mut self, index: usize) -> bool {
-        let Some(component) = self.component_cache.get(index) else {
+        let Some(component) = self
+            .component_cache
+            .get(index)
+            .map(|component| component.id)
+        else {
             return false;
         };
-        self.selection.clear();
-        self.selected_anchor = None;
-        self.selected_component = Some(component.id);
+        self.clear_selection();
+        self.selected_component = Some(component);
         true
     }
 
@@ -981,6 +991,7 @@ impl Session {
             return false;
         };
         let canonical_base = project.begin_document_layer_transaction(address).ok();
+        self.alignment_bases = Arc::new(alignment_bases(project, address));
         self.reload_parts(component_cache, canonical_base);
         self.refresh_placement(project, &address.layer);
         true
@@ -1005,7 +1016,6 @@ impl Session {
         self.sync_rejected = false;
         self.active_point_drag = None;
         self.active_component_drag = None;
-        self.active_anchor_drag = None;
         self.active_metric_drag = None;
         self.active_metaball_drag = None;
         self.active_contour = self.active_contour.filter(|active| {
@@ -1024,9 +1034,8 @@ impl Session {
             .into_iter()
             .flat_map(|layer| layer.anchors().map(|anchor| anchor.id()))
             .collect();
-        self.selected_anchor = self
-            .selected_anchor
-            .filter(|selected| anchors.contains(selected));
+        self.selected_anchors
+            .retain(|selected| anchors.contains(selected));
         self.prune_selection();
     }
 
@@ -1055,9 +1064,19 @@ impl Session {
         else {
             return;
         };
+        let anchor_origins = transaction
+            .draft()
+            .view()
+            .anchors()
+            .filter(|anchor| self.selected_anchors.contains(&anchor.id()))
+            .map(|anchor| (anchor.id(), anchor.position()))
+            .collect();
         self.active_point_drag = Some(CanonicalPointDrag {
             transaction,
             origins,
+            anchor_origins,
+            component_cache: self.component_cache.clone(),
+            parts: self.parts.clone(),
             changed: false,
             independent: false,
         });
@@ -1083,7 +1102,7 @@ impl Session {
             drag.independent = independent;
         }
         let selected: Vec<_> = self.selection.iter().copied().collect();
-        let Ok(changed) = drag.transaction.draft_mut().translate_points(
+        let Ok(mut changed) = drag.transaction.draft_mut().translate_points(
             &selected,
             &drag.origins,
             kurbo::Vec2::new(total.0, total.1),
@@ -1091,8 +1110,64 @@ impl Session {
         ) else {
             return false;
         };
+        for (id, origin) in &drag.anchor_origins {
+            let to = Point::new((origin.x + total.0).round(), (origin.y + total.1).round());
+            let Ok(moved) = drag.transaction.draft_mut().set_anchor_position(*id, to) else {
+                return false;
+            };
+            changed |= moved;
+        }
         drag.changed |= changed;
+        if changed && !drag.anchor_origins.is_empty() {
+            self.follow_moved_anchors();
+        }
         changed
+    }
+
+    /// Move the anchor-locked components after the anchors moved in a point drag: this glyph's
+    /// own components, and the other parts of the composite it is open in.
+    fn follow_moved_anchors(&mut self) {
+        let Some(drag) = &mut self.active_point_drag else {
+            return;
+        };
+        let bases = self.alignment_bases.clone();
+        let realigned = runebender::font::composites::realign_document_layer_with(
+            drag.transaction.draft_mut(),
+            |base| bases.get(base).cloned().unwrap_or_default(),
+            true,
+        );
+        if realigned.is_ok() && !drag.component_cache.is_empty() {
+            let before: HashMap<ComponentId, kurbo::Vec2> = self
+                .canonical_base
+                .as_ref()
+                .map(|base| component_offsets(base.draft().view()))
+                .unwrap_or_default();
+            let now = component_offsets(drag.transaction.draft().view());
+            self.component_cache = drag
+                .component_cache
+                .iter()
+                .cloned()
+                .map(|mut component| {
+                    let delta = now.get(&component.id).copied().unwrap_or_default()
+                        - before.get(&component.id).copied().unwrap_or_default();
+                    if delta != kurbo::Vec2::ZERO {
+                        component.path = kurbo::Affine::translate(delta) * component.path;
+                    }
+                    component
+                })
+                .collect();
+            self.components = combined_component_path(&self.component_cache);
+        }
+        if let Some(alignment) = &self.host_alignment {
+            let own: Vec<_> = drag
+                .transaction
+                .draft()
+                .view()
+                .anchors()
+                .map(|anchor| (anchor.name().to_owned(), anchor.position()))
+                .collect();
+            self.parts = Arc::new(alignment.follow(&own, &drag.parts));
+        }
     }
 
     pub(crate) fn end_point_drag(&mut self) {
@@ -1100,14 +1175,43 @@ impl Session {
             && drag.changed
         {
             self.pending_canonical = Some(drag.transaction);
-            self.pending_canonical_label = Some("point drag");
+            // An anchor drag realigns this glyph's components again when it commits.
+            self.pending_canonical_label = Some(if drag.anchor_origins.is_empty() {
+                "point drag"
+            } else {
+                "anchor drag"
+            });
         }
         self.in_drag = false;
     }
 
     pub(crate) fn cancel_point_drag(&mut self) {
-        self.active_point_drag = None;
+        if let Some(drag) = self.active_point_drag.take() {
+            self.component_cache = drag.component_cache;
+            self.components = combined_component_path(&self.component_cache);
+            self.parts = drag.parts;
+        }
         self.in_drag = false;
+    }
+
+    /// The one selected anchor, when exactly one is selected.
+    pub(crate) fn selected_anchor(&self) -> Option<AnchorId> {
+        let mut anchors = self.selected_anchors.iter();
+        match (anchors.next(), anchors.next()) {
+            (Some(only), None) => Some(*only),
+            _ => None,
+        }
+    }
+
+    /// Clear the point and anchor selection together.
+    pub(crate) fn clear_selection(&mut self) {
+        self.selection.clear();
+        self.selected_anchors.clear();
+    }
+
+    /// Whether any point or anchor is selected.
+    pub(crate) fn has_selection(&self) -> bool {
+        !self.selection.is_empty() || !self.selected_anchors.is_empty()
     }
 
     /// Switch one on-curve point between corner and smooth. An off-curve point is unchanged.
@@ -1146,12 +1250,42 @@ impl Session {
                 )
             });
         }
-        if self.selection.is_empty() {
+        if !self.has_selection() {
             return false;
         }
         let selection = self.selected_point_ids();
-        self.stage_canonical_edit("nudge points", |draft| {
-            draft.translate_points(&selection, &[], kurbo::Vec2::new(dx, dy), independent)
+        let anchors = self.selected_anchors.clone();
+        let bases = self.alignment_bases.clone();
+        let label = if anchors.is_empty() {
+            "nudge points"
+        } else {
+            "nudge anchors"
+        };
+        self.stage_canonical_edit(label, |draft| {
+            let mut changed = !selection.is_empty()
+                && draft.translate_points(
+                    &selection,
+                    &[],
+                    kurbo::Vec2::new(dx, dy),
+                    independent,
+                )?;
+            let moved: Vec<_> = draft
+                .view()
+                .anchors()
+                .filter(|anchor| anchors.contains(&anchor.id()))
+                .map(|anchor| (anchor.id(), anchor.position() + kurbo::Vec2::new(dx, dy)))
+                .collect();
+            for (id, to) in moved {
+                changed |= draft.set_anchor_position(id, to)?;
+            }
+            if !anchors.is_empty() {
+                runebender::font::composites::realign_document_layer_with(
+                    draft,
+                    |base| bases.get(base).cloned().unwrap_or_default(),
+                    true,
+                )?;
+            }
+            Ok(changed)
         })
     }
 
@@ -1165,14 +1299,25 @@ impl Session {
             }
             return changed;
         }
-        if self.selection.is_empty() {
+        if !self.has_selection() {
             return false;
         }
         let selection = self.selected_point_ids();
-        let changed =
-            self.stage_canonical_edit("delete points", |draft| draft.delete_points(&selection));
+        let anchors: Vec<_> = self.selected_anchors.iter().copied().collect();
+        let label = if anchors.is_empty() {
+            "delete points"
+        } else {
+            "delete anchor"
+        };
+        let changed = self.stage_canonical_edit(label, |draft| {
+            let mut changed = !selection.is_empty() && draft.delete_points(&selection)?;
+            for id in &anchors {
+                changed |= draft.remove_anchor(*id)?;
+            }
+            Ok(changed)
+        });
         if changed {
-            self.selection.clear();
+            self.clear_selection();
         }
         changed
     }
@@ -1275,7 +1420,7 @@ impl Session {
             return false;
         }
         self.selection = next;
-        self.selected_anchor = None;
+        self.selected_anchors.clear();
         true
     }
 
@@ -1985,72 +2130,16 @@ impl Session {
         else {
             return;
         };
-        self.selected_anchor = Some(anchor);
+        self.selection.clear();
+        self.selected_anchors = HashSet::from([anchor]);
         self.pending_canonical = Some(transaction);
         self.pending_canonical_label = Some("add anchor");
     }
 
-    pub(crate) fn move_anchor(&mut self, id: AnchorId, x: f64, y: f64) {
-        let Some(anchor) = self.current_layer().and_then(|layer| {
-            layer
-                .anchors()
-                .find(|candidate| candidate.id() == id)
-                .map(|anchor| anchor.position())
-        }) else {
-            return;
-        };
-        if !x.is_finite() || !y.is_finite() || (anchor.x == x && anchor.y == y) {
-            return;
-        }
-        if self.active_anchor_drag.is_none() {
-            let Some(transaction) = self.canonical_base.clone() else {
-                return;
-            };
-            self.active_anchor_drag = Some(CanonicalGesture {
-                transaction,
-                changed: false,
-            });
-            self.in_drag = true;
-        }
-        let drag = self.active_anchor_drag.as_mut().expect("initialized");
-        let Ok(changed) = drag
-            .transaction
-            .draft_mut()
-            .set_anchor_position(id, Point::new(x, y))
-        else {
-            return;
-        };
-        drag.changed |= changed;
-    }
-
-    pub(crate) fn end_anchor_drag(&mut self) {
-        if let Some(drag) = self.active_anchor_drag.take()
-            && drag.changed
-        {
-            self.pending_canonical = Some(drag.transaction);
-            self.pending_canonical_label = Some("anchor drag");
-        }
-        self.in_drag = false;
-    }
-
-    pub(crate) fn cancel_anchor_drag(&mut self) {
-        self.active_anchor_drag = None;
-        self.in_drag = false;
-    }
-
+    #[cfg(test)]
     pub(crate) fn delete_selected_anchor(&mut self) -> bool {
-        let Some(id) = self.selected_anchor.take() else {
-            return false;
-        };
-        let Some(mut transaction) = self.canonical_base.clone() else {
-            return false;
-        };
-        if transaction.draft_mut().remove_anchor(id) != Ok(true) {
-            return false;
-        }
-        self.pending_canonical = Some(transaction);
-        self.pending_canonical_label = Some("delete anchor");
-        true
+        self.selection.clear();
+        self.delete_selected()
     }
 
     /// Continuity of every on-curve node: corner, kink, G1, G2, G3.
@@ -2145,7 +2234,48 @@ impl Session {
     pub(crate) fn select_all(&mut self) {
         self.selected_component = None;
         self.selection = self.points().into_iter().map(|p| p.id).collect();
+        self.selected_anchors = self.anchor_points().into_iter().map(|(id, _)| id).collect();
     }
+}
+
+/// Whether an edit with this history label can move anchors, so anchor-locked components
+/// must be realigned when it commits or replays.
+pub(crate) fn moves_anchors(label: &str) -> bool {
+    matches!(
+        label,
+        "add anchor" | "anchor drag" | "nudge anchors" | "delete anchor"
+    )
+}
+
+/// Each component's translation in a layer, by stable identity.
+fn component_offsets(layer: LayerView<'_>) -> HashMap<ComponentId, kurbo::Vec2> {
+    layer
+        .components()
+        .map(|component| {
+            let c = component.transform().as_coeffs();
+            (component.id(), kurbo::Vec2::new(c[4], c[5]))
+        })
+        .collect()
+}
+
+/// The anchors of every glyph the addressed layer places as a component, by glyph name.
+fn alignment_bases(
+    project: &runebender::font::project::Project,
+    address: &runebender::font::variable::GlyphLayerAddress,
+) -> HashMap<String, Vec<(String, Point)>> {
+    let Some(layer) = project.document_layer(&address.glyph, &address.layer) else {
+        return HashMap::new();
+    };
+    layer
+        .components()
+        .filter_map(|component| {
+            let base = project.document_layer(component.reference(), &address.layer)?;
+            Some((
+                component.reference().to_owned(),
+                runebender::font::composites::layer_anchors(base),
+            ))
+        })
+        .collect()
 }
 
 pub(crate) fn resolved_document_components(
@@ -2465,7 +2595,7 @@ impl Workspace {
                 .take()
                 .unwrap_or("canonical editor edit");
             let address = transaction.address().clone();
-            let alignment = if matches!(label, "add anchor" | "anchor drag" | "delete anchor") {
+            let alignment = if moves_anchors(label) {
                 let layer = address.layer.clone();
                 let project = &self.font.project;
                 runebender::font::composites::realign_document_layer(
@@ -2488,6 +2618,9 @@ impl Workspace {
                     // The grid, rail, previews and text inputs read cached glyph entries,
                     // not the project, so refresh this glyph and the composites using it.
                     self.refresh_changed_glyphs(&change);
+                    if moves_anchors(label) {
+                        self.realign_composites_using(&change);
+                    }
                     let layer_history_depth = self.font.project.document_layer_history_depth(
                         &address,
                         runebender::font::history::HistoryDirection::Undo,
@@ -2545,6 +2678,39 @@ impl Workspace {
         self.refresh_metric_bufs();
         self.selected_points = self.session.selection.len();
         outcome
+    }
+
+    /// Realign the anchor-locked components of the composites that place a glyph whose anchors
+    /// just moved, as Glyphs keeps them aligned.
+    ///
+    /// Each composite that moves commits as its own step in its layer's history. Undoing the
+    /// anchor edit realigns them again, back to where the anchors are now.
+    pub(crate) fn realign_composites_using(
+        &mut self,
+        change: &runebender::font::project::DocumentChange,
+    ) {
+        for address in change.dependent_layers() {
+            let Ok(mut transaction) = self.font.project.begin_document_layer_transaction(address)
+            else {
+                continue;
+            };
+            let project = &self.font.project;
+            let realigned = runebender::font::composites::realign_document_layer(
+                transaction.draft_mut(),
+                |name| project.document_layer(name, &address.layer),
+                true,
+            );
+            if realigned != Ok(true) {
+                continue;
+            }
+            if let Ok(runebender::font::project::DocumentEditOutcome::Changed { change, .. }) = self
+                .font
+                .project
+                .commit_document_layer_transaction(transaction)
+            {
+                self.refresh_changed_glyphs(&change);
+            }
+        }
     }
 
     /// Rebase the open transitional session after a canonical layer commit or replay.
@@ -3216,28 +3382,23 @@ mod tests {
         let mut session = Session::new(&font, "test").expect("glyph is there");
         let anchor = session.anchor_id_at(0).expect("canonical anchor identity");
 
-        session.selected_anchor = Some(anchor);
-        session.move_anchor(anchor, 120.0, 220.0);
-        session.cancel_anchor_drag();
+        // A selected anchor drags through the same gesture as points.
+        session.selected_anchors = HashSet::from([anchor]);
+        session.begin_point_drag();
+        session.drag_points_to((20.0, 20.0), false);
+        session.cancel_point_drag();
         assert_eq!(session.anchor_points()[0].1, Point::new(100.0, 200.0));
         assert!(session.pending_canonical.is_none());
 
-        session.move_anchor(anchor, 120.0, 220.0);
-        session.move_anchor(anchor, 140.0, 240.0);
+        session.begin_point_drag();
+        session.drag_points_to((20.0, 20.0), false);
+        session.drag_points_to((40.0, 40.0), false);
         assert!(session.gesture_in_progress());
-        let draft = session
-            .active_anchor_drag
-            .as_ref()
-            .expect("owned anchor transaction")
-            .transaction
-            .draft();
-        assert_eq!(
-            draft.view().anchors().next().unwrap().position(),
-            Point::new(140.0, 240.0)
-        );
-        session.end_anchor_drag();
+        assert_eq!(session.anchor_points()[0].1, Point::new(140.0, 240.0));
+        session.end_point_drag();
         assert!(!session.gesture_in_progress());
         assert!(session.pending_canonical.is_some());
+        assert_eq!(session.pending_canonical_label, Some("anchor drag"));
 
         session.pending_canonical = None;
         session.drag_advance(520.0);
@@ -3249,7 +3410,9 @@ mod tests {
         assert_eq!(session.advance(), 540.0);
 
         session.pending_canonical = None;
-        session.move_anchor(anchor, f64::NAN, 10.0);
+        session.begin_point_drag();
+        session.drag_points_to((f64::NAN, 10.0), false);
+        session.end_point_drag();
         session.drag_advance(f64::INFINITY);
         assert!(session.pending_canonical.is_none());
     }

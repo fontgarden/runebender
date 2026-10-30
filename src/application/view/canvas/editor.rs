@@ -20,7 +20,7 @@ use masonry::kurbo;
 use masonry::kurbo::{Affine, Axis, Circle, Line, Point, Rect, Shape as _, Size, Stroke};
 use masonry::layout::{LenReq, Length};
 use masonry::peniko::{Blob, ImageAlphaType, ImageData, ImageFormat};
-use runebender::font::{AnchorId, ComponentId, ContourId, PointId};
+use runebender::font::{ComponentId, ContourId, PointId};
 use xilem::core::{MessageCtx, MessageResult, Mut, View, ViewMarker};
 use xilem::{Pod, ViewCtx};
 
@@ -568,10 +568,6 @@ enum Drag {
     Shape {
         start: Point,
         current: Point,
-    },
-    /// Dragging an anchor by stable document identity.
-    Anchor {
-        id: AnchorId,
     },
     /// Dragging one top-level component; `last` is in design space.
     Component {
@@ -2531,7 +2527,7 @@ impl Widget for EditorWidget {
             let anchor_color = pal.mark("pink").unwrap_or_else(|| pal.role("danger"));
             for (anchor, position) in self.session.anchor_points() {
                 let p = affine * position;
-                let selected = self.session.selected_anchor == Some(anchor);
+                let selected = self.session.selected_anchors.contains(&anchor);
                 let (ring, inner) = if selected {
                     (
                         pal.point_outline.unwrap_or(pal.text),
@@ -3426,21 +3422,29 @@ impl Widget for EditorWidget {
                                 return;
                             }
                         }
-                        // Anchor hit takes priority over points.
+                        // An anchor selects and drags like a point, and wins over a point
+                        // under it.
                         if let Some(anchor) = self.session.anchor_at(
                             self.screen_to_glyph_design(at),
                             HIT_RADIUS_PX / self.session.viewport.zoom,
                         ) {
                             self.session.metaballs.selected.clear();
-                            self.session.selected_anchor = Some(anchor);
+                            self.session.image_selected = false;
                             self.session.selected_component = None;
-                            self.session.selection.clear();
-                            self.drag = Drag::Anchor { id: anchor };
+                            if shift {
+                                if !self.session.selected_anchors.remove(&anchor) {
+                                    self.session.selected_anchors.insert(anchor);
+                                }
+                            } else if !self.session.selected_anchors.contains(&anchor) {
+                                self.session.clear_selection();
+                                self.session.selected_anchors.insert(anchor);
+                            }
+                            self.session.begin_point_drag();
+                            self.drag = Drag::Points { start: at };
                             self.emit(ctx, false);
                             ctx.set_handled();
                             return;
                         }
-                        self.session.selected_anchor = None;
                         // Option-click on a segment gives it two curve handles, as in Glyphs.
                         if self.tool == Tool::Select
                             && state.modifiers.alt()
@@ -3480,7 +3484,7 @@ impl Widget for EditorWidget {
                                         self.session.selection.insert(id);
                                     }
                                 } else if !self.session.selection.contains(&id) {
-                                    self.session.selection.clear();
+                                    self.session.clear_selection();
                                     self.session.selection.insert(id);
                                 }
                                 self.session.selected_component = None;
@@ -3500,7 +3504,7 @@ impl Widget for EditorWidget {
                                 }
                                 if !shift && let Some(drag) = self.image_press(design) {
                                     self.session.metaballs.selected.clear();
-                                    self.session.selection.clear();
+                                    self.session.clear_selection();
                                     self.session.selected_component = None;
                                     self.session.image_selected = true;
                                     self.drag = drag;
@@ -3511,7 +3515,7 @@ impl Widget for EditorWidget {
                                 }
                                 if !shift {
                                     self.session.metaballs.selected.clear();
-                                    self.session.selection.clear();
+                                    self.session.clear_selection();
                                     self.session.selected_component = None;
                                     self.session.image_selected = false;
                                     self.emit(ctx, false);
@@ -3625,12 +3629,6 @@ impl Widget for EditorWidget {
                             self.session.shift_glyph(dx);
                             ctx.request_render();
                         }
-                    }
-                    Drag::Anchor { id } => {
-                        let id = *id;
-                        let d = glyph_design;
-                        self.session.move_anchor(id, d.x.round(), d.y.round());
-                        ctx.request_render();
                     }
                     Drag::Component { last } => {
                         let design = glyph_design;
@@ -3819,17 +3817,23 @@ impl Widget for EditorWidget {
                         let rect = Rect::from_points(*start, *current);
                         let additive = *additive;
                         if !additive {
-                            self.session.selection.clear();
+                            self.session.clear_selection();
                         }
                         for (id, sp, _, _, _) in self.screen_points() {
                             if rect.contains(sp) {
                                 self.session.selection.insert(id);
                             }
                         }
+                        let affine = self.glyph_affine();
+                        for (id, position) in self.session.anchor_points() {
+                            if rect.contains(affine * position) {
+                                self.session.selected_anchors.insert(id);
+                            }
+                        }
                         // A locked picture cannot be moved, so a drag over it is a marquee;
                         // a click on it still selects it, to inspect or unlock it.
                         let clicked = rect.width().max(rect.height()) < 3.0;
-                        if clicked && !additive && self.session.selection.is_empty() {
+                        if clicked && !additive && !self.session.has_selection() {
                             let design = self.screen_to_glyph_design(*start);
                             self.session.image_selected =
                                 self.image_frame(true).is_some_and(|(t, w, h)| {
@@ -3931,23 +3935,26 @@ impl Widget for EditorWidget {
                                     .into_iter()
                                     .collect()
                             };
+                            let affine = self.glyph_affine();
+                            let anchors: Vec<_> = if points.len() >= 3 {
+                                self.session
+                                    .anchor_points()
+                                    .into_iter()
+                                    .filter(|(_, position)| path.winding(affine * *position) != 0)
+                                    .map(|(id, _)| id)
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            };
                             if !additive {
-                                self.session.selection.clear();
+                                self.session.clear_selection();
                             }
                             self.session.selection.extend(chosen);
+                            self.session.selected_anchors.extend(anchors);
                             self.emit(ctx, false);
                         }
                         self.drag = Drag::None;
                         ctx.request_render();
-                    }
-                    Drag::Anchor { .. } => {
-                        if cancelled {
-                            self.session.cancel_anchor_drag();
-                        } else {
-                            self.session.end_anchor_drag();
-                        }
-                        self.drag = Drag::None;
-                        self.emit(ctx, !cancelled);
                     }
                     Drag::AdvanceLine | Drag::LeftLine { .. } => {
                         if cancelled {
@@ -4238,8 +4245,7 @@ impl Widget for EditorWidget {
         let edits_metaballs = self.tool == Tool::Metaball
             || (self.tool == Tool::Select
                 && !self.session.metaballs.selected.is_empty()
-                && self.session.selection.is_empty()
-                && self.session.selected_anchor.is_none()
+                && !self.session.has_selection()
                 && self.session.selected_component.is_none());
         if edits_metaballs && self.field.is_none() {
             let mut edited = false;
@@ -4436,11 +4442,7 @@ impl Widget for EditorWidget {
                 (false, true)
             }
             Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace) => {
-                if self.session.selected_anchor.is_some() {
-                    (self.session.delete_selected_anchor(), true)
-                } else {
-                    (self.session.delete_selected(), true)
-                }
+                (self.session.delete_selected(), true)
             }
             Key::Character(c) if cmd && c.eq_ignore_ascii_case("a") => {
                 self.session.select_all();
@@ -4777,7 +4779,7 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
             // A press on another part's point opened that part: keep the press going as a
             // drag of the point it selected.
             if let Drag::Enter { start } = element.widget.drag {
-                element.widget.drag = if element.widget.session.selection.is_empty() {
+                element.widget.drag = if !element.widget.session.has_selection() {
                     Drag::None
                 } else {
                     element.widget.session.begin_point_drag();
@@ -5765,6 +5767,105 @@ mod tests {
         assert_eq!(point, Some(expected));
         harness.edit_root_widget(|root| {
             assert!(matches!(root.widget.drag, Drag::Enter { .. }));
+        });
+    }
+
+    /// The fixture square with a `top` anchor above it.
+    fn anchored_widget() -> EditorWidget {
+        let mut font = norad::Font::new();
+        let mut glyph = projected_square();
+        glyph.anchors.push(norad::Anchor::new(
+            200.0,
+            600.0,
+            norad::Name::new("top").ok(),
+            None,
+            None,
+        ));
+        font.default_layer_mut().insert_glyph(glyph);
+        let mut editor = widget();
+        editor.session = Session::new(&font, "A").expect("the glyph is there");
+        editor
+    }
+
+    fn projected_square() -> norad::Glyph {
+        let mut glyph = norad::Glyph::new("A");
+        glyph.width = 500.0;
+        let mut contour = norad::Contour::default();
+        for (x, y) in [(0.0, 0.0), (400.0, 0.0), (400.0, 700.0), (0.0, 700.0)] {
+            contour.points.push(norad::ContourPoint::new(
+                x,
+                y,
+                norad::PointType::Line,
+                false,
+                None,
+                None,
+            ));
+        }
+        glyph.contours.push(contour);
+        glyph
+    }
+
+    #[test]
+    fn anchors_select_and_move_with_points() {
+        let mut harness = TestHarness::create_with_size(
+            default_property_set(),
+            anchored_widget().prepare(),
+            (600, 400),
+        );
+        let (anchor_at, point_at, anchor, point) = harness.edit_root_widget(|root| {
+            let affine = root.widget.glyph_affine();
+            let (anchor, position) = root.widget.session.anchor_points()[0];
+            let point = root.widget.session.points()[0];
+            (affine * position, affine * point.point, anchor, point.id)
+        });
+
+        // A click selects the anchor alone, and a click on a point lets go of it.
+        harness.mouse_move(anchor_at);
+        harness.mouse_button_press(Some(PointerButton::Primary));
+        harness.mouse_button_release(Some(PointerButton::Primary));
+        harness.edit_root_widget(|root| {
+            assert!(root.widget.session.selected_anchors.contains(&anchor));
+            assert!(root.widget.session.selection.is_empty());
+        });
+        harness.mouse_move(point_at);
+        harness.mouse_button_press(Some(PointerButton::Primary));
+        harness.mouse_button_release(Some(PointerButton::Primary));
+        harness.edit_root_widget(|root| {
+            assert!(root.widget.session.selected_anchors.is_empty());
+            assert!(root.widget.session.selection.contains(&point));
+            // Shift-click is the same toggle as for points; select both directly.
+            root.widget.session.selected_anchors.insert(anchor);
+        });
+
+        // Dragging the anchor carries the point by the same amount.
+        harness.mouse_move(anchor_at);
+        harness.mouse_button_press(Some(PointerButton::Primary));
+        harness.mouse_move(anchor_at + kurbo::Vec2::new(40.0, 0.0));
+        harness.edit_root_widget(|root| {
+            let moved_anchor = root.widget.session.anchor_points()[0].1;
+            let moved_point = root.widget.session.points()[0].point;
+            let anchor_dx = moved_anchor.x - 200.0;
+            assert!(anchor_dx > 0.0, "the anchor follows the pointer");
+            assert!((moved_point.x - anchor_dx).abs() <= 1.0, "{moved_point:?}");
+        });
+        harness.mouse_button_release(Some(PointerButton::Primary));
+
+        // A marquee around the anchor alone selects it alone.
+        harness.edit_root_widget(|root| root.widget.session.clear_selection());
+        let (from, to) = harness.edit_root_widget(|root| {
+            let at = root.widget.glyph_affine() * root.widget.session.anchor_points()[0].1;
+            (
+                at - kurbo::Vec2::new(15.0, 15.0),
+                at + kurbo::Vec2::new(15.0, 15.0),
+            )
+        });
+        harness.mouse_move(from);
+        harness.mouse_button_press(Some(PointerButton::Primary));
+        harness.mouse_move(to);
+        harness.mouse_button_release(Some(PointerButton::Primary));
+        harness.edit_root_widget(|root| {
+            assert!(root.widget.session.selected_anchors.contains(&anchor));
+            assert!(root.widget.session.selection.is_empty());
         });
     }
 

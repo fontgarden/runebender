@@ -17,7 +17,7 @@ use crate::application::platform::host;
 use crate::application::workspace::{MetadataEdit, Mode, Tab, TextContext, Workspace};
 use std::sync::Arc;
 
-use masonry::kurbo::{Affine, BezPath, Line, Point};
+use masonry::kurbo::{Affine, BezPath, Line, Point, Vec2};
 use runebender::font::project::Project;
 use runebender::font::variable::LayerId;
 use runebender::font::{ComponentId, LayerPointType, LayerView, PointId};
@@ -60,6 +60,114 @@ pub(crate) struct Part {
     pub points: Vec<PointView>,
     /// Lines from off-curve handles to their on-curve points.
     pub handles: Vec<Line>,
+}
+
+/// How the root composite's components align when the open glyph is one of them, so the other
+/// parts can follow the open glyph's anchors during a drag, before the edit commits.
+#[derive(Clone, Debug)]
+pub(crate) struct HostAlignment {
+    /// The root component the session edits.
+    entered: ComponentId,
+    /// The root composite's own anchors.
+    seed: Vec<(String, Point)>,
+    /// Each root component, in order.
+    components: Vec<AlignedComponent>,
+}
+
+/// One root component as alignment sees it.
+#[derive(Clone, Debug)]
+struct AlignedComponent {
+    id: ComponentId,
+    /// The base glyph's anchors.
+    anchors: Vec<(String, Point)>,
+    offset: Vec2,
+    /// Whether it follows its anchor.
+    aligned: bool,
+}
+
+impl HostAlignment {
+    fn of(project: &Project, layer: &LayerId, root: LayerView<'_>, entered: ComponentId) -> Self {
+        Self {
+            entered,
+            seed: runebender::font::composites::layer_anchors(root),
+            components: root
+                .components()
+                .map(|component| {
+                    let c = component.transform().as_coeffs();
+                    AlignedComponent {
+                        id: component.id(),
+                        anchors: project
+                            .document_layer(component.reference(), layer)
+                            .map(runebender::font::composites::layer_anchors)
+                            .unwrap_or_default(),
+                        offset: Vec2::new(c[4], c[5]),
+                        aligned: !component.alignment_disabled(),
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    /// `parts` with each anchor-locked component moved to where it aligns when the open
+    /// glyph carries `anchors`.
+    pub(crate) fn follow(&self, anchors: &[(String, Point)], parts: &[Part]) -> Vec<Part> {
+        use runebender::font::composites::{AlignInput, realign_component_offsets};
+        let inputs: Vec<AlignInput> = self
+            .components
+            .iter()
+            .map(|component| AlignInput {
+                anchors: if component.id == self.entered {
+                    anchors.to_vec()
+                } else {
+                    component.anchors.clone()
+                },
+                offset: component.offset,
+                aligned: component.aligned,
+            })
+            .collect();
+        let placed = realign_component_offsets(&inputs, &self.seed);
+        let deltas: Vec<(ComponentId, Vec2)> = self
+            .components
+            .iter()
+            .zip(placed)
+            .filter(|(component, _)| component.id != self.entered)
+            .map(|(component, placed)| (component.id, placed - component.offset))
+            .filter(|(_, delta)| *delta != Vec2::ZERO)
+            .collect();
+        parts
+            .iter()
+            .map(|part| {
+                let delta = deltas
+                    .iter()
+                    .find(|(id, _)| part.owner == PartOwner::Component(*id))
+                    .map(|(_, delta)| *delta);
+                match delta {
+                    Some(delta) => part.translated(delta),
+                    None => part.clone(),
+                }
+            })
+            .collect()
+    }
+}
+
+impl Part {
+    fn translated(&self, delta: Vec2) -> Self {
+        let shift = Affine::translate(delta);
+        Self {
+            owner: self.owner,
+            glyph: self.glyph.clone(),
+            outline: shift * self.outline.clone(),
+            points: self
+                .points
+                .iter()
+                .map(|point| PointView {
+                    point: point.point + delta,
+                    ..*point
+                })
+                .collect(),
+            handles: self.handles.iter().map(|line| shift * *line).collect(),
+        }
+    }
 }
 
 /// Points of a layer's own contours, mapped by `transform`.
@@ -110,6 +218,8 @@ struct Placement {
     transform: Affine,
     advance: f64,
     parts: Vec<Part>,
+    /// The root's alignment, when the open glyph is one of its own components.
+    alignment: Option<HostAlignment>,
 }
 
 /// Follow `chain` down from `root` in one layer and collect the parts around the open glyph.
@@ -124,6 +234,10 @@ fn place(
     let resolve = |glyph: &str| project.document_layer(glyph, layer);
     let root_layer = resolve(root)?;
     let advance = root_layer.width();
+    let alignment = match chain {
+        [entered] => Some(HostAlignment::of(project, layer, root_layer, *entered)),
+        _ => None,
+    };
     let mut parts = Vec::new();
     let mut glyph = root.to_owned();
     let mut transform = Affine::IDENTITY;
@@ -184,6 +298,7 @@ fn place(
         transform,
         advance,
         parts,
+        alignment,
     })
 }
 
@@ -253,6 +368,7 @@ impl Session {
             }
             _ => {
                 self.host = None;
+                self.host_alignment = None;
                 self.parts = place(project, layer, &self.glyph_name.clone(), &[])
                     .map(|placement| Arc::new(placement.parts))
                     .unwrap_or_default();
@@ -268,6 +384,7 @@ impl Session {
             advance: placement.advance,
         });
         self.parts = Arc::new(placement.parts);
+        self.host_alignment = placement.alignment.map(Arc::new);
     }
 
     /// The glyph the text line shows for this session: the root composite, or the glyph.
@@ -622,5 +739,98 @@ mod tests {
         assert_eq!(app.tabs.len(), tabs + 1);
         assert_eq!(app.session.glyph_name, "dot");
         assert!(app.session.host.is_none());
+    }
+
+    /// `beh` is a body with a `bottom` anchor and a dot aligned to it by `_bottom`.
+    fn anchored_workspace(name: &str) -> Workspace {
+        let path = std::env::temp_dir().join(format!(
+            "runebender-component-anchor-{name}-{}-{}.ufo",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("the system clock is after the Unix epoch")
+                .as_nanos(),
+        ));
+        let anchor = |name: &str, x: f64, y: f64| {
+            norad::Anchor::new(x, y, norad::Name::new(name).ok(), None, None)
+        };
+        let mut font = norad::Font::new();
+        let layer = font.default_layer_mut();
+        let mut body = square("dotless", 0.0, 0.0, 400.0);
+        body.anchors.push(anchor("bottom", 200.0, -50.0));
+        layer.insert_glyph(body);
+        let mut dot = square("dot", 0.0, 0.0, 100.0);
+        dot.anchors.push(anchor("_bottom", 50.0, 100.0));
+        layer.insert_glyph(dot);
+        let mut beh = norad::Glyph::new("beh");
+        beh.width = 500.0;
+        beh.components.push(component("dotless", 0.0, 0.0));
+        beh.components.push(component("dot", 150.0, -150.0));
+        layer.insert_glyph(beh);
+        font.save(&path).expect("the fixture saves");
+        let mut app = Workspace::open(&path).expect("the fixture opens");
+        app.open_glyph(app.font.index_of("beh").expect("beh exists"));
+        app
+    }
+
+    fn dot_offset(app: &Workspace) -> (f64, f64) {
+        let address = app.font.active_layer_address("beh").expect("beh layer");
+        let layer = app
+            .font
+            .project
+            .document_layer(&address.glyph, &address.layer)
+            .expect("layer view");
+        let c = layer
+            .components()
+            .nth(1)
+            .expect("the dot")
+            .transform()
+            .as_coeffs();
+        (c[4], c[5])
+    }
+
+    #[test]
+    fn dragging_an_anchor_in_place_moves_the_aligned_dot_live_and_on_release() {
+        let mut app = anchored_workspace("drag");
+        let body = component_id(&app, 0);
+        app.enter_component(body);
+        assert_eq!(app.session.glyph_name, "dotless");
+        let mut session = (*app.session).clone();
+        let anchor = session.anchor_id_at(0).expect("the bottom anchor");
+        session.selected_anchors = std::collections::HashSet::from([anchor]);
+        session.begin_point_drag();
+        assert!(session.drag_points_to((30.0, -20.0), false));
+        // Before the drag commits, the dot part already sits on the moved anchor.
+        let dot = session
+            .parts
+            .iter()
+            .find(|part| part.glyph == "dot")
+            .expect("the dot part");
+        assert_eq!(
+            dot.outline.bounding_box().origin(),
+            Point::new(180.0, -170.0)
+        );
+        session.end_point_drag();
+        app.sync_session_from(&mut session);
+        app.session = Arc::new(session);
+        assert_eq!(dot_offset(&app), (180.0, -170.0));
+
+        // Undo puts the anchor back, and the dot follows it home.
+        app.undo_open_glyph(false);
+        assert_eq!(app.session.anchor_points()[0].1, Point::new(200.0, -50.0));
+        assert_eq!(dot_offset(&app), (150.0, -150.0));
+    }
+
+    #[test]
+    fn moving_a_base_anchor_in_its_own_tab_realigns_the_composites_using_it() {
+        let mut app = anchored_workspace("base");
+        app.open_glyph(app.font.index_of("dotless").expect("dotless exists"));
+        let mut session = (*app.session).clone();
+        let anchor = session.anchor_id_at(0).expect("the bottom anchor");
+        session.selected_anchors = std::collections::HashSet::from([anchor]);
+        assert!(session.nudge_with(-10.0, 0.0, false));
+        app.sync_session_from(&mut session);
+        app.session = Arc::new(session);
+        assert_eq!(dot_offset(&app), (140.0, -150.0));
     }
 }
