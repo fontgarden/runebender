@@ -133,6 +133,12 @@ impl Workspace {
         if call.name == "editor_open_glyph" {
             return self.live_open_glyph(&call.arguments);
         }
+        if call.name == "editor_review" {
+            return self.live_editor_review(&call.arguments);
+        }
+        if call.name == "editor_select_points" {
+            return self.live_select_points(&call.arguments);
+        }
         if call.name == "editor_set_text" {
             return self.live_set_text(&call.arguments);
         }
@@ -216,6 +222,7 @@ impl Workspace {
             },
             "tool": format!("{:?}", self.tool).to_lowercase(),
             "busy_gesture": self.session.gesture_in_progress(),
+            "review":{"visible":self.proof_view,"mode":format!("{:?}",self.review.mode).to_lowercase(),"show_before":self.review.show_before,"has_before":self.review_comparison().before.is_some()},
             "text": {
                 "editor": self.initial_text,
                 "session_active": self.has_text_session,
@@ -329,7 +336,8 @@ impl Workspace {
             return json!({"ok":false,"error":format!("glyph not found: {glyph}"), "error_code":"glyph_not_found"});
         };
         let previous = self.session.glyph_name.clone();
-        if previous != glyph {
+        if previous != glyph || !matches!(self.mode, crate::application::workspace::Mode::Editor(_))
+        {
             if self.session.gesture_in_progress() {
                 return json!({"ok":false,"error":"finish the canvas gesture before opening another glyph", "error_code":"busy_gesture"});
             }
@@ -340,6 +348,127 @@ impl Workspace {
         context["previous_glyph"] = json!(previous);
         context
     }
+    fn live_editor_review(&mut self, arguments: &serde_json::Value) -> serde_json::Value {
+        use crate::application::editor::tools::review::ReviewMode;
+        use crate::application::workspace::Mode;
+        use serde_json::json;
+        let Some(object) = arguments.as_object() else {
+            return json!({"ok":false,"error_code":"invalid_arguments"});
+        };
+        let action = object
+            .get("action")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let Some(expected) = object
+            .get("expected_context_revision")
+            .and_then(serde_json::Value::as_str)
+        else {
+            return json!({"ok":false,"error_code":"invalid_arguments"});
+        };
+        if object.len() != 2
+            || !matches!(
+                action,
+                "edit" | "compare" | "toggle" | "before" | "after" | "pin_before"
+            )
+        {
+            return json!({"ok":false,"error_code":"invalid_arguments"});
+        }
+        if self.session.gesture_in_progress() {
+            return json!({"ok":false,"error_code":"busy_gesture"});
+        }
+        if self.live_context()["context_revision"] != expected {
+            return json!({"ok":false,"error_code":"stale_context"});
+        }
+        if !matches!(self.mode, Mode::Editor(_)) || !self.on_active_master() {
+            return json!({"ok":false,"error_code":"not_editing_master"});
+        }
+        if action == "edit" {
+            if self.proof_view {
+                self.toggle_proof_view();
+            }
+        } else {
+            if !self.proof_view {
+                self.toggle_proof_view();
+            }
+            match action {
+                "pin_before" => self.pin_review_before(),
+                "compare" => self.select_review_mode(ReviewMode::Compare),
+                "toggle" => self.select_review_mode(ReviewMode::Toggle),
+                "before" | "after" => {
+                    self.select_review_mode(ReviewMode::Toggle);
+                    self.show_review_revision(action == "before");
+                }
+                _ => unreachable!(),
+            }
+        }
+        self.live_context()
+    }
+
+    fn live_select_points(&mut self, arguments: &serde_json::Value) -> serde_json::Value {
+        use crate::application::workspace::{Mode, Tool};
+        use serde_json::json;
+
+        let Some(object) = arguments.as_object() else {
+            return json!({"ok":false,"error_code":"invalid_arguments"});
+        };
+        let Some(ids) = object
+            .get("point_ids")
+            .and_then(serde_json::Value::as_array)
+        else {
+            return json!({"ok":false,"error_code":"invalid_arguments"});
+        };
+        let Some(expected) = object
+            .get("expected_context_revision")
+            .and_then(serde_json::Value::as_str)
+        else {
+            return json!({"ok":false,"error_code":"invalid_arguments"});
+        };
+        if object.len() != 2 || ids.len() > 4096 || ids.iter().any(|id| !id.is_string()) {
+            return json!({"ok":false,"error_code":"invalid_arguments"});
+        }
+        if self.session.gesture_in_progress() {
+            return json!({"ok":false,"error_code":"busy_gesture"});
+        }
+        if self.live_context()["context_revision"] != expected {
+            return json!({"ok":false,"error_code":"stale_context"});
+        }
+        if !matches!(self.mode, Mode::Editor(_)) {
+            return json!({"ok":false,"error_code":"not_editing"});
+        }
+        let Some(address) = self.font.active_layer_address(&self.session.glyph_name) else {
+            return json!({"ok":false,"error_code":"layer_not_found"});
+        };
+        let Some(layer) = self
+            .font
+            .project
+            .document_layer(&self.session.glyph_name, &address.layer)
+        else {
+            return json!({"ok":false,"error_code":"layer_not_found"});
+        };
+        let available: Vec<_> = layer
+            .contours()
+            .flat_map(|contour| contour.points().map(|point| point.id()))
+            .collect();
+        let selected: Option<Vec<_>> = ids
+            .iter()
+            .map(|id| {
+                available
+                    .iter()
+                    .find(|point| Some(point.to_wire().as_str()) == id.as_str())
+                    .copied()
+            })
+            .collect();
+        let Some(selected) = selected else {
+            return json!({"ok":false,"error":"point does not belong to active layer","error_code":"unknown_point"});
+        };
+        let session = Arc::make_mut(&mut self.session);
+        session.clear_selection();
+        session.selected_component = None;
+        session.select_canonical_points(layer, &selected);
+        self.select_tool(Tool::Select);
+        self.live_context()
+    }
+
     fn live_set_text(&mut self, arguments: &serde_json::Value) -> serde_json::Value {
         use crate::application::workspace::{Mode, Tool};
         use serde_json::json;
@@ -443,6 +572,87 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         client.join().unwrap()
+    }
+
+    #[test]
+    fn native_review_controls_preserve_font_and_reject_stale_context() {
+        use serde_json::json;
+        let mut app = Workspace::untitled().unwrap();
+        app.open_glyph(app.font.index_of("A").unwrap());
+        let revision = app.font.project.document_revision();
+        let initial = app.live_context();
+        let pinned = app.live_editor_review(
+            &json!({"action":"pin_before","expected_context_revision":initial["context_revision"]}),
+        );
+        assert_eq!(pinned["ok"], true);
+        assert_eq!(pinned["context"]["review"]["visible"], true);
+        assert_eq!(pinned["context"]["review"]["has_before"], true);
+        let stale = app.live_editor_review(
+            &json!({"action":"edit","expected_context_revision":initial["context_revision"]}),
+        );
+        assert_eq!(stale["error_code"], "stale_context");
+        for action in ["edit", "compare", "before", "after", "toggle"] {
+            let context = app.live_context();
+            let result = app.live_editor_review(
+                &json!({"action":action,"expected_context_revision":context["context_revision"]}),
+            );
+            assert_eq!(result["ok"], true, "{result}");
+            assert_eq!(result["context"]["review"]["visible"], action != "edit");
+        }
+        assert_eq!(app.font.project.document_revision(), revision);
+    }
+
+    #[test]
+    fn native_point_selection_is_guarded_and_does_not_edit_geometry() {
+        use crate::application::font_model::FontModel;
+        use serde_json::json;
+        let mut project = Project::new_font("selection-test.ufo".into());
+        project.add_document_glyph("A", 400.0, None).unwrap();
+        let layer = project
+            .document_source(SourceId(0))
+            .unwrap()
+            .default_layer();
+        project
+            .edit_document_layer("A", &layer, |draft| {
+                draft.add_shape_contour(kurbo::Rect::new(20.0, 0.0, 300.0, 700.0), false)?;
+                Ok(())
+            })
+            .unwrap();
+        let id = project
+            .document_layer("A", &layer)
+            .unwrap()
+            .contours()
+            .next()
+            .unwrap()
+            .points()
+            .next()
+            .unwrap()
+            .id()
+            .to_wire();
+        let mut app = Workspace::from_model(FontModel::from_project(project)).unwrap();
+        app.open_glyph(app.font.index_of("A").unwrap());
+        let revision = app.font.project.document_revision();
+        let context = app.live_context();
+        let selected = app.live_select_points(
+            &json!({"point_ids":[id],"expected_context_revision":context["context_revision"]}),
+        );
+        assert_eq!(selected["ok"], true);
+        assert_eq!(selected["context"]["selection"]["points"], json!([id]));
+        let stale = app.live_select_points(
+            &json!({"point_ids":[],"expected_context_revision":context["context_revision"]}),
+        );
+        assert_eq!(stale["error_code"], "stale_context");
+        let invalid = app.live_select_points(&json!({"point_ids":[id,"missing"],"expected_context_revision":selected["context_revision"]}));
+        assert_eq!(invalid["error_code"], "unknown_point");
+        assert_eq!(
+            app.live_context()["context"]["selection"]["points"],
+            json!([id])
+        );
+        let cleared = app.live_select_points(
+            &json!({"point_ids":[],"expected_context_revision":selected["context_revision"]}),
+        );
+        assert_eq!(cleared["context"]["selection"]["points"], json!([]));
+        assert_eq!(app.font.project.document_revision(), revision);
     }
 
     #[test]

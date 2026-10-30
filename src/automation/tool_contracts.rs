@@ -198,10 +198,16 @@ fn effects_for(name: &str, surface: ToolSurface) -> Option<ToolEffects> {
             | "specimen" | "agent_receipt" | "proof_status" | "graph_discover"
             | "graph_snapshot" | "graph_status" | "graph_trace_status" | "graph_image"
             | "editor_sessions" => ToolEffects::read(),
-            "editor_connect" | "editor_open_glyph" | "editor_set_text" | "experiment_fork"
-            | "proof_cancel" | "agent_cancel" | "graph_cancel" | "graph_trace_cancel" => {
-                ToolEffects::session()
-            }
+            "editor_connect"
+            | "editor_open_glyph"
+            | "editor_review"
+            | "editor_select_points"
+            | "editor_set_text"
+            | "experiment_fork"
+            | "proof_cancel"
+            | "agent_cancel"
+            | "graph_cancel"
+            | "graph_trace_cancel" => ToolEffects::session(),
             "proof_start" => ToolEffects::session().idempotent(),
             "graph_mutate" => ToolEffects::session().destructive().idempotent(),
             "proof_release" | "graph_release" | "graph_trace_release" => {

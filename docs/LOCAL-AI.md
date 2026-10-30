@@ -246,11 +246,11 @@ The `design_context` tool and the Chat prompt read these files.
 ### 3.2 Live tools
 
 <!-- check: live-tools -->
-The live server publishes 48 tools.
+The live server publishes 50 tools.
 
 | Group | Tools |
 | --- | --- |
-| Connection and state | `editor_sessions`, `editor_connect`, `project_info`, `editor_context`, `editor_open_glyph`, `editor_set_text` |
+| Connection and state | `editor_sessions`, `editor_connect`, `project_info`, `editor_context`, `editor_open_glyph`, `editor_review`, `editor_select_points`, `editor_set_text` |
 | Read and analysis | `font_info`, `read_glyph`, `glyph_inventory`, `design_context`, `analyze_glyph`, `analyze_font`, `read_kerning`, `proof`, `specimen`, `review_proof`, `export_proof` |
 | Proposals and marks | `propose_edits`, `proposal_list`, `proposal_discard`, `proposal_install`, `flag_glyph` |
 | Experiments | `experiment_fork`, `experiment_list`, `experiment_kern`, `experiment_apply`, `experiment_undo_apply` |
@@ -345,3 +345,9 @@ The editor downloads no models. `scripts/bundle_llama.py` copies a pinned
 
 The planning records are [the AI architecture checklist](AI-ARCHITECTURE-CHECKLIST.md)
 and [the Virtua Regular AI checklist](VIRTUA-REGULAR-AI-CHECKLIST.md).
+
+`editor_select_points` replaces the active native point selection using canonical IDs from `read_glyph` and a fresh `editor_context` revision. It activates Select, rejects unknown IDs atomically and active gestures, and never changes or saves font data. Pass an empty list to clear selection. Select first, then use guarded `agent_apply` for movement.
+
+`editor_review` controls the native Agent Proof view with a fresh context revision. Use `pin_before` explicitly before a demo edit, `edit` for yellow point selection and movement, then `compare` or `before`/`after` for review. `review_proof` captures the same comparison/reference geometry; no web proof is required. The tool never applies proposals, saves, or grades drawings.
+
+For human/agent handoff, stop issuing mutations when the designer takes over. Read the live unsaved geometry again after their edits; never replay or silently rebase a stale proposal. Capture correction pairs separately and require explicit human approval before adding a training target. Saving is not required for MCP to observe their committed editor changes.
