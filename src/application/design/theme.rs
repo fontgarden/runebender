@@ -598,6 +598,9 @@ impl Palette {
         self.role("metricsLine")
     }
 
+    /// GPUI's opacity for the edit fill, which the curvature comb shares.
+    const EDIT_FILL_ALPHA: f32 = 0.70;
+
     /// A component's fill on the canvas: the `component` role at half strength,
     /// so the outline and points drawn over it stay readable.
     pub(crate) fn component_fill(&self) -> Color {
@@ -609,18 +612,30 @@ impl Palette {
         self.canvas.with_alpha(0.85)
     }
 
+    /// A curvature comb tooth at normalized curvature `t`, see-through like the edit fill
+    /// so the outline, grid and metrics read through it.
+    pub(crate) fn comb_fill(&self, t: f64) -> Color {
+        let color = self.comb_gradient(t);
+        color.with_alpha(color.components[3] * Self::EDIT_FILL_ALPHA)
+    }
+
+    /// The keyline between curvature comb teeth, as see-through as the teeth.
+    pub(crate) fn comb_keyline(&self) -> Color {
+        let color = self.point_outline.unwrap_or(self.text);
+        color.with_alpha(color.components[3] * Self::EDIT_FILL_ALPHA)
+    }
+
     /// The translucent fill beneath an editable glyph outline.
     ///
     /// Keep this recipe beside the shared `outlineFill` role so every canvas
     /// uses GPUI's opacity without restating it at individual paint sites.
     pub(crate) fn outline_fill(&self) -> Color {
-        const EDIT_FILL_ALPHA: f32 = 0.70;
         let fill = self.role("outlineFill");
         Color::new([
             fill.components[0],
             fill.components[1],
             fill.components[2],
-            fill.components[3] * EDIT_FILL_ALPHA,
+            fill.components[3] * Self::EDIT_FILL_ALPHA,
         ])
     }
 

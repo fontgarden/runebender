@@ -2289,15 +2289,23 @@ impl Widget for EditorWidget {
                     } else {
                         pal.component_fill()
                     };
+                    let outline = sort_affine * part.outline.clone();
+                    painter.fill(&outline, fill).draw();
+                    // The outline without its points, as the open glyph has with them.
                     painter
-                        .fill(&(sort_affine * part.outline.clone()), fill)
+                        .stroke(&outline, &Stroke::new(pal.stroke), pal.role("pathStroke"))
                         .draw();
                 }
             }
             if !self.session.components.elements().is_empty() {
+                let components = affine * self.session.components.clone();
+                painter.fill(&components, pal.component_fill()).draw();
                 painter
-                    .fill(&self.session.components, pal.component_fill())
-                    .transform(affine)
+                    .stroke(
+                        &components,
+                        &Stroke::new(pal.stroke),
+                        pal.role("pathStroke"),
+                    )
                     .draw();
                 if let Some(selected) = self.session.selected_component_path() {
                     painter
@@ -2335,13 +2343,9 @@ impl Widget for EditorWidget {
                             0.0
                         };
                         painter
-                            .stroke(
-                                &quad,
-                                &Stroke::new(pal.stroke_emphasis),
-                                pal.point_outline.unwrap_or(pal.text),
-                            )
+                            .stroke(&quad, &Stroke::new(pal.stroke_emphasis), pal.comb_keyline())
                             .draw();
-                        painter.fill(&quad, pal.comb_gradient(k)).draw();
+                        painter.fill(&quad, pal.comb_fill(k)).draw();
                     }
                 }
             }
