@@ -23,6 +23,12 @@ struct Request {
     expected_document_revision: u64,
     #[serde(default)]
     reference_offset: usize,
+    #[serde(default = "annotations_default")]
+    include_annotations: bool,
+}
+
+fn annotations_default() -> bool {
+    true
 }
 
 fn failure(message: impl ToString) -> Value {
@@ -70,6 +76,9 @@ impl Workspace {
                 .reading
                 .references
                 .refresh(self.font.document_source());
+        }
+        if self.review.annotations.lock().unwrap().draft.is_some() {
+            return failure("Finish the pencil stroke before capturing review");
         }
         let comparison = self.review_comparison();
         let character = self
@@ -127,8 +136,9 @@ impl Workspace {
         cards.extend(references);
         let height = 64 + u32::try_from(cards.len().div_ceil(2)).expect("six bounded cards") * 320;
         let width = 1024;
-        let paper = self.palette.canvas.to_rgba8();
-        let ink = self.palette.proof_ink().to_rgba8();
+        let appearance = self.palette.proof_page(self.review.dark);
+        let paper = appearance.panel.to_rgba8();
+        let ink = appearance.proof_ink().to_rgba8();
         let mut paths = vec![
             json!({"d":Rect::new(0.0,0.0,f64::from(width),f64::from(height)).to_path(0.1).to_svg(),
             "color":[paper.r,paper.g,paper.b]}),
@@ -138,6 +148,7 @@ impl Workspace {
             "x":24,"y":height-32,"size":18}),
         ];
         let mut captions = Vec::new();
+        let mut annotation_data = Vec::new();
         for (index, card) in cards.iter().enumerate() {
             let top = 64.0 + f64::from(u32::try_from(index / 2).expect("bounded row")) * 320.0;
             let (left, right) = comparison_transforms(bounds, Size::new(976.0, 256.0), true);
@@ -147,6 +158,27 @@ impl Workspace {
             let flip = Affine::new([1.0, 0.0, 0.0, -1.0, 0.0, f64::from(height)]);
             if let Some(drawing) = &card.drawing {
                 paths.push(json!({"d":(flip * transform * &*drawing.outline).to_svg(), "color":[ink.r,ink.g,ink.b]}));
+            }
+            if request.include_annotations
+                && let Some(drawing) = &card.drawing
+            {
+                let key =
+                    crate::application::widgets::proof_pencil::card_key(self, drawing, &card.label);
+                let ink = self.review.annotations.lock().unwrap();
+                for stroke in ink.strokes.get(&key).into_iter().flatten() {
+                    annotation_data.push(json!({"card":index,"drawing_key":key,"width_font_units":stroke.width,"points":stroke.points.iter().map(|p|[p.x,p.y]).collect::<Vec<_>>()}));
+                    let field_x = if index % 2 == 0 { 24.0 } else { 528.0 };
+                    let field = Rect::new(field_x, top + 40.0, field_x + 472.0, top + 296.0);
+                    let path = flip * stroke.clipped_path(transform, field);
+                    // Raster scenes carry filled paths; expand the red pencil's round stroke.
+                    let outline = kurbo::stroke(
+                        path.elements().iter().copied(),
+                        &kurbo::Stroke::new(stroke.width * transform.as_coeffs()[0].abs()),
+                        &kurbo::StrokeOpts::default(),
+                        0.1,
+                    );
+                    paths.push(json!({"d":outline.to_svg(),"color":[230,40,45]}));
+                }
             }
             let x = if index % 2 == 0 { 24.0 } else { 528.0 };
             labels.push(json!({"text":card.label,"x":x,"y":f64::from(height)-top-20.0,"size":14}));
@@ -171,7 +203,7 @@ impl Workspace {
         json!({"ok":true,"root_changed":false,"source_id":request.source,"glyph":request.glyph,
             "document_epoch":request.expected_document_epoch,
             "captured_document_revision":request.expected_document_revision,
-            "proposal_task":comparison.proposal_task,"message":comparison.message,
+            "proposal_task":comparison.proposal_task,"message":comparison.message,"annotations":annotation_data,
             "reference_total":total,"reference_offset":request.reference_offset,"reference_count":count,
             "next_reference_offset":(next<total).then_some(next),"references":identities,"captions":captions,
             "scene_sha256":format!("{:x}",Sha256::digest(scene_bytes)),"scene":scene})
@@ -181,6 +213,57 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn annotated_capture_and_clean_capture_preserve_font_and_versions() {
+        use crate::application::widgets::proof_pencil::{self, Stroke};
+        let mut app = Workspace::untitled().unwrap();
+        app.open_glyph(app.font.index_of("A").unwrap());
+        app.pin_review_before();
+        let revision = app.font.project.document_revision();
+        let comparison = app.review_comparison();
+        let key = proof_pencil::card_key(&app, &comparison.working, comparison.right_caption);
+        app.review.annotations.lock().unwrap().strokes.insert(
+            key,
+            vec![Stroke {
+                points: vec![(20.0, 30.0).into(), (300.0, 250.0).into()],
+                width: 5.0,
+            }],
+        );
+        let args = json!({"source":0,"glyph":"A","expected_document_revision":revision,"expected_document_epoch":app.live.as_ref().unwrap().document_epoch()});
+        let annotated = app.capture_review_proof(&args);
+        assert_eq!(annotated["ok"], true, "{annotated}");
+        assert!(!annotated["annotations"].as_array().unwrap().is_empty());
+        assert!(
+            annotated["scene"]["paths"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["color"] == json!([230, 40, 45]))
+        );
+        let mut clean = args.clone();
+        clean["include_annotations"] = json!(false);
+        let clean = app.capture_review_proof(&clean);
+        assert_eq!(clean["annotations"], json!([]));
+        assert_ne!(clean["scene_sha256"], annotated["scene_sha256"]);
+        if let Some(path) = std::env::var_os("RUNEBENDER_ANNOTATED_MCP_RENDER") {
+            std::fs::write(
+                path,
+                runebender::formats::designbot::render(&annotated["scene"], false)
+                    .expect("MCP scene raster"),
+            )
+            .unwrap();
+        }
+        assert_eq!(app.font.project.document_revision(), revision);
+        app.review.annotations.lock().unwrap().draft = Some((
+            "test".into(),
+            Stroke {
+                points: vec![],
+                width: 5.0,
+            },
+        ));
+        assert_eq!(app.capture_review_proof(&args)["ok"], false);
+    }
 
     #[test]
     fn review_capture_shares_drawings_and_rejects_stale_or_wrong_context() {

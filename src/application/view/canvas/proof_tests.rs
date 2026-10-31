@@ -256,7 +256,7 @@ fn revision_buttons_and_repeated_toggle_clicks_stay_in_place() {
     let mut dividers = Vec::new();
     rules(
         harness.root_widget().as_dyn(),
-        app.palette.stroke_emphasis,
+        crate::application::design::Stroke::Hairline.length().get(),
         &mut dividers,
     );
     let above = dividers
@@ -280,7 +280,11 @@ fn revision_buttons_and_repeated_toggle_clicks_stay_in_place() {
         unit,
         "padding below revision row"
     );
-    assert_eq!(above.y0 - waterfall_rect.y1, unit, "padding below mode row");
+    assert_eq!(
+        above.y0 - button_rect("Clear ink").y1,
+        unit,
+        "padding below annotation row"
+    );
     for (name, expected_before) in [
         ("Before", true),
         ("Working", false),
@@ -384,6 +388,109 @@ fn revision_buttons_and_repeated_toggle_clicks_stay_in_place() {
                 waterfall_rect.y0
             }
         );
+    }
+    assert_eq!(app.font.project.document_revision(), revision);
+}
+
+#[test]
+fn measured_proof_header_render() {
+    let mut app = Workspace::untitled().unwrap();
+    app.open_glyph(app.font.index_of("G").unwrap());
+    app.pin_review_before();
+    let mut ctx = context();
+    let view = sized_box(proof_view(&app));
+    let (pod, _) = view.build(&mut ctx, &mut app);
+    let mut harness = TestHarness::create_with_size(
+        stock::widget_properties(&app.palette),
+        pod.new_widget,
+        (1100, 500),
+    );
+    let image = harness.render();
+    fn collect(
+        widget: WidgetRef<'_, dyn Widget>,
+        headings: &mut Vec<kurbo::Rect>,
+        buttons: &mut Vec<kurbo::Rect>,
+    ) {
+        let bounds = widget
+            .ctx()
+            .window_transform()
+            .transform_rect_bbox(widget.ctx().border_box());
+        if widget.short_type_name().starts_with("CapHeightWidget") {
+            headings.push(bounds);
+        }
+        if widget.short_type_name() == "ControlWidget" {
+            buttons.push(bounds);
+        }
+        for child in widget.children() {
+            collect(child, headings, buttons);
+        }
+    }
+    let (mut headings, mut buttons) = (Vec::new(), Vec::new());
+    collect(harness.root_widget().as_dyn(), &mut headings, &mut buttons);
+    assert_eq!(headings.len(), 2);
+    for heading in &headings {
+        assert!((heading.height() - 28.0).abs() < 0.01);
+        assert!(
+            buttons
+                .iter()
+                .any(|button| (button.y0 - heading.y0).abs() < 0.01
+                    && (button.y1 - heading.y1).abs() < 0.01)
+        );
+    }
+    assert!((headings[0].x0 - 24.0).abs() < 0.01);
+    assert!((headings[0].y0 - 24.0).abs() < 0.01);
+    if let Some(path) = std::env::var_os("RUNEBENDER_HEADER_RENDER") {
+        image.save(path).unwrap();
+    }
+}
+
+#[test]
+fn pencil_native_page_render_and_version_isolation() {
+    use crate::application::widgets::proof_pencil::{self, Stroke};
+    let mut app = workspace();
+    let address = app.font.active_layer_address("A").unwrap();
+    app.font
+        .project
+        .edit_document_layer("A", &address.layer, |draft| {
+            draft.add_shape_contour(kurbo::Rect::new(100.0, 0.0, 500.0, 700.0), false)?;
+            Ok(())
+        })
+        .unwrap();
+    app.open_glyph(app.font.index_of("A").unwrap());
+    app.pin_review_before();
+    app.review.pencil = true;
+    let revision = app.font.project.document_revision();
+    let comparison = app.review_comparison();
+    let key = proof_pencil::card_key(&app, &comparison.working, comparison.right_caption);
+    let mut other = comparison.working.clone();
+    other.advance += 8.0;
+    assert_ne!(
+        key,
+        proof_pencil::card_key(&app, &other, comparison.right_caption)
+    );
+    app.review.annotations.lock().unwrap().strokes.insert(
+        key,
+        vec![Stroke {
+            points: vec![
+                (100.0, 100.0).into(),
+                (200.0, 500.0).into(),
+                (400.0, 300.0).into(),
+            ],
+            width: 6.0,
+        }],
+    );
+    let mut ctx = context();
+    let view = sized_box(proof_view(&app));
+    let (pod, _) = view.build(&mut ctx, &mut app);
+    let mut harness = TestHarness::create_with_size(
+        stock::widget_properties(&app.palette),
+        pod.new_widget,
+        (1100, 700),
+    );
+    let image = harness.render();
+    assert!(image.pixels().any(|p| p[0] > 180 && p[1] < 80 && p[2] < 80));
+    if let Some(path) = std::env::var_os("RUNEBENDER_ANNOTATED_PAGE_RENDER") {
+        image.save(path).unwrap();
     }
     assert_eq!(app.font.project.document_revision(), revision);
 }

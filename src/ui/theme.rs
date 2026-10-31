@@ -584,7 +584,9 @@ const REQUIRED_ROLES: &[&str] = &[
     "popcount4",
 ];
 const OPTIONAL_ROLES: &[&str] = &[
+    "proofDarkBackground",
     "proofInk",
+    "proofPencil",
     "headerActiveInk",
     "toolActiveInk",
     "toolInactiveInk",

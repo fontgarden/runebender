@@ -241,7 +241,7 @@ pub fn tools() -> Vec<agent::Tool> {
     }
     result.push(agent::Tool {
         name: "review_proof".into(),
-        description: "Capture the active glyph review as a PNG comparison: the same pinned Before or selected proposal, Working, and project reference drawings as the native page. Read editor_context first and supply its source, glyph, revision and document epoch. Does not open Proof, pin Before, change modes, edit or save. Uses neutral light paper; returns both revisions even in Toggle. Only Compare/Toggle at editable masters are supported; use proof_start for shaped text. Requires Designbot for MCP/chat image transport. References are paged four at a time with reference_offset.".into(),
+        description: "Capture the active glyph review as a PNG comparison: the same pinned Before or selected proposal, Working, and project reference drawings as the native page. Read editor_context first and supply its source, glyph, revision and document epoch. Does not open Proof, pin Before, change modes, edit or save. Includes red-pencil annotations by default and uses the native proof appearance; returns both revisions even in Toggle. Only Compare/Toggle at editable masters are supported; use proof_start for shaped text. Requires Designbot for MCP/chat image transport. References are paged four at a time with reference_offset.".into(),
         parameters: json!({"type":"object","additionalProperties":false,
             "required":["source","glyph","expected_document_epoch","expected_document_revision"],
             "properties":{
@@ -249,7 +249,8 @@ pub fn tools() -> Vec<agent::Tool> {
                 "glyph":{"type":"string","minLength":1},
                 "expected_document_epoch":{"type":"string","minLength":1},
                 "expected_document_revision":{"type":"integer","minimum":0},
-                "reference_offset":{"type":"integer","minimum":0}
+                "include_annotations":{"type":"boolean","default":true,"description":"Include red pencil strokes in the raster; false returns a clean proof."},
+            "reference_offset":{"type":"integer","minimum":0}
             }}),
     });
     result.extend(super::agent_edit::tools());

@@ -6,15 +6,14 @@
 use super::{comparison_picker, mode_bar};
 use crate::application::design::areas::proof as design;
 use crate::application::design::recipes::{self, proof as page};
-use crate::application::design::{Region, Space, TextSize, column, row};
+use crate::application::design::{Region, Space, column, row};
 use crate::application::editor::tools::review::ReviewMode;
 use crate::application::editor::tools::review_reading::{Sample, missing_coverage};
-use crate::application::view::label;
 use crate::application::widgets::scroll_viewport::portal;
 use crate::application::widgets::source_text_area::source_text_area;
 use crate::application::workspace::Workspace;
 use masonry::layout::{Dim, Length};
-use masonry::properties::{Dimensions, LineBreaking};
+use masonry::properties::Dimensions;
 use xilem::style::Style;
 use xilem::view::{FlexExt as _, sized_box};
 use xilem::{AnyWidgetView, WidgetView};
@@ -57,9 +56,6 @@ pub(super) fn reading_view(app: &Workspace) -> impl WidgetView<Workspace> + use<
             let variations = font.variations.as_ref().unwrap_or(&variations);
             let mut specimens: Vec<Box<AnyWidgetView<Workspace>>> = Vec::new();
             for size in &sizes {
-                if waterfall {
-                    specimens.push(recipes::prose(pal, format!("{size} px")).boxed());
-                }
                 specimens.push(
                     page::text(
                         pal,
@@ -133,21 +129,14 @@ pub(super) fn reading_view(app: &Workspace) -> impl WidgetView<Workspace> + use<
         column(
             Region::List,
             (
-                page::band(row(
-                    Region::Inline,
-                    (
-                        sized_box(label(family)
-                            .text_size(TextSize::Display.px())
-                            .color(pal.text)
-                            .line_break_mode(LineBreaking::WordWrap))
-                            .dims(Dimensions::new(Dim::Fixed(Length::ZERO), Dim::Auto))
-                            .flex(1.0),
+                page::header_band(page::heading_row(pal, family,
+                    row(Region::Inline, (
                         reference_button(app, pal),
                         page::tab(pal, "Dark", app.review.dark, false, |app| {
                             app.review.dark = !app.review.dark;
                         }),
-                    ),
-                ).gap(Length::px(design::COMPACT_GAP))),
+                    )).gap(Length::px(design::COMPACT_GAP)),
+                )),
                 page::rule(pal),
                 mode_bar(app, pal),
                 sized_box(portal(column(
@@ -173,7 +162,7 @@ pub(super) fn reading_view(app: &Workspace) -> impl WidgetView<Workspace> + use<
                     .dims(Dimensions::new(Dim::Stretch, Dim::Stretch))
                     .flex(1.0),
             ),
-        ).gap(Space::None).padding(Length::px(design::PAGE_INSET)),
+        ).gap(Space::None).padding(page::inset()),
     )
 }
 

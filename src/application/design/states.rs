@@ -114,6 +114,29 @@ impl ControlStyle {
         Self::resolve(pal, self.kind, self.ground, selected, self.disabled)
     }
 
+    /// Proof selections keep normal ink and lift the face by one theme button step.
+    #[must_use]
+    pub(crate) fn proof_selected(self, pal: &Palette, selected: bool) -> Self {
+        let mut style = self.selected(pal, selected);
+        if selected && !self.disabled {
+            let step = (lightness(pal.button_hover) - lightness(pal.button)).abs();
+            style.rest = Face {
+                fill: shift(pal.button, step),
+                outline: pal.outline,
+                ink: pal.text,
+            };
+            style.hover = Face {
+                fill: shift(pal.button, step * 2.0),
+                ..style.rest
+            };
+            style.pressed = Face {
+                fill: pal.button,
+                ..style.rest
+            };
+        }
+        style
+    }
+
     /// The same control drawn disabled, or not.
     #[must_use]
     pub(crate) fn disabled(self, pal: &Palette, disabled: bool) -> Self {

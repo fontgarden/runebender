@@ -121,6 +121,13 @@ impl Entry {
             A::Save => app.untitled || (app.modified && app.font.is_writable()),
             A::RevertToSaved => !app.untitled,
             A::ExportFont => app.export_job.is_none(),
+            A::Undo if app.proof_view && app.review.pencil => app
+                .review
+                .annotations
+                .lock()
+                .unwrap()
+                .can_undo(&crate::application::widgets::proof_pencil::prefix(app)),
+            A::Redo if app.proof_view && app.review.pencil => false,
             A::Undo => match app.mode {
                 Mode::Editor(index) => {
                     app.font.glyphs.get(index).is_some_and(|glyph| {

@@ -542,7 +542,11 @@ impl Palette {
             return std::borrow::Cow::Borrowed(self);
         }
         let mut page = self.clone();
-        let paper = self.proof_ink();
+        let paper = self
+            .roles
+            .get("proofDarkBackground")
+            .copied()
+            .unwrap_or_else(|| self.proof_ink());
         let ink = self.canvas;
         page.panel = paper;
         page.canvas = paper;
@@ -575,6 +579,15 @@ impl Palette {
     }
 
     /// Proof type can have its own ink without recoloring outlines in the editing canvas.
+    /// Correction strokes drawn over a proof: `proofPencil`, else the theme's red mark.
+    pub(crate) fn proof_pencil_ink(&self) -> Color {
+        self.roles
+            .get("proofPencil")
+            .copied()
+            .or_else(|| self.mark("red"))
+            .unwrap_or_else(|| self.role("danger"))
+    }
+
     pub(crate) fn proof_ink(&self) -> Color {
         self.roles
             .get("proofInk")

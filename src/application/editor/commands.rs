@@ -995,6 +995,11 @@ impl Workspace {
                 }
             }
             A::ExportFont => self.command_export(),
+            A::Undo if self.proof_view && self.review.pencil => {
+                let prefix = crate::application::widgets::proof_pencil::prefix(self);
+                self.review.annotations.lock().unwrap().undo(&prefix);
+            }
+            A::Redo if self.proof_view && self.review.pencil => {}
             A::Undo => self.undo_active_edit(false),
             A::Redo => self.undo_active_edit(true),
             A::Overview => {

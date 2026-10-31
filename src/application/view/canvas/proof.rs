@@ -10,14 +10,14 @@
 use crate::application::design::areas::proof as design;
 use crate::application::design::recipes::{self, proof as page};
 use crate::application::design::theme::Palette;
-use crate::application::design::{Region, Space, TextSize, column, row};
+use crate::application::design::{Region, Space, column, row};
 use crate::application::editor::tools::review::{ReviewComparison, ReviewDrawing, ReviewMode};
 use crate::application::view::label;
 use crate::application::workspace::Workspace;
 use masonry::imaging::Painter;
 use masonry::kurbo::{Affine, Rect, Shape, Size};
 use masonry::layout::{Dim, Length};
-use masonry::properties::{Dimensions, LineBreaking};
+use masonry::properties::Dimensions;
 use xilem::WidgetView;
 use xilem::style::Style;
 use xilem::view::{FlexExt as _, FlexSpacer, canvas, sized_box};
@@ -29,7 +29,6 @@ pub(crate) fn proof_view(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
     let appearance = app.palette.proof_page(app.review.dark);
     let pal = appearance.as_ref();
     let comparison = app.review_comparison();
-    let glyph_name = comparison.glyph.clone();
     let family = app
         .font
         .font_info()
@@ -44,10 +43,6 @@ pub(crate) fn proof_view(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
         .iter()
         .find(|entry| entry.name == comparison.glyph)
         .and_then(|entry| entry.codepoint);
-    let identity = codepoint.map_or_else(
-        || "Unencoded glyph".into(),
-        |c| format!("U+{:04X}", u32::from(c)),
-    );
     let has_pair = comparison.before.is_some();
     let toggle = app.review.mode == ReviewMode::Toggle;
     let show_before = app.review.show_before && has_pair;
@@ -143,7 +138,7 @@ pub(crate) fn proof_view(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
             Region::List,
             (
                 row(Region::Inline, captions).gap(Length::px(design::COLUMN_GAP)),
-                specimen(pal, comparison, app.review.mode, show_before).flex(1.0),
+                specimen(app, pal, comparison, app.review.mode, show_before).flex(1.0),
             ),
         )
         .gap(Space::None)
@@ -154,18 +149,12 @@ pub(crate) fn proof_view(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
         column(
             Region::List,
             (
-                page::band(
+                page::header_band(page::heading_row(
+                    pal,
+                    family,
                     row(
                         Region::Inline,
                         (
-                            sized_box(
-                                label(family)
-                                    .text_size(TextSize::Display.px())
-                                    .color(pal.text)
-                                    .line_break_mode(LineBreaking::WordWrap),
-                            )
-                            .dims(Dimensions::new(Dim::Fixed(Length::ZERO), Dim::Auto))
-                            .flex(1.0),
                             reading::reference_button(app, pal),
                             page::tab(pal, "Dark", app.review.dark, false, |app| {
                                 app.review.dark = !app.review.dark;
@@ -173,22 +162,29 @@ pub(crate) fn proof_view(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
                         ),
                     )
                     .gap(Length::px(design::COMPACT_GAP)),
-                ),
+                )),
                 page::rule(pal),
+                mode_bar,
                 page::band(
-                    column(
-                        Region::List,
+                    row(
+                        Region::Inline,
                         (
-                            label(glyph_name)
-                                .text_size(TextSize::Display.px())
-                                .color(pal.text)
-                                .line_break_mode(LineBreaking::WordWrap),
-                            label(identity).color(pal.text),
+                            page::tab(pal, "Red pencil", app.review.pencil, false, |app| {
+                                app.review.pencil = !app.review.pencil;
+                            }),
+                            page::tab(pal, "Undo ink", false, false, |app| {
+                                let prefix = crate::application::widgets::proof_pencil::prefix(app);
+                                app.review.annotations.lock().unwrap().undo(&prefix);
+                            }),
+                            page::tab(pal, "Clear ink", false, false, |app| {
+                                let prefix = crate::application::widgets::proof_pencil::prefix(app);
+                                app.review.annotations.lock().unwrap().clear(&prefix);
+                            }),
                         ),
                     )
                     .gap(Length::px(design::COMPACT_GAP)),
                 ),
-                mode_bar,
+                (app.review.mode != ReviewMode::Compare).then(|| page::rule(pal)),
                 comparison_picker(app, pal),
                 revision_controls.map(page::band),
                 actions.map(page::band),
@@ -198,7 +194,7 @@ pub(crate) fn proof_view(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
             ),
         )
         .gap(Space::None)
-        .padding(Length::px(design::PAGE_INSET)),
+        .padding(page::inset()),
     )
     .boxed()
 }
@@ -218,10 +214,25 @@ fn mode_bar(app: &Workspace, pal: &Palette) -> impl WidgetView<Workspace> + use<
             })
         })
         .collect();
+    let glyph = &app.session.glyph_name;
+    let identity = app
+        .font
+        .glyphs
+        .iter()
+        .find(|entry| &entry.name == glyph)
+        .and_then(|entry| entry.codepoint)
+        .map_or_else(
+            || "Unencoded glyph".into(),
+            |c| format!("U+{:04X}", u32::from(c)),
+        );
     column(
         Region::List,
         (
-            page::band(row(Region::Inline, tabs).gap(Length::px(design::COMPACT_GAP))),
+            page::heading_band(page::heading_row(
+                pal,
+                format!("{glyph}  {identity}"),
+                row(Region::Inline, tabs).gap(Length::px(design::COMPACT_GAP)),
+            )),
             // Compare's specimen captions supply the next rule without a revision toolbar.
             (app.review.mode != ReviewMode::Compare).then(|| page::rule(pal)),
         ),
@@ -272,6 +283,7 @@ fn comparison_picker(app: &Workspace, pal: &Palette) -> Option<impl WidgetView<W
 
 /// Draw both sides in one field, so layout cannot give them different fit constraints.
 fn specimen(
+    app: &Workspace,
     pal: &Palette,
     comparison: ReviewComparison,
     mode: ReviewMode,
@@ -280,25 +292,59 @@ fn specimen(
     let ink = pal.proof_ink();
     let bounds = comparison_bounds(&comparison.working, comparison.before.as_ref());
     let paired = comparison.before.is_some() && mode == ReviewMode::Compare;
-    sized_box(canvas(move |_: &mut Workspace, _, scene, size: Size| {
-        let (left, right) = comparison_transforms(bounds, size, paired);
-        let mut painter = Painter::new(scene);
-        if paired {
-            if let Some(before) = &comparison.before {
-                painter.fill(&(left * &*before.outline), ink).draw();
-            }
-            painter
-                .fill(&(right * &*comparison.working.outline), ink)
-                .draw();
-        } else {
-            let drawing = if show_before {
-                comparison.before.as_ref().unwrap_or(&comparison.working)
+    use crate::application::widgets::proof_pencil::{self, Mapping};
+    let drawings = if paired {
+        vec![comparison.before.as_ref().unwrap(), &comparison.working]
+    } else if show_before {
+        vec![comparison.before.as_ref().unwrap_or(&comparison.working)]
+    } else {
+        vec![&comparison.working]
+    };
+    let mapping = Mapping {
+        keys: drawings
+            .into_iter()
+            .enumerate()
+            .map(|(i, d)| {
+                proof_pencil::card_key(
+                    app,
+                    d,
+                    if (paired && i == 0) || (!paired && show_before) {
+                        comparison.left_caption
+                    } else {
+                        comparison.right_caption
+                    },
+                )
+            })
+            .collect(),
+        bounds,
+        paired,
+        centered: false,
+    };
+    sized_box(proof_pencil::proof_pencil(
+        canvas(move |_: &mut Workspace, _, scene, size: Size| {
+            let (left, right) = comparison_transforms(bounds, size, paired);
+            let mut painter = Painter::new(scene);
+            if paired {
+                if let Some(before) = &comparison.before {
+                    painter.fill(&(left * &*before.outline), ink).draw();
+                }
+                painter
+                    .fill(&(right * &*comparison.working.outline), ink)
+                    .draw();
             } else {
-                &comparison.working
-            };
-            painter.fill(&(left * &*drawing.outline), ink).draw();
-        }
-    }))
+                let drawing = if show_before {
+                    comparison.before.as_ref().unwrap_or(&comparison.working)
+                } else {
+                    &comparison.working
+                };
+                painter.fill(&(left * &*drawing.outline), ink).draw();
+            }
+        }),
+        mapping,
+        app.review.annotations.clone(),
+        app.review.pencil,
+        app.palette.proof_pencil_ink(),
+    ))
     .dims(Dimensions::new(Dim::Stretch, Dim::Stretch))
 }
 

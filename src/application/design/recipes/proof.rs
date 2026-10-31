@@ -9,7 +9,7 @@ use super::{Marker, button, marker};
 use crate::application::design::areas::proof as design;
 use crate::application::design::theme::Palette;
 use crate::application::design::{
-    ControlKind, ControlSize, ControlStyle, Region, Space, TextSize, column, row,
+    ControlKind, ControlSize, ControlStyle, Region, Space, Stroke, TextSize, column, row,
 };
 use crate::application::view::label;
 use crate::application::workspace::Workspace;
@@ -29,11 +29,64 @@ pub(crate) fn surface<V: WidgetView<Workspace>>(
         .background_color(pal.panel)
 }
 
+/// Account for the heading line's internal top space in the visible page margin.
+pub(crate) fn inset() -> Padding {
+    Padding::all(Length::px(design::PAGE_INSET))
+}
+
+/// Shared title/control alignment for the family and glyph-identity rows.
+pub(crate) fn heading_row<V: WidgetView<Workspace>>(
+    pal: &Palette,
+    text: String,
+    controls: V,
+) -> impl WidgetView<Workspace> + use<V> {
+    use skrifa::MetadataProvider;
+    let font = skrifa::FontRef::new(crate::application::view::UI_FONT).expect("bundled UI font");
+    let metrics = font.metrics(
+        skrifa::instance::Size::unscaled(),
+        skrifa::instance::LocationRef::default(),
+    );
+    let height = ControlSize::Control.px();
+    let font_size = crate::application::view::render::px32(height)
+        * f32::from(metrics.units_per_em)
+        / metrics.cap_height.expect("UI cap height");
+    xilem::view::flex_row((
+        sized_box(crate::application::widgets::cap_height::cap_height(
+            label(text)
+                .text_size(font_size)
+                .color(pal.text)
+                .line_break_mode(LineBreaking::Clip),
+            height,
+        ))
+        .dims(Dimensions::new(Dim::Fixed(Length::ZERO), Dim::Auto))
+        .flex(1.0),
+        controls,
+    ))
+    .cross_axis_alignment(masonry::properties::types::CrossAxisAlignment::End)
+    .gap(Length::px(design::UNIT))
+}
+
+pub(crate) fn heading_band<V: WidgetView<Workspace>>(
+    child: V,
+) -> impl WidgetView<Workspace> + use<V> {
+    sized_box(header_band(child)).padding(Padding::top(Length::px(design::UNIT)))
+}
+
 /// A content band owns its vertical spacing; adjacent bands never add hidden stack gaps.
 pub(crate) fn band<V: WidgetView<Workspace>>(child: V) -> impl WidgetView<Workspace> + use<V> {
     sized_box(child)
         .dims(Dimensions::new(Dim::Stretch, Dim::Auto))
         .padding(Padding::vertical(Length::px(design::UNIT)))
+}
+
+/// The header already contains `HEADER_DESCENT` beneath its visible content.
+/// Include that allowance in the same UNIT-to-rule gap used by every other band.
+pub(crate) fn header_band<V: WidgetView<Workspace>>(
+    child: V,
+) -> impl WidgetView<Workspace> + use<V> {
+    sized_box(child)
+        .dims(Dimensions::new(Dim::Stretch, Dim::Auto))
+        .padding(Padding::bottom(Length::px(design::UNIT)))
 }
 
 /// A specimen heading with the same rule-to-content distance as the controls above it.
@@ -46,9 +99,9 @@ pub(crate) fn rule(pal: &Palette) -> impl WidgetView<Workspace> + use<> {
     sized_box(label(""))
         .dims(Dimensions::new(
             Dim::Stretch,
-            Dim::Fixed(Length::px(pal.stroke_emphasis)),
+            Dim::Fixed(Stroke::Hairline.length()),
         ))
-        .background_color(pal.text)
+        .background_color(pal.outline)
 }
 
 /// A proof mode or revision using the same outlined toggle as other editor sections.
@@ -60,8 +113,8 @@ pub(crate) fn tab<F: Fn(&mut Workspace) + Send + Sync + 'static>(
     on_click: F,
 ) -> impl WidgetView<Workspace> + use<F> {
     let style = ControlStyle::new(pal, ControlKind::Toggle)
-        .selected(pal, selected)
-        .disabled(pal, disabled);
+        .disabled(pal, disabled)
+        .proof_selected(pal, selected);
     sized_box(button(style, label(text.to_owned()).color(style.ink()), on_click).padding(Space::Md))
         .dims(Dimensions::new(Dim::Auto, Dim::from(ControlSize::Control)))
 }
@@ -75,8 +128,8 @@ pub(crate) fn action<F: Fn(&mut Workspace) + Send + Sync + 'static>(
     on_click: F,
 ) -> impl WidgetView<Workspace> + use<F> {
     let style = ControlStyle::new(pal, ControlKind::Toggle)
-        .selected(pal, selected)
-        .disabled(pal, disabled);
+        .disabled(pal, disabled)
+        .proof_selected(pal, selected);
     button(
         style,
         label(text)

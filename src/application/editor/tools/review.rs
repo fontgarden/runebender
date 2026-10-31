@@ -52,6 +52,8 @@ struct ReviewBaseline {
 #[derive(Debug, Default)]
 pub(crate) struct ReviewState {
     pub(crate) mode: ReviewMode,
+    pub(crate) pencil: bool,
+    pub(crate) annotations: Arc<std::sync::Mutex<crate::application::widgets::proof_pencil::Ink>>,
     /// Proof-only appearance; the surrounding editor retains its selected theme.
     pub(crate) dark: bool,
     pub(crate) reading: super::review_reading::ReadingState,

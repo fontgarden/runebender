@@ -106,6 +106,7 @@ pub(crate) fn header_tools(app: &Workspace) -> impl WidgetView<Workspace> + use<
             .on(pal, Ground::Header)
             .selected(pal, app.tool == tool);
         let button = icon_button(style, icon, icon, move |app: &mut Workspace| {
+            app.review.pencil = false;
             app.select_tool(tool);
         })
         .tile_size(ControlSize::Icon.px());

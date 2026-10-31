@@ -142,29 +142,51 @@ pub(super) fn specimens(
                 })
                 .collect();
             let ink = pal.proof_ink();
+            let annotation_keys: Vec<_> = cards
+                .iter()
+                .map(|card| {
+                    card.drawing
+                        .as_ref()
+                        .map(|d| proof_pencil::card_key(app, d, &card.label))
+                        .unwrap_or_default()
+                })
+                .collect();
             let drawings: Vec<_> = cards.into_iter().map(|card| card.drawing).collect();
+            use crate::application::widgets::proof_pencil::{self, Mapping};
+            let mapping = Mapping {
+                keys: annotation_keys,
+                bounds,
+                paired: true,
+                centered: drawings.len() == 1,
+            };
             column(
                 Region::List,
                 (
                     row(Region::Inline, captions).gap(Length::px(design::COLUMN_GAP)),
-                    sized_box(canvas(move |_: &mut Workspace, _, scene, size: Size| {
-                        let (left, right) = comparison_transforms(bounds, size, true);
-                        let mut painter = Painter::new(scene);
-                        for (index, drawing) in drawings.iter().enumerate() {
-                            if let Some(drawing) = drawing {
-                                let transform = if drawings.len() == 1 {
-                                    left.then_translate(
-                                        ((size.width + design::COLUMN_GAP) / 4.0, 0.0).into(),
-                                    )
-                                } else if index == 0 {
-                                    left
-                                } else {
-                                    right
-                                };
-                                painter.fill(&(transform * &*drawing.outline), ink).draw();
+                    sized_box(proof_pencil::proof_pencil(
+                        canvas(move |_: &mut Workspace, _, scene, size: Size| {
+                            let (left, right) = comparison_transforms(bounds, size, true);
+                            let mut painter = Painter::new(scene);
+                            for (index, drawing) in drawings.iter().enumerate() {
+                                if let Some(drawing) = drawing {
+                                    let transform = if drawings.len() == 1 {
+                                        left.then_translate(
+                                            ((size.width + design::COLUMN_GAP) / 4.0, 0.0).into(),
+                                        )
+                                    } else if index == 0 {
+                                        left
+                                    } else {
+                                        right
+                                    };
+                                    painter.fill(&(transform * &*drawing.outline), ink).draw();
+                                }
                             }
-                        }
-                    }))
+                        }),
+                        mapping,
+                        app.review.annotations.clone(),
+                        app.review.pencil,
+                        app.palette.proof_pencil_ink(),
+                    ))
                     .dims(Dimensions::new(
                         Dim::Stretch,
                         Dim::Fixed(Length::px(design::REFERENCE_HEIGHT)),

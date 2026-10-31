@@ -38,3 +38,7 @@ pub(crate) mod quiet_split;
 mod quiet_split_widget;
 
 pub(crate) mod proof_text;
+
+pub(crate) mod cap_height;
+
+pub(crate) mod proof_pencil;

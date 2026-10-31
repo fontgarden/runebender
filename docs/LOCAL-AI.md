@@ -83,6 +83,24 @@ Microphone button in Chat. Source: `src/application/editor/tools/voice.rs`,
 
 ### 2.3 Proof view
 
+The existing toolbar Brush remains in the edit view. Agent Proof provides its
+own Red pencil, Undo ink and Clear ink buttons, without adding an edit-toolbar
+icon or group. These annotations are session-only and disappear on quit;
+font saving never includes them. Ink is stored in font coordinates and keyed by
+document/source/glyph and drawing geometry, so resize preserves placement and
+changed outlines do not inherit old marks. Undo reverses a stroke or a whole Clear.
+Drawing is available in Compare/Toggle, including reference cards; Text/Waterfall
+remain selectable text. Use Compare for form sketches and corrections.
+
+`review_proof` includes red ink in the returned MCP PNG by default and returns
+stroke coordinates/widths with drawing keys. `include_annotations=false` produces
+a clean PNG. Capture rejects an unfinished pencil stroke. The existing sketch
+brush remains its existing trace/model workflow; annotation ink does not trigger
+inference or change outlines. Review annotations before quitting if they must be
+retained externally. Bounds:128 strokes per drawing,2048 points per stroke,
+256 retained drawing keys,16 undo entries. No new font edits or grading.
+
+
 Editor footer, the fourth button.
 Sources: `src/application/view/canvas/proof.rs`, `src/application/editor/tools/review.rs`, and `src/application/design/recipes/proof.rs`.
 
