@@ -276,6 +276,8 @@ impl Workspace {
     /// which is the one thing the two grids are for differently.
     pub(crate) fn grid_pick(&mut self, index: usize, cmd: bool, shift: bool) {
         if !cmd && !shift && matches!(self.mode, Mode::Editor(_)) {
+            // A plain click picks one glyph, as in the overview: it clears the multi-selection.
+            self.grid_select(index, false, false);
             self.open_glyph(index);
         } else {
             self.grid_select(index, cmd, shift);
@@ -367,6 +369,11 @@ mod tests {
         app.grid_pick(order[2], true, false);
         assert!(!app.multi_selected.contains(&order[2]));
         assert!(app.multi_selected.contains(&order[3]));
+
+        // A plain click clears the multi-selection and opens that one glyph.
+        app.grid_pick(order[0], false, false);
+        assert!(app.multi_selected.is_empty());
+        assert!(matches!(app.mode, Mode::Editor(i) if i == order[0]));
 
         // The overview answers the same clicks the same way, without opening.
         app.mode = Mode::Overview;
