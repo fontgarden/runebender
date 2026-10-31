@@ -1377,11 +1377,7 @@ fn proof_recipe(
     graph: &runebender::workflows::graph::NodeGraph,
     node: u32,
 ) -> Result<CompiledProofRecipe, String> {
-    let value = graph
-        .node(node)
-        .and_then(|node| node.values.get("recipe"))
-        .cloned()
-        .unwrap_or_else(runebender::workflows::graph_live::default_proof_recipe);
+    let value = runebender::workflows::graph_live::effective_proof_recipe(graph, node);
     let recipe: CompiledProofRecipe =
         serde_json::from_value(value).map_err(|error| error.to_string())?;
     recipe.validate()?;

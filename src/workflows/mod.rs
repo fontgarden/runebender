@@ -18,5 +18,7 @@ pub mod local_chat;
 pub mod local_sketch;
 /// Bounded native subprocess execution shared by worker adapters.
 pub mod process;
+/// Runebender's own Python virtual environment, shared with tools outside the editor.
+pub mod python_environment;
 /// A supervised `whisper-server` child turning speech into chat text.
 pub mod whisper_server;

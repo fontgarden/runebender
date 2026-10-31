@@ -5,6 +5,7 @@
 
 use super::graph::{Kind, NodeCachePolicy, NodeEffects, NodeExecution, NodeGraph, NodeType, Port};
 use crate::font::{experiments, project::Project, variable::SourceId};
+use crate::formats::specimen_script::ScriptLanguage;
 use serde_json::{Value, json};
 use std::collections::HashSet;
 
@@ -19,6 +20,37 @@ pub fn default_proof_recipe() -> Value {
         "language": null
     })
 }
+
+/// The proof recipe a run uses for `node`: its own `recipe` value, or the default, with the
+/// code of a specimen script wired into its `recipe` input.
+pub fn effective_proof_recipe(graph: &NodeGraph, node: u32) -> Value {
+    let mut recipe = graph
+        .node(node)
+        .and_then(|node| node.values.get("recipe"))
+        .cloned()
+        .unwrap_or_else(default_proof_recipe);
+    let script = graph
+        .link_into(node, "recipe")
+        .and_then(|link| graph.node(link.from()))
+        .filter(|source| source.type_name == SPECIMEN_SCRIPT);
+    if let (Some(script), Some(fields)) = (script, recipe.as_object_mut()) {
+        let language =
+            ScriptLanguage::from_name(script.values.get("language").and_then(Value::as_str));
+        let code = script
+            .values
+            .get("code")
+            .and_then(Value::as_str)
+            .map_or_else(|| language.starter().to_owned(), str::to_owned);
+        fields.insert(
+            "specimen_script".into(),
+            json!({ "language": language.name(), "code": code }),
+        );
+    }
+    recipe
+}
+
+/// Node type holding designer drawing code that a proof renders with the font.
+pub const SPECIMEN_SCRIPT: &str = "live.specimen_script";
 
 /// Node types executed against an open editor, rather than the disk runner.
 pub fn types() -> Vec<NodeType> {
@@ -111,7 +143,44 @@ pub fn types() -> Vec<NodeType> {
             vec![]
         },
     })
+    .chain(std::iter::once(specimen_script_type()))
     .collect()
+}
+
+/// A code node: Designbot Rust by default, `DrawBot` Python as the fallback. Its recipe output
+/// goes into a proof's `recipe` input, and that proof renders the code with the font it reads.
+fn specimen_script_type() -> NodeType {
+    NodeType {
+        name: SPECIMEN_SCRIPT.into(),
+        title: "Specimen script".into(),
+        help: "Drawing code a proof renders with its font: Designbot Rust, or DrawBot Python."
+            .into(),
+        implemented: true,
+        execution: NodeExecution::new(NodeCachePolicy::Never, NodeEffects::TrustedProcess),
+        inputs: vec![
+            Port {
+                name: "code".into(),
+                kind: Kind::Text,
+                required: false,
+                default: Some(json!(ScriptLanguage::Designbot.starter())),
+                help: "Drawing code. FONT_PATH and FONT_FAMILY name the font being proofed.".into(),
+            },
+            Port {
+                name: "language".into(),
+                kind: Kind::Text,
+                required: false,
+                default: Some(json!(ScriptLanguage::Designbot.name())),
+                help: "designbot (Rust, the default) or drawbot (Python).".into(),
+            },
+        ],
+        outputs: vec![Port {
+            name: "recipe".into(),
+            kind: Kind::Parameters,
+            required: false,
+            default: None,
+            help: "The script, for a proof's recipe input.".into(),
+        }],
+    }
 }
 
 /// A loaded stable source or a named session version.
@@ -647,6 +716,48 @@ pub fn import_versions(graph: &mut NodeGraph, project: &Project) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_specimen_script_wired_into_a_proof_runs_as_its_recipe() {
+        let mut graph = specimen_starter(SourceId(0), vec![default_proof_recipe()]);
+        let proof = graph
+            .nodes
+            .iter()
+            .find(|node| node.type_name == "live.proof")
+            .unwrap()
+            .id;
+        assert!(
+            effective_proof_recipe(&graph, proof)
+                .get("specimen_script")
+                .is_none()
+        );
+
+        let script = graph.add(SPECIMEN_SCRIPT, [0.0, 600.0]);
+        graph.connect(script, "recipe", proof, "recipe");
+        let recipe = effective_proof_recipe(&graph, proof);
+        assert_eq!(recipe["specimen_script"]["language"], "designbot");
+        assert_eq!(
+            recipe["specimen_script"]["code"],
+            ScriptLanguage::Designbot.starter()
+        );
+        let parsed: crate::font::compiler::proof::CompiledProofRecipe =
+            serde_json::from_value(recipe).unwrap();
+        assert!(parsed.validate().is_ok());
+
+        graph
+            .node_mut(script)
+            .unwrap()
+            .values
+            .insert("language".into(), json!("drawbot"));
+        graph
+            .node_mut(script)
+            .unwrap()
+            .values
+            .insert("code".into(), json!("rect(0, 0, 10, 10)"));
+        let recipe = effective_proof_recipe(&graph, proof);
+        assert_eq!(recipe["specimen_script"]["language"], "drawbot");
+        assert_eq!(recipe["specimen_script"]["code"], "rect(0, 0, 10, 10)");
+    }
     use crate::font::history::HistoryDirection;
     use crate::font::persistence::memory::designspace_from_str;
     use crate::font::project::SourceInput;

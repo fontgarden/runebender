@@ -964,6 +964,7 @@ mod tests {
                 occurrence: 0,
                 reference_pen_x: Some(320.0),
             }),
+            specimen_script: None,
         };
         assert!(reading.text.chars().any(is_arabic_character));
         assert!(!is_arabic_character('A'));

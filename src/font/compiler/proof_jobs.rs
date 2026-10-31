@@ -611,6 +611,7 @@ mod tests {
                 language: None,
                 rendering: crate::font::compiler::proof::CompiledProofRendering::default(),
                 target: None,
+                specimen_script: None,
             },
         }
     }
@@ -869,6 +870,7 @@ mod tests {
                     language: None,
                     rendering: crate::font::compiler::proof::CompiledProofRendering::default(),
                     target: None,
+                    specimen_script: None,
                 },
             })
             .unwrap();

@@ -743,10 +743,10 @@ fn find_comparison(
     let unchanged = if proofs.len() == 2 {
         sources.collect::<Vec<_>>()
     } else {
-        let recipe = |node: u32| graph.node(node).and_then(|n| n.values.get("recipe"));
-        let wanted = recipe(changed.node)?;
+        let recipe = |node: u32| super::graph_live::effective_proof_recipe(graph, node);
+        let wanted = recipe(changed.node);
         sources
-            .filter(|proof| recipe(proof.node) == Some(wanted))
+            .filter(|proof| recipe(proof.node) == wanted)
             .collect()
     };
     let [unchanged] = unchanged[..] else {
@@ -1178,12 +1178,7 @@ impl GraphSession {
         let input_sha256 = script_input_sha256.into();
         validate_digest("recipe input", &input_sha256)?;
         let proof_capture = |node: u32| -> Result<GraphProofCapture, GraphSessionError> {
-            let recipe = self
-                .graph
-                .node(node)
-                .and_then(|proof| proof.values.get("recipe"))
-                .cloned()
-                .unwrap_or_else(super::graph_live::default_proof_recipe);
+            let recipe = super::graph_live::effective_proof_recipe(&self.graph, node);
             if !recipe.is_object() {
                 return Err(GraphSessionError::new(
                     GraphSessionErrorCode::CaptureMismatch,
@@ -2043,6 +2038,26 @@ fn execution_plan(
     let sources = nodes_of_type("live.font");
     let scripts = nodes_of_type("live.python");
     let proofs = nodes_of_type("live.proof");
+    // Specimen scripts are data a proof reads through its recipe input; they never run alone.
+    let specimen_scripts = nodes_of_type(super::graph_live::SPECIMEN_SCRIPT);
+    for &node in &specimen_scripts {
+        let feeds_proofs = graph
+            .links
+            .iter()
+            .filter(|link| link.from() == node)
+            .all(|link| {
+                link.input() == "recipe"
+                    && graph
+                        .node(link.to())
+                        .is_some_and(|target| target.type_name == "live.proof")
+            });
+        if !feeds_proofs || graph.links.iter().any(|link| link.to() == node) {
+            return Err(GraphSessionError::new(
+                GraphSessionErrorCode::UnsupportedTopology,
+                "a specimen script takes no inputs and feeds only proof recipe inputs",
+            ));
+        }
+    }
     if sources.len() != 1
         || (version == 1
             && (scripts.len() != 1 || proofs.len() < 2 || proofs.len() > MAX_DAG_PROOFS))
@@ -2062,10 +2077,12 @@ fn execution_plan(
             "schema version 1 runs only the four-node comparison graph",
         ));
     }
-    if version == 2 && graph.nodes.len() != 1 + scripts.len() + proofs.len() {
+    if version == 2
+        && graph.nodes.len() != 1 + scripts.len() + proofs.len() + specimen_scripts.len()
+    {
         return Err(GraphSessionError::new(
             GraphSessionErrorCode::UnsupportedTopology,
-            "version 2 runs only live.font, live.python and live.proof nodes",
+            "version 2 runs only live.font, live.python, live.proof and live.specimen_script nodes",
         ));
     }
     let source_node = sources[0];
@@ -2076,10 +2093,11 @@ fn execution_plan(
         .copied()
         .collect();
     let input = |node: u32| -> Result<u32, GraphSessionError> {
+        // A proof's recipe may come from a specimen script; only the font input orders the run.
         let links: Vec<_> = graph
             .links
             .iter()
-            .filter(|link| link.to() == node)
+            .filter(|link| link.to() == node && link.input() != "recipe")
             .collect();
         if links.len() != 1
             || links[0].input() != "font"
@@ -2254,11 +2272,7 @@ fn validate_capture(
     }
     for proof in &capture.proofs {
         validate_digest("proof recipe", &proof.recipe_sha256)?;
-        let recipe = graph
-            .node(proof.node)
-            .and_then(|node| node.values.get("recipe"))
-            .cloned()
-            .unwrap_or_else(super::graph_live::default_proof_recipe);
+        let recipe = super::graph_live::effective_proof_recipe(graph, proof.node);
         if !recipe.is_object() || digest_json(&recipe)? != proof.recipe_sha256 {
             return Err(GraphSessionError::new(
                 GraphSessionErrorCode::CaptureMismatch,
@@ -2913,6 +2927,30 @@ mod tests {
         assert!(session.graph_receipts.is_empty());
         assert_eq!(session.snapshot().semantic_revision, 0);
         assert_eq!(session.snapshot().revision, 100);
+    }
+
+    #[test]
+    fn the_plan_accepts_specimen_scripts_only_on_proof_recipes() {
+        let mut graph = graph_live::specimen_starter(
+            variable::SourceId(0),
+            vec![graph_live::default_proof_recipe()],
+        );
+        let proof = graph
+            .nodes
+            .iter()
+            .find(|node| node.type_name == "live.proof")
+            .unwrap()
+            .id;
+        let script = graph.add(graph_live::SPECIMEN_SCRIPT, [0.0, 600.0]);
+        graph.connect(script, "recipe", proof, "recipe");
+        let plan = execution_plan(&graph, 2).expect("a scripted proof runs");
+        assert!(plan.proofs.iter().any(|step| step.node == proof));
+
+        let python = graph.add("live.python", [300.0, 600.0]);
+        let source = graph.nodes[0].id;
+        graph.connect(source, "font", python, "font");
+        graph.connect(script, "recipe", python, "parameters");
+        assert!(execution_plan(&graph, 2).is_err());
     }
 
     #[test]

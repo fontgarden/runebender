@@ -240,6 +240,7 @@ mod tests {
             language: None,
             rendering: runebender::font::compiler::proof::CompiledProofRendering::default(),
             target: None,
+            specimen_script: None,
         };
         let mut jobs = NodeProofJobs::default();
         jobs.submit_node(7, 1, "node-proof-test".into(), baseline, recipe.clone())

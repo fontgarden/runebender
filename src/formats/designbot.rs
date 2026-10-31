@@ -287,7 +287,17 @@ pub fn render_with_identity(scene: &Value, pdf: bool) -> Result<RenderedScene, S
 }
 
 fn resolve_executable() -> Result<std::path::PathBuf, String> {
-    let requested = std::env::var_os("DESIGNBOT_BIN").unwrap_or_else(|| "designbot".into());
+    resolve_tool("DESIGNBOT_BIN", "designbot", "Designbot")
+}
+
+/// Resolve a renderer executable: the path in `variable` when set, else `name` on `PATH`.
+/// `label` names the tool in errors.
+pub(crate) fn resolve_tool(
+    variable: &str,
+    name: &str,
+    label: &str,
+) -> Result<std::path::PathBuf, String> {
+    let requested = std::env::var_os(variable).unwrap_or_else(|| name.into());
     let requested_path = std::path::PathBuf::from(&requested);
     let candidate = if requested_path.is_absolute() || requested_path.components().count() > 1 {
         requested_path
@@ -295,13 +305,13 @@ fn resolve_executable() -> Result<std::path::PathBuf, String> {
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
             .map(|directory| directory.join(&requested))
             .find(|path| is_executable_file(path))
-            .ok_or("Designbot unavailable: executable not found on PATH")?
+            .ok_or_else(|| format!("{label} unavailable: {name} not found on PATH"))?
     };
     if candidate.is_absolute() {
         Ok(candidate)
     } else {
         Ok(std::env::current_dir()
-            .map_err(|error| format!("Designbot unavailable: {error}"))?
+            .map_err(|error| format!("{label} unavailable: {error}"))?
             .join(candidate))
     }
 }
@@ -324,7 +334,7 @@ fn is_executable_file(path: &std::path::Path) -> bool {
     }
 }
 
-fn hash_executable(path: &std::path::Path) -> Result<String, String> {
+pub(crate) fn hash_executable(path: &std::path::Path) -> Result<String, String> {
     use std::io::Read as _;
 
     let mut file = std::fs::File::open(path).map_err(|error| error.to_string())?;

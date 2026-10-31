@@ -14,10 +14,10 @@ use crate::application::design::recipes;
 use crate::application::design::theme::Palette;
 use crate::application::design::{Region, Space, TextSize, row as xrow};
 use crate::application::editor::tools::graph::controls::{
-    apply_live_comparison, cancel_live_comparison, change_live_graph, clear_live_results,
-    edit_live_code, edit_live_scope, move_live_node, open_live_comparison_file,
+    add_live_specimen_script, apply_live_comparison, cancel_live_comparison, change_live_graph,
+    clear_live_results, edit_live_code, edit_live_scope, move_live_node, open_live_comparison_file,
     run_live_comparison, save_live_comparison_file, save_proof_image, select_live_comparison,
-    select_live_specimen,
+    select_live_specimen, set_live_script_language,
 };
 use crate::application::editor::tools::graph::file_label;
 use crate::application::view::canvas::graph::{GraphEvent, graph_canvas};
@@ -30,6 +30,7 @@ use masonry::properties::Dimensions;
 use masonry::properties::LineBreaking;
 use masonry::properties::types::CrossAxisAlignment;
 use runebender::font::variable::SourceId;
+use runebender::formats::specimen_script::ScriptLanguage;
 use runebender::ui::graph::{
     ContentState, ImageAction, ImageContent, ImmutablePng, NodeContent, NodeContentMap,
     ScriptContent,
@@ -49,7 +50,16 @@ use crate::application::editor::tools::graph::execution::LiveGraphPhase;
 use runebender::workflows::graph_session::{GraphRunHandle, GraphRunStatus};
 
 /// Node types a live graph can run: one current font feeding Python recipes and proofs.
-const LIVE_RUNNABLE: [&str; 3] = ["live.font", "live.python", "live.proof"];
+const LIVE_RUNNABLE: [&str; 4] = [
+    "live.font",
+    "live.python",
+    "live.proof",
+    runebender::workflows::graph_live::SPECIMEN_SCRIPT,
+];
+
+/// Initial code size of a specimen script node: a whole short script is visible.
+const SCRIPT_CODE_W: f64 = 560.0;
+const SCRIPT_CODE_H: f64 = 360.0;
 
 struct CanvasProjection {
     graph: Arc<NodeGraph>,
@@ -290,6 +300,32 @@ fn live_projection(app: &Workspace) -> Option<CanvasProjection> {
                         content_hash,
                         state: node_state.clone(),
                         size: content_size(app, node.id, runebender::ui::graph::CODE_H),
+                    }),
+                );
+            }
+            runebender::workflows::graph_live::SPECIMEN_SCRIPT => {
+                let language = ScriptLanguage::from_name(
+                    node.values
+                        .get("language")
+                        .and_then(serde_json::Value::as_str),
+                );
+                content.by_node.insert(
+                    node.id,
+                    NodeContent::Script(ScriptContent {
+                        text: node
+                            .values
+                            .get("code")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or(language.starter())
+                            .into(),
+                        content_hash: snapshot.semantic_hash.clone(),
+                        state: node_state.clone(),
+                        size: app
+                            .graph
+                            .content_sizes
+                            .get(&node.id)
+                            .copied()
+                            .unwrap_or([px32(SCRIPT_CODE_W), px32(SCRIPT_CODE_H)]),
                     }),
                 );
             }
@@ -541,6 +577,14 @@ pub(crate) fn graph_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
                     xrow(Region::Inline, files),
                     unlisted,
                     FlexSpacer::Flex(1.0),
+                    live.then(|| {
+                        recipes::toggle(
+                            pal,
+                            "Add Script".into(),
+                            false,
+                            add_live_specimen_script,
+                        )
+                    }),
                     (live && !has_python).then(|| {
                         recipes::toggle(
                             pal,
@@ -600,6 +644,54 @@ pub(crate) fn graph_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
         pal.outline,
     );
     let choices = (!live).then(|| graph_choices(app)).flatten();
+    // A selected specimen script offers its two languages.
+    let script_language = live
+        .then(|| {
+            let id = app.graph.selected?;
+            let node = view.graph.node(id)?;
+            (node.type_name == runebender::workflows::graph_live::SPECIMEN_SCRIPT)
+                .then(|| {
+                    ScriptLanguage::from_name(
+                        node.values
+                            .get("language")
+                            .and_then(serde_json::Value::as_str),
+                    )
+                })
+                .map(|language| (id, language))
+        })
+        .flatten()
+        .map(|(id, current)| {
+            let toggles: Vec<_> = [
+                (ScriptLanguage::Designbot, "Designbot"),
+                (ScriptLanguage::Drawbot, "DrawBot"),
+            ]
+            .into_iter()
+            .map(|(language, title)| {
+                let guard = live_guard.clone();
+                recipes::toggle(
+                    pal,
+                    title.into(),
+                    language == current,
+                    move |app: &mut Workspace| {
+                        if let Some(guard) = guard.clone() {
+                            set_live_script_language(app, guard, id, language);
+                        }
+                    },
+                )
+            })
+            .collect();
+            xrow(
+                Region::List,
+                (
+                    label("Language")
+                        .text_size(TextSize::Caption.px())
+                        .color(pal.text_muted),
+                    xrow(Region::Inline, toggles),
+                ),
+            )
+            .padding(Space::Sm)
+            .gap(Space::Sm)
+        });
     let scope = (live && has_python).then(|| {
         xrow(
             Region::List,
@@ -737,6 +829,7 @@ pub(crate) fn graph_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
         flex_col((
             strip,
             scope,
+            script_language,
             choices,
             report,
             problems,

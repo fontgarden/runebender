@@ -18,6 +18,7 @@ pub mod icon_ufo;
 pub mod image_trace;
 pub mod metadata;
 pub mod proposal_ufo;
+pub mod specimen_script;
 pub mod svg;
 pub mod ufo;
 

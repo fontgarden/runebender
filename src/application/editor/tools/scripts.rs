@@ -344,8 +344,11 @@ impl Workspace {
     /// Lazily initialize the one Python queue shared by Scripts and Graph.
     pub(crate) fn ensure_script_job_queue(&mut self) -> Result<(), String> {
         if self.script_jobs.is_none() {
+            // RUNEBENDER_PYTHON, then Runebender's own environment, then the system python3.
             let executable = std::env::var_os("RUNEBENDER_PYTHON")
                 .filter(|value| !value.is_empty())
+                .map(std::path::PathBuf::from)
+                .or_else(|| runebender::workflows::python_environment::command("python3"))
                 .unwrap_or_else(|| "python3".into());
             self.script_jobs = Some(
                 ScriptJobQueue::new(ScriptJobConfig::new(executable))

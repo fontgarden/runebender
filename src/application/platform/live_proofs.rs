@@ -364,6 +364,7 @@ mod tests {
                 language: None,
                 rendering: runebender::font::compiler::proof::CompiledProofRendering::default(),
                 target: None,
+                specimen_script: None,
             },
         }
     }

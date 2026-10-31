@@ -320,6 +320,23 @@ JSON object on stdin and writes one on stdout, with `job_id` and `input_hash`
 unchanged. Operations: `set_width`, `set_anchor`, `set_point`, `append_contours`,
 `replace_contours`. Chat, MCP and `live.python` graph nodes use the same contract.
 
+Recipes run `RUNEBENDER_PYTHON`, else `~/Runebender/python/bin/python3`, else the system `python3`.
+
+### 3.7 Runebender Python environment
+
+`~/Runebender/python` is an ordinary Python virtual environment beside `~/Runebender/models`.
+Python recipes run its `python3`, and DrawBot specimen scripts run its `drawbot`.
+The editor never creates or changes it, and the same tools work outside the editor after `source ~/Runebender/python/bin/activate`.
+Set it up once:
+
+```sh
+python3 -m venv ~/Runebender/python
+~/Runebender/python/bin/python -m pip install "drawbot-skia @ git+https://github.com/eliheuer/drawbot-skia.git"
+```
+
+DrawBot is found in this order: `DRAWBOT_BIN`, `drawbot` under `[specimen]` in `~/.config/runebender/config.toml`, this environment, then `PATH`.
+Designbot is found from `DESIGNBOT_BIN`, `designbot` under `[specimen]`, then `PATH`.
+
 ## 4. Models on disk
 
 | Kind | Location | Files |

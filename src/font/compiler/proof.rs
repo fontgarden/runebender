@@ -403,6 +403,9 @@ pub struct CompiledProofRecipe {
     /// Selected glyph form and occurrence captured from editor text, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<CompiledProofTarget>,
+    /// Drawing code that paints the whole proof in place of the shaped text, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub specimen_script: Option<crate::formats::specimen_script::SpecimenScript>,
 }
 
 /// A selected shaped occurrence that must survive compilation of both proof branches.
@@ -444,6 +447,7 @@ impl CompiledProofRecipe {
                 occurrence: selection.occurrence,
                 reference_pen_x: Some(selection.reference_pen_x),
             }),
+            specimen_script: None,
         };
         recipe.validate()?;
         Ok(recipe)
@@ -452,6 +456,9 @@ impl CompiledProofRecipe {
     /// Validate bounded, finite inputs before expensive outline extraction.
     pub fn validate(&self) -> Result<(), String> {
         self.rendering.validate()?;
+        if let Some(script) = &self.specimen_script {
+            script.validate()?;
+        }
         if self.text.is_empty() || self.text.len() > MAX_TEXT_BYTES {
             return Err(format!(
                 "proof text must contain 1 to {MAX_TEXT_BYTES} UTF-8 bytes"
@@ -660,6 +667,9 @@ pub fn prove(
     recipe: CompiledProofRecipe,
 ) -> Result<CompiledProof, String> {
     recipe.validate()?;
+    if let Some(script) = &recipe.specimen_script {
+        return prove_specimen_script(snapshot, script.clone(), recipe);
+    }
     if recipe.normalized_location.len() != snapshot.font.axis_tags.len() {
         return Err(format!(
             "proof location has {} coordinates, but compiled font has {} axes",
@@ -815,6 +825,32 @@ pub fn prove(
         target_glyph_index,
         png,
         detail,
+    })
+}
+
+/// Render a recipe's specimen script: designer code draws the whole page with the compiled font.
+fn prove_specimen_script(
+    snapshot: &CompiledProofSnapshot,
+    script: crate::formats::specimen_script::SpecimenScript,
+    recipe: CompiledProofRecipe,
+) -> Result<CompiledProof, String> {
+    let rendered = crate::formats::specimen_script::render(&script, &snapshot.font.bytes)?;
+    let recipe_sha256 = sha256(
+        &serde_json::to_vec(&recipe)
+            .map_err(|error| format!("could not encode recipe: {error}"))?,
+    );
+    Ok(CompiledProof {
+        font_sha256: snapshot.font_sha256.clone(),
+        document_revision: snapshot.document_revision,
+        compiler: snapshot.compiler.clone(),
+        canonical_input_sha256: snapshot.canonical_input_sha256.clone(),
+        recipe,
+        recipe_sha256,
+        renderer: rendered.renderer,
+        glyphs: Vec::new(),
+        target_glyph_index: None,
+        png: rendered.png,
+        detail: None,
     })
 }
 
@@ -1207,6 +1243,7 @@ mod tests {
             language: None,
             rendering: CompiledProofRendering::default(),
             target: None,
+            specimen_script: None,
         }
     }
 

@@ -20,6 +20,10 @@
 //! train_host = "kiln"   # ssh host that trains; "" for this machine; default kiln
 //! epochs = 800
 //! sample_epochs = 200   # a run on one sample alone
+//!
+//! [specimen]
+//! drawbot = "~/GH/repos/drawbot-skia/.venv"  # a virtual environment, or its bin/drawbot
+//! designbot = "~/.cargo/bin/designbot"        # default: designbot on PATH
 //! ```
 
 use std::path::PathBuf;
@@ -34,6 +38,27 @@ pub(crate) struct Config {
     pub editing: Editing,
     /// Training neural fonts from a `.nufo` source.
     pub neural: NeuralConfig,
+    /// Where the specimen script renderers are.
+    pub specimen: SpecimenConfig,
+}
+
+/// The `[specimen]` section: renderer locations for specimen script nodes. A leading `~/` is the
+/// home folder. Unset entries use `PATH`; `DESIGNBOT_BIN` and `DRAWBOT_BIN` override both.
+#[derive(Debug, Default, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct SpecimenConfig {
+    /// The `designbot` executable.
+    pub designbot: Option<String>,
+    /// The `drawbot` executable, or the virtual environment that holds it.
+    pub drawbot: Option<String>,
+}
+
+/// A configured path with a leading `~/` expanded to the home folder.
+fn expand_home(path: &str) -> PathBuf {
+    match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
+        (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
+        _ => PathBuf::from(path),
+    }
 }
 
 /// The `[neural]` section.
@@ -160,6 +185,10 @@ impl Config {
         runebender::outline::point_ops::set_grid_spacing(self.grid());
         let _ = NUDGE.set(self.nudge());
         let _ = NEURAL.set(self.neural());
+        runebender::formats::specimen_script::configure_tools(
+            self.specimen.designbot.as_deref().map(expand_home),
+            self.specimen.drawbot.as_deref().map(expand_home),
+        );
     }
 }
 
@@ -189,6 +218,20 @@ pub(crate) fn load() -> Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_specimen_section_names_renderers_with_home_expanded() {
+        let config = parse("[specimen]\ndrawbot = \"~/venvs/drawbot\"\n").unwrap();
+        assert_eq!(config.specimen.drawbot.as_deref(), Some("~/venvs/drawbot"));
+        assert_eq!(config.specimen.designbot, None);
+        if let Some(home) = std::env::var_os("HOME") {
+            assert_eq!(
+                expand_home("~/venvs/drawbot"),
+                PathBuf::from(home).join("venvs/drawbot")
+            );
+        }
+        assert_eq!(expand_home("/opt/drawbot"), PathBuf::from("/opt/drawbot"));
+    }
 
     #[test]
     fn defaults_are_whole_units_and_four_times_with_shift() {

@@ -237,6 +237,116 @@ pub(crate) fn live_graph_step(app: &mut Workspace, redo: bool) -> bool {
     false
 }
 
+/// Add a specimen script and the proof that renders it, below the graph: the current font
+/// feeds the proof, and the script feeds the proof's recipe.
+pub(crate) fn add_live_specimen_script(app: &mut Workspace) {
+    #[cfg(unix)]
+    {
+        use runebender::workflows::graph::{Link, Node};
+        use runebender::workflows::graph_live::SPECIMEN_SCRIPT;
+        let Some(snapshot) = app.live_graph_session().map(|session| session.snapshot()) else {
+            app.note = "Open the specimen graph before adding a script".into();
+            return;
+        };
+        let graph = &snapshot.graph;
+        let Some(font) = graph
+            .nodes
+            .iter()
+            .find(|node| node.type_name == "live.font")
+        else {
+            app.note = "The graph has no Current font node".into();
+            return;
+        };
+        let bottom = graph
+            .nodes
+            .iter()
+            .map(|node| node.pos[1])
+            .fold(0.0_f32, f32::max);
+        let top = bottom + 480.0;
+        let script = graph.next_id();
+        let proof = script + 1;
+        let node = |id: u32, type_name: &str, pos: [f32; 2]| Node {
+            id,
+            type_name: type_name.into(),
+            pos,
+            values: std::collections::BTreeMap::new(),
+        };
+        let edits = vec![
+            GraphEdit::AddNode {
+                node: node(script, SPECIMEN_SCRIPT, [font.pos[0], top]),
+            },
+            GraphEdit::AddNode {
+                node: node(proof, "live.proof", [font.pos[0] + 704.0, top]),
+            },
+            GraphEdit::Connect {
+                link: Link(font.id, "font".into(), proof, "font".into()),
+            },
+            GraphEdit::Connect {
+                link: Link(script, "recipe".into(), proof, "recipe".into()),
+            },
+        ];
+        let guard = GraphGuard {
+            identity: snapshot.identity.clone(),
+            revision: snapshot.revision,
+        };
+        live_interactive_mutation(app, guard, edits);
+        app.graph.selected = Some(script);
+        app.graph.fit_request = app.graph.fit_request.wrapping_add(1);
+    }
+    #[cfg(not(unix))]
+    {
+        app.note = "Live graph editing is available in the native editor".into();
+    }
+}
+
+/// Switch a specimen script's language. Code still equal to the other language's starter, or
+/// empty, becomes this language's starter, so switching an untouched node gives working code.
+pub(crate) fn set_live_script_language(
+    app: &mut Workspace,
+    guard: GraphGuard,
+    node: u32,
+    language: runebender::formats::specimen_script::ScriptLanguage,
+) {
+    #[cfg(unix)]
+    {
+        use runebender::formats::specimen_script::ScriptLanguage;
+        let Some(current) = app
+            .live_graph_session()
+            .and_then(|session| session.snapshot().graph.node(node).cloned())
+        else {
+            return;
+        };
+        let code = current
+            .values
+            .get("code")
+            .and_then(serde_json::Value::as_str);
+        let untouched = code.is_none_or(|code| {
+            code.trim().is_empty()
+                || [ScriptLanguage::Designbot, ScriptLanguage::Drawbot]
+                    .iter()
+                    .any(|other| code == other.starter())
+        });
+        let mut edits = vec![GraphEdit::SetValue {
+            node,
+            field: "language".into(),
+            value: serde_json::Value::String(language.name().into()),
+        }];
+        if untouched {
+            edits.push(GraphEdit::SetValue {
+                node,
+                field: "code".into(),
+                value: serde_json::Value::String(language.starter().into()),
+            });
+        }
+        live_interactive_mutation(app, guard, edits);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (guard, node, language);
+        app.note = "Live graph editing is available in the native editor".into();
+    }
+}
+
 /// Commit only the final header-drag position through the canonical graph guard.
 pub(crate) fn move_live_node(app: &mut Workspace, guard: GraphGuard, node: u32, pos: [f32; 2]) {
     #[cfg(unix)]

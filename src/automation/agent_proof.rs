@@ -346,6 +346,7 @@ mod tests {
                     language: None,
                     rendering: CompiledProofRendering::default(),
                     target: None,
+                    specimen_script: None,
                 },
                 recipe_sha256: "recipe-hash".into(),
                 renderer: RendererIdentity {
