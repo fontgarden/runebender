@@ -489,10 +489,14 @@ impl Workspace {
         let graph = state.graph.clone();
         let registry = state.registry.clone();
         let path = state.path.clone();
-        let mut rows = (*state.rows).clone();
-        if self.modified && !self.save() {
+        // External tools read the font from disk, but a graph run must never save
+        // implicitly: the designer saves, then runs.
+        if self.modified {
+            self.note =
+                "Save the font before running this graph; its tools read the saved files".into();
             return;
         }
+        let mut rows = (*state.rows).clone();
         // Give the engine the project source so `core.master` can resolve a
         // sibling designspace master. The job identity remains the
         // active UFO path below.
@@ -753,6 +757,38 @@ fn summary_line(n: &graph_run::NodeResult) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn running_a_graph_never_saves_unsaved_font_edits() {
+        let root = std::env::temp_dir().join(format!(
+            "runebender-xilem-graph-no-save-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("the system clock is after the Unix epoch")
+                .as_nanos(),
+        ));
+        let font_path = root.join("font.ufo");
+        std::fs::create_dir_all(&root).expect("the fixture root is created");
+        norad::Font::new()
+            .save(&font_path)
+            .expect("the empty font fixture saves");
+        let mut workspace = Workspace::open(&font_path).expect("the fixture opens");
+        workspace.new_graph_file();
+        let mut graph = NodeGraph::default();
+        graph.add("core.source", [0.0, 0.0]);
+        workspace.graph_changed(graph);
+        workspace.modified = true;
+        let saved = std::fs::read_dir(&font_path).unwrap().count();
+
+        workspace.run_graph();
+
+        assert!(workspace.modified, "the unsaved edits stay unsaved");
+        assert!(workspace.graph.job.is_none(), "nothing runs");
+        assert!(workspace.note.starts_with("Save the font"));
+        assert_eq!(std::fs::read_dir(&font_path).unwrap().count(), saved);
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn task_rows_and_node_types_share_the_declared_registry() {

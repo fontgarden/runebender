@@ -1026,6 +1026,20 @@ mod tests {
     }
 
     #[test]
+    fn opening_a_live_graph_forgets_a_node_selected_in_another_graph() {
+        use crate::application::editor::tools::graph::controls::select_live_specimen;
+        let project = Project::new_font(std::env::temp_dir().join("graph-selection.ufo"));
+        let mut app = Workspace::from_model(FontModel::from_project(project)).unwrap();
+        app.mode = crate::application::workspace::Mode::Graph;
+        app.graph.selected = Some(1);
+        select_live_specimen(&mut app);
+        assert_eq!(
+            app.graph.selected, None,
+            "Apply must not target a stale node id"
+        );
+    }
+
+    #[test]
     fn the_specimen_renders_on_open_and_again_after_edits_settle() {
         use crate::application::editor::tools::graph::controls::{
             live_autorun_tick, live_autorun_waiting, select_live_specimen,

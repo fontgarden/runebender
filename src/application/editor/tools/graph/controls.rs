@@ -28,6 +28,9 @@ pub(crate) fn select_live_comparison(app: &mut Workspace) {
     #[cfg(unix)]
     match app.ensure_live_graph() {
         Ok(()) => {
+            // Node ids are small integers in every graph, so a selection carried over
+            // from another graph would name an unrelated node here, and Apply targets it.
+            app.graph.selected = None;
             if app.graph.live_scope.trim().is_empty() {
                 app.graph.live_scope = selected_glyph_names(app).join(", ");
             }
@@ -537,6 +540,7 @@ pub(crate) fn select_live_specimen(app: &mut Workspace) {
     match app.ensure_live_specimen() {
         Ok(()) => {
             if !app.graph.live_selected {
+                app.graph.selected = None;
                 app.graph.live_selected = true;
                 app.graph.fit_request = app.graph.fit_request.wrapping_add(1);
             }
