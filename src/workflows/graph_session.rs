@@ -2071,7 +2071,9 @@ fn execution_plan(
             "execution contract requires one live.font and a bounded set of live.python/live.proof nodes",
         ));
     }
-    if version == 1 && graph.nodes.len() != 1 + scripts.len() + proofs.len() {
+    if version == 1
+        && graph.nodes.len() != 1 + scripts.len() + proofs.len() + specimen_scripts.len()
+    {
         return Err(GraphSessionError::new(
             GraphSessionErrorCode::UnsupportedTopology,
             "schema version 1 runs only the four-node comparison graph",
@@ -3523,7 +3525,12 @@ mod tests {
         use crate::workflows::graph_live;
         let recipes = graph_live::specimen_recipes(|_| 10.0, &[]);
         let mut graph = graph_live::specimen_starter(variable::SourceId(0), recipes);
-        let specimen_proofs: Vec<u32> = graph.nodes.iter().skip(1).map(|node| node.id).collect();
+        let specimen_proofs: Vec<u32> = graph
+            .nodes
+            .iter()
+            .filter(|node| node.type_name == "live.proof")
+            .map(|node| node.id)
+            .collect();
         let python =
             graph_live::add_comparison(&mut graph, &graph_live::default_proof_recipe()).unwrap();
         let session = GraphSession::new("graph", "document", graph, Registry::core()).unwrap();

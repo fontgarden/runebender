@@ -906,7 +906,7 @@ fn drive_ready(
             } else {
                 base.with_staged_edit(project, &record.candidates[&proof.input])
             };
-            let recipe = proof_recipe(&record.work.graph, node);
+            let recipe = proof_recipe(&record.work.graph, node, project.axes.len());
             match (input, recipe) {
                 (Ok(input), Ok(recipe)) => {
                     record.proof_request = Some(LiveGraphProofRequest {
@@ -1314,7 +1314,7 @@ fn validate_submit_capture(
     let graph = session.snapshot().graph;
     let mut recipes = Vec::with_capacity(plan.proofs.len());
     for proof in &plan.proofs {
-        let recipe = proof_recipe(&graph, proof.node)
+        let recipe = proof_recipe(&graph, proof.node, project.axes.len())
             .map_err(|message| err(LiveGraphExecutionErrorCode::Proof, message))?;
         if recipe.normalized_location.len() > 64
             || recipe.normalized_location.len() != project.axes.len()
@@ -1373,13 +1373,19 @@ fn record_parameters(
     Ok(parameters.into_iter().collect())
 }
 
+/// A proof node's recipe for a font with `axes` axes. A recipe that names no location renders
+/// at the default one, zero on every normalized axis.
 fn proof_recipe(
     graph: &runebender::workflows::graph::NodeGraph,
     node: u32,
+    axes: usize,
 ) -> Result<CompiledProofRecipe, String> {
     let value = runebender::workflows::graph_live::effective_proof_recipe(graph, node);
-    let recipe: CompiledProofRecipe =
+    let mut recipe: CompiledProofRecipe =
         serde_json::from_value(value).map_err(|error| error.to_string())?;
+    if recipe.normalized_location.is_empty() {
+        recipe.normalized_location = vec![0.0; axes];
+    }
     recipe.validate()?;
     Ok(recipe)
 }

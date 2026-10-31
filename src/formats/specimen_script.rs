@@ -68,8 +68,8 @@ impl ScriptLanguage {
     /// The starter script a new node shows in this language.
     pub fn starter(self) -> &'static str {
         match self {
-            Self::Designbot => DESIGNBOT_STARTER,
-            Self::Drawbot => DRAWBOT_STARTER,
+            Self::Designbot => EXAMPLES[0].designbot,
+            Self::Drawbot => EXAMPLES[0].drawbot,
         }
     }
 }
@@ -345,8 +345,55 @@ fn python_string(value: &str) -> String {
     quoted
 }
 
-/// The Designbot starter: a waterfall in the open font.
-pub const DESIGNBOT_STARTER: &str = r#"use designbot::prelude::*;
+/// A worked specimen script, written in both languages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScriptExample {
+    /// The name the add menu shows.
+    pub title: &'static str,
+    /// The Designbot Rust version.
+    pub designbot: &'static str,
+    /// The `DrawBot` Python version.
+    pub drawbot: &'static str,
+}
+
+impl ScriptExample {
+    /// This example in a language.
+    pub fn code(self, language: ScriptLanguage) -> &'static str {
+        match language {
+            ScriptLanguage::Designbot => self.designbot,
+            ScriptLanguage::Drawbot => self.drawbot,
+        }
+    }
+
+    /// The example whose code, in either language, is exactly `code`.
+    pub fn matching(code: &str) -> Option<Self> {
+        EXAMPLES
+            .into_iter()
+            .find(|example| example.designbot == code || example.drawbot == code)
+    }
+}
+
+/// The examples the add menu offers; the first is a new node's starter.
+pub const EXAMPLES: [ScriptExample; 3] = [
+    ScriptExample {
+        title: "Waterfall",
+        designbot: DESIGNBOT_WATERFALL,
+        drawbot: DRAWBOT_WATERFALL,
+    },
+    ScriptExample {
+        title: "Character set",
+        designbot: DESIGNBOT_CHARACTER_SET,
+        drawbot: DRAWBOT_CHARACTER_SET,
+    },
+    ScriptExample {
+        title: "Poster",
+        designbot: DESIGNBOT_POSTER,
+        drawbot: DRAWBOT_POSTER,
+    },
+];
+
+/// A sample line at falling sizes, top to bottom.
+const DESIGNBOT_WATERFALL: &str = r#"use designbot::prelude::*;
 
 fn main() {
     let (width, height) = (2048.0, 1024.0);
@@ -354,8 +401,8 @@ fn main() {
     let mut renderer = Renderer::new(width as u32, height as u32);
     renderer.load_font(FONT_PATH).expect("the open font");
 
-    ctx.background(Color::rgb(10, 10, 10));
-    ctx.fill(Color::rgb(245, 245, 245)).font(FONT_FAMILY);
+    ctx.background(Color::gray(10));
+    ctx.fill(Color::gray(245)).font(FONT_FAMILY);
 
     let sample = "The quick brown fox jumps over the lazy dog";
     let margin = width * 0.04;
@@ -372,8 +419,7 @@ fn main() {
 }
 "#;
 
-/// The `DrawBot` starter: the same waterfall in Python.
-pub const DRAWBOT_STARTER: &str = r#"WIDTH, HEIGHT = 2048, 1024
+const DRAWBOT_WATERFALL: &str = r#"WIDTH, HEIGHT = 2048, 1024
 newPage(WIDTH, HEIGHT)
 
 fill(0.04)
@@ -389,6 +435,125 @@ for size in [96, 72, 60, 48, 36, 28, 24, 18, 14, 12]:
     font(FONT_PATH, size)
     text(sample, (margin, y))
     y -= size * 1.8
+"#;
+
+/// The basic character set, top-left aligned and as large as the page allows.
+const DESIGNBOT_CHARACTER_SET: &str = r#"use designbot::prelude::*;
+
+fn main() {
+    let (width, height) = (2048.0, 2048.0);
+    let mut ctx = Canvas::new(width, height);
+    let mut renderer = Renderer::new(width as u32, height as u32);
+    renderer.load_font(FONT_PATH).expect("the open font");
+
+    let lines = [
+        "ABCDEFGHI", "JKLMNOPQR", "STUVWXYZ",
+        "abcdefghi", "jklmnopqr", "stuvwxyz", "0123456789",
+    ];
+    let margin = 144.0;
+    let leading = 1.15;
+    // The widest line sets the size, unless the lines run out of height first.
+    let widest = lines
+        .iter()
+        .map(|line| renderer.text_width(line, Some(FONT_FAMILY), 100.0, &[]))
+        .fold(0.0, f64::max);
+    let by_width = (width - margin * 2.0) / widest * 100.0;
+    let by_height = (height - margin * 2.0) / (lines.len() as f64 * leading);
+    let size = by_width.min(by_height);
+
+    ctx.background(Color::gray(10));
+    ctx.fill(Color::gray(245)).font(FONT_FAMILY).font_size(size);
+    ctx.text_align(TextAlign::Left);
+    let mut y = height - margin - size * 0.95;
+    for line in lines {
+        ctx.text(line, margin, y);
+        y -= size * leading;
+    }
+
+    renderer.render_to_png(&ctx, "specimen.png").unwrap();
+}
+"#;
+
+const DRAWBOT_CHARACTER_SET: &str = r#"WIDTH, HEIGHT = 2048, 2048
+newPage(WIDTH, HEIGHT)
+
+fill(0.04)
+rect(0, 0, WIDTH, HEIGHT)
+
+lines = ["ABCDEFGHI", "JKLMNOPQR", "STUVWXYZ",
+         "abcdefghi", "jklmnopqr", "stuvwxyz", "0123456789"]
+margin = 144
+leading = 1.15
+# The widest line sets the size, unless the lines run out of height first.
+font(FONT_PATH, 100)
+widest = max(textSize(line)[0] for line in lines)
+size = min((WIDTH - margin * 2) / widest * 100,
+           (HEIGHT - margin * 2) / (len(lines) * leading))
+
+fill(0.96)
+font(FONT_PATH, size)
+y = HEIGHT - margin - size * 0.95
+for line in lines:
+    text(line, (margin, y))
+    y -= size * leading
+"#;
+
+/// Two large letters with the family name and a hairline rule.
+const DESIGNBOT_POSTER: &str = r#"use designbot::prelude::*;
+
+fn main() {
+    let (width, height) = (1600.0, 2048.0);
+    let mut ctx = Canvas::new(width, height);
+    let mut renderer = Renderer::new(width as u32, height as u32);
+    renderer.load_font(FONT_PATH).expect("the open font");
+
+    let margin = 96.0;
+    let word = "Aa";
+    // Fill the width with the word.
+    let size = (width - margin * 2.0) / renderer.text_width(word, Some(FONT_FAMILY), 100.0, &[])
+        * 100.0;
+
+    ctx.background(Color::gray(10));
+    ctx.fill(Color::gray(245)).font(FONT_FAMILY).text_align(TextAlign::Left);
+    ctx.font_size(size).text(word, margin, height * 0.3);
+
+    ctx.no_fill().stroke(Color::gray(120)).stroke_width(2.0);
+    ctx.line(margin, height - margin - 72.0, width - margin, height - margin - 72.0);
+
+    ctx.fill(Color::gray(245));
+    ctx.font_size(56.0).text(FONT_FAMILY, margin, height - margin - 40.0);
+    ctx.font_size(32.0).text("ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789", margin, margin);
+
+    renderer.render_to_png(&ctx, "specimen.png").unwrap();
+}
+"#;
+
+const DRAWBOT_POSTER: &str = r#"WIDTH, HEIGHT = 1600, 2048
+newPage(WIDTH, HEIGHT)
+
+fill(0.04)
+rect(0, 0, WIDTH, HEIGHT)
+
+margin = 96
+word = "Aa"
+# Fill the width with the word.
+font(FONT_PATH, 100)
+size = (WIDTH - margin * 2) / textSize(word)[0] * 100
+
+fill(0.96)
+font(FONT_PATH, size)
+text(word, (margin, HEIGHT * 0.3))
+
+stroke(0.47)
+strokeWidth(2)
+line((margin, HEIGHT - margin - 72), (WIDTH - margin, HEIGHT - margin - 72))
+
+stroke(None)
+fill(0.96)
+font(FONT_PATH, 56)
+text(FONT_FAMILY, (margin, HEIGHT - margin - 40))
+font(FONT_PATH, 32)
+text("ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789", (margin, margin))
 "#;
 
 #[cfg(test)]
@@ -417,7 +582,7 @@ mod tests {
         assert!(script.validate().is_err());
         script.code = "x".repeat(MAX_SCRIPT_BYTES + 1);
         assert!(script.validate().is_err());
-        script.code = DESIGNBOT_STARTER.into();
+        script.code = DESIGNBOT_WATERFALL.into();
         assert!(script.validate().is_ok());
     }
 
@@ -427,14 +592,24 @@ mod tests {
     fn starters_render_with_the_installed_tools() {
         let font = std::fs::read(std::env::var_os("RUNEBENDER_SCRIPT_FONT").expect("a TTF path"))
             .expect("the font reads");
-        for language in [ScriptLanguage::Designbot, ScriptLanguage::Drawbot] {
-            let script = SpecimenScript {
-                language,
-                code: language.starter().into(),
-            };
-            match render(&script, &font) {
-                Ok(rendered) => assert!(rendered.png.starts_with(b"\x89PNG")),
-                Err(error) => panic!("{}: {error}", language.name()),
+        for example in EXAMPLES {
+            for language in [ScriptLanguage::Designbot, ScriptLanguage::Drawbot] {
+                let script = SpecimenScript {
+                    language,
+                    code: example.code(language).into(),
+                };
+                match render(&script, &font) {
+                    Ok(rendered) => {
+                        assert!(rendered.png.starts_with(b"\x89PNG"));
+                        // RUNEBENDER_SCRIPT_OUT keeps the images for review.
+                        if let Some(out) = std::env::var_os("RUNEBENDER_SCRIPT_OUT") {
+                            let name = format!("{}-{}.png", example.title, language.name());
+                            std::fs::write(Path::new(&out).join(name), &rendered.png)
+                                .expect("the review image writes");
+                        }
+                    }
+                    Err(error) => panic!("{} in {}: {error}", example.title, language.name()),
+                }
             }
         }
     }

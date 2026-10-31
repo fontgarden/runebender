@@ -191,6 +191,60 @@ fn proof_size(app: &Workspace, node: &runebender::workflows::graph::Node) -> [f3
     }
 }
 
+/// The open font's basic character set, set in five centered lines from the active source's
+/// outlines, for the Current font node. Missing characters are left out.
+fn font_preview(app: &Workspace, node: u32) -> Option<runebender::ui::graph::GlyphsContent> {
+    const LINES: [&str; 5] = [
+        "ABCDEFGHIJKLM",
+        "NOPQRSTUVWXYZ",
+        "abcdefghijklm",
+        "nopqrstuvwxyz",
+        "0123456789",
+    ];
+    use masonry::kurbo::{Affine, BezPath};
+    let by_char: std::collections::HashMap<char, &crate::application::font_model::GlyphEntry> = app
+        .font
+        .glyphs
+        .iter()
+        .filter_map(|glyph| glyph.codepoint.map(|c| (c, glyph)))
+        .collect();
+    let line_height = app.font.units_per_em() * 1.2;
+    let widths: Vec<f64> = LINES
+        .iter()
+        .map(|line| {
+            line.chars()
+                .filter_map(|c| by_char.get(&c))
+                .map(|glyph| glyph.advance)
+                .sum()
+        })
+        .collect();
+    let widest = widths.iter().copied().fold(0.0, f64::max);
+    let mut outline = BezPath::new();
+    for (index, (line, width)) in LINES.iter().zip(&widths).enumerate() {
+        let mut x = (widest - width) / 2.0;
+        let y = -line_height * index as f64;
+        for glyph in line.chars().filter_map(|c| by_char.get(&c)) {
+            let placed = Affine::translate((x, y)) * (*glyph.outline).clone();
+            outline.extend(placed.elements().iter().copied());
+            x += glyph.advance;
+        }
+    }
+    (!outline.elements().is_empty()).then(|| runebender::ui::graph::GlyphsContent {
+        outline: Arc::new(outline),
+        // A new master shows other outlines at the same document revision.
+        revision: app
+            .font
+            .project
+            .document_revision()
+            .wrapping_mul(1024)
+            .wrapping_add(app.font.active() as u64),
+        size: content_size(app, node, FONT_PREVIEW_H),
+    })
+}
+
+/// Initial height of the Current font node's character set.
+const FONT_PREVIEW_H: f64 = 200.0;
+
 fn content_size(app: &Workspace, node: u32, height: f64) -> [f32; 2] {
     app.graph.content_sizes.get(&node).copied().unwrap_or([
         px32(runebender::ui::graph::LIVE_W - runebender::ui::graph::PAD * 2.0),
@@ -302,6 +356,13 @@ fn live_projection(app: &Workspace) -> Option<CanvasProjection> {
                         size: content_size(app, node.id, runebender::ui::graph::CODE_H),
                     }),
                 );
+            }
+            "live.font" => {
+                if let Some(preview) = font_preview(app, node.id) {
+                    content
+                        .by_node
+                        .insert(node.id, NodeContent::Glyphs(preview));
+                }
             }
             runebender::workflows::graph_live::SPECIMEN_SCRIPT => {
                 let language = ScriptLanguage::from_name(
@@ -792,7 +853,9 @@ pub(crate) fn graph_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
                 app.graph.content_sizes.insert(node, size);
             }
             GraphEvent::Note(note) => app.note = note,
-            GraphEvent::AddSpecimenScript { pos } => add_live_specimen_script(app, Some(pos)),
+            GraphEvent::AddSpecimenScript { pos, example } => {
+                add_live_specimen_script(app, Some(pos), example);
+            }
             GraphEvent::Zoom(zoom) => app.graph.zoom = Some(zoom),
             GraphEvent::Image { node, action } => match action {
                 ImageAction::Expand => app.graph.expanded = Some(node),

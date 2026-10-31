@@ -72,6 +72,25 @@ pub enum NodeContent {
     Script(ScriptContent),
     /// An immutable PNG proof image and its visible run state.
     Image(ImageContent),
+    /// Glyph outlines drawn by the canvas itself, such as a font's character set.
+    Glyphs(GlyphsContent),
+}
+
+/// Outlines a node shows without running anything: laid out in font units, y up.
+#[derive(Debug, Clone)]
+pub struct GlyphsContent {
+    /// Every glyph, already placed; the canvas fits its bounds into the content area.
+    pub outline: Arc<BezPath>,
+    /// Identity of the outline, so an unchanged preview compares equal without a path walk.
+    pub revision: u64,
+    /// Presentation size in canvas units.
+    pub size: [f32; 2],
+}
+
+impl PartialEq for GlyphsContent {
+    fn eq(&self, other: &Self) -> bool {
+        self.revision == other.revision && self.size == other.size
+    }
 }
 
 /// The source and execution state shown inside a script node.
@@ -197,6 +216,7 @@ impl NodeBox {
             let height = match content {
                 NodeContent::Script(content) => f64::from(content.size[1]),
                 NodeContent::Image(content) => f64::from(content.size[1]),
+                NodeContent::Glyphs(content) => f64::from(content.size[1]),
             };
             Rect::new(
                 self.rect.x0 + PAD,
@@ -309,12 +329,14 @@ pub fn node_box_with_content(
     let content_width = match &content {
         Some(NodeContent::Script(content)) => f64::from(content.size[0]) + PAD * 2.0,
         Some(NodeContent::Image(content)) => f64::from(content.size[0]) + PAD * 2.0,
+        Some(NodeContent::Glyphs(content)) => f64::from(content.size[0]) + PAD * 2.0,
         None => 0.0,
     };
     let width = if live { LIVE_W } else { NODE_W }.max(content_width);
     let content_height = match &content {
         Some(NodeContent::Script(content)) => f64::from(content.size[1]) + PAD * 2.0,
         Some(NodeContent::Image(content)) => f64::from(content.size[1]) + PAD * 2.0,
+        Some(NodeContent::Glyphs(content)) => f64::from(content.size[1]) + PAD * 2.0,
         None => 0.0,
     };
     // The old live-node shell reserved space for canvas action buttons and a

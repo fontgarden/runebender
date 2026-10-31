@@ -296,38 +296,32 @@ fn fit_size(advance_em: &dyn Fn(&str) -> f64, lines: &[&str], width: f64) -> f64
 
 /// One display word over the alphabet and figures, centered on a square page.
 fn poster_recipe(advance_em: &dyn Fn(&str) -> f64, normalized_location: &[f64]) -> Value {
-    const HEADLINE: &str = "Hamburgefontsiv";
-    const BODY: [&str; 5] = [
-        "ABCDEFGHIJKLM",
-        "NOPQRSTUVWXYZ",
-        "abcdefghijklm",
-        "nopqrstuvwxyz",
+    // Seven short lines, so the set fills the square page in both directions.
+    const BODY: [&str; 7] = [
+        "ABCDEFGHI",
+        "JKLMNOPQR",
+        "STUVWXYZ",
+        "abcdefghi",
+        "jklmnopqr",
+        "stuvwxyz",
         "0123456789",
     ];
-    // Lines sit 1.2 em apart; a baseline is 0.95 em below its line's top,
+    // Lines sit 1.15 em apart; a baseline is 0.95 em below its line's top,
     // which clears accents above and descenders below.
-    const LEADING: f64 = 1.2;
+    const LEADING: f64 = 1.15;
     const DROP: f64 = 0.95;
-    let width = PAGE_SIZE - 2.0 * PAGE_MARGIN;
-    let mut headline = fit_size(advance_em, &[HEADLINE], width).min(400.0);
-    let mut body = fit_size(advance_em, &BODY, width).min(headline * 0.6);
-    let gap = |body: f64| body * 0.8;
-    let total = |headline: f64, body: f64| {
-        headline * LEADING + gap(body) + BODY.len() as f64 * body * LEADING
-    };
     let room = PAGE_SIZE - 2.0 * PAGE_MARGIN;
-    if total(headline, body) > room {
-        let shrink = room / total(headline, body);
-        headline *= shrink;
-        body *= shrink;
-    }
-    let mut top = (PAGE_SIZE - total(headline, body)) / 2.0;
-    let mut lines = vec![(HEADLINE, headline, top + headline * DROP)];
-    top += headline * LEADING + gap(body);
-    for (index, text) in BODY.iter().enumerate() {
-        lines.push((text, body, top + body * (DROP + LEADING * index as f64)));
-    }
-    page_recipe(&lines, PAGE_SIZE, "center", normalized_location)
+    let lines_height = |size: f64| BODY.len() as f64 * size * LEADING;
+    let size = fit_size(advance_em, &BODY, room).min(room / lines_height(1.0));
+    let lines: Vec<_> = BODY
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+            let top = PAGE_MARGIN + size * LEADING * index as f64;
+            (*text, size, top + size * DROP)
+        })
+        .collect();
+    page_recipe(&lines, PAGE_SIZE, "start", normalized_location)
 }
 
 /// One sentence from the largest size that fits down to text sizes.
@@ -434,6 +428,12 @@ pub fn specimen_starter(source_id: SourceId, recipes: Vec<Value>) -> NodeGraph {
         .unwrap()
         .values
         .insert("source".into(), json!(source_id.0));
+    // The script's proof is captured at the same design-space location as the built-in pages.
+    let location = recipes
+        .first()
+        .and_then(|recipe| recipe.get("normalized_location"))
+        .cloned()
+        .unwrap_or_else(|| json!([]));
     let mut y = 32.0_f32;
     for recipe in recipes {
         let height = recipe_raster(&recipe).map_or(144.0, |[w, h]| CONTENT_WIDTH * h / w.max(1.0));
@@ -452,6 +452,28 @@ pub fn specimen_starter(source_id: SourceId, recipes: Vec<Value>) -> NodeGraph {
             y += (height as f32) + NODE_CHROME + GAP;
         }
     }
+    // A worked specimen script and the proof that renders it, below the built-in pages. Its
+    // proof is added last, so the built-in pages render first while the script compiles.
+    let example = crate::formats::specimen_script::EXAMPLES[2];
+    let script = graph.add(SPECIMEN_SCRIPT, [32.0, y]);
+    let values = &mut graph.node_mut(script).unwrap().values;
+    values.insert("language".into(), json!(ScriptLanguage::Designbot.name()));
+    values.insert(
+        "code".into(),
+        json!(example.code(ScriptLanguage::Designbot)),
+    );
+    let proof = graph.add("live.proof", [704.0, y]);
+    graph
+        .node_mut(proof)
+        .unwrap()
+        .values
+        .insert("recipe".into(), {
+            let mut recipe = default_proof_recipe();
+            recipe["normalized_location"] = location;
+            recipe
+        });
+    graph.connect(source, "font", proof, "font");
+    graph.connect(script, "recipe", proof, "recipe");
     graph
 }
 
@@ -1082,7 +1104,8 @@ mod tests {
             .iter()
             .filter(|node| node.type_name == "live.proof")
             .collect();
-        assert_eq!(proofs.len(), SPECIMEN_PAGES);
+        // One proof per built-in page, and one for the example script.
+        assert_eq!(proofs.len(), SPECIMEN_PAGES + 1);
         assert!(
             proofs
                 .iter()

@@ -163,7 +163,7 @@ pub(crate) fn run(
                 workspace.live_graph_pump();
                 workspace.sync_live_graph_presentation();
                 if workspace.graph.proof_images.len()
-                    >= runebender::workflows::graph_live::SPECIMEN_PAGES
+                    > runebender::workflows::graph_live::SPECIMEN_PAGES
                 {
                     break;
                 }

@@ -73,12 +73,14 @@ pub(crate) enum GraphEvent {
     Zoom(f64),
     /// A title-bar button of an image node was clicked.
     Image { node: u32, action: nl::ImageAction },
-    /// The add menu's template: a specimen script and the proof that renders it, at `pos`.
-    AddSpecimenScript { pos: [f32; 2] },
+    /// The add menu's template: an example specimen script and the proof that renders it, at
+    /// `pos`. `example` indexes `specimen_script::EXAMPLES`.
+    AddSpecimenScript { pos: [f32; 2], example: usize },
 }
 
-/// The add menu entry that places a specimen script and its proof together.
-const SPECIMEN_SCRIPT_TEMPLATE: &str = "template.specimen_script";
+/// Add menu entries that place an example specimen script and its proof; the example's index
+/// follows the prefix.
+const SPECIMEN_SCRIPT_TEMPLATE: &str = "template.specimen_script.";
 
 /// What a drag on the canvas is doing.
 #[derive(Debug, Clone)]
@@ -344,6 +346,7 @@ fn content_children(content: &NodeContentMap, text_color: Color) -> ContentChild
                     images.insert(node, NewWidget::new(SpecimenPreview::new(decoded)).to_pod());
                 }
             }
+            nl::NodeContent::Glyphs(_) => {}
         }
     }
     (editors, area_ids, images)
@@ -364,7 +367,7 @@ fn projected_images(content: &NodeContentMap) -> Vec<ProjectedImage> {
                     .or(content.previous_image.as_ref())
                     .map(|image| (image.output_hash.clone(), image.width, image.height)),
             )),
-            nl::NodeContent::Script(_) => None,
+            nl::NodeContent::Script(_) | nl::NodeContent::Glyphs(_) => None,
         })
         .collect()
 }
@@ -394,7 +397,9 @@ impl GraphWidget {
         this.widget.menu = None;
         let wire = this.widget.pending_wire.take();
         if let MenuAction::AddNode(type_name) = &action
-            && type_name == SPECIMEN_SCRIPT_TEMPLATE
+            && let Some(example) = type_name
+                .strip_prefix(SPECIMEN_SCRIPT_TEMPLATE)
+                .and_then(|index| index.parse().ok())
         {
             this.ctx
                 .submit_action::<GraphEvent>(GraphEvent::AddSpecimenScript {
@@ -402,6 +407,7 @@ impl GraphWidget {
                         crate::application::view::render::px32(nl::snap(at.x)),
                         crate::application::view::render::px32(nl::snap(at.y)),
                     ],
+                    example,
                 });
             return;
         }
@@ -468,10 +474,15 @@ impl GraphWidget {
             .collect();
         let script = runebender::workflows::graph_live::SPECIMEN_SCRIPT.to_string();
         if wire.is_none() && self.addable.contains(&script) {
-            rows.push(MenuRow {
-                label: std::borrow::Cow::Borrowed("Specimen script and proof"),
-                action: MenuAction::AddNode(SPECIMEN_SCRIPT_TEMPLATE.into()),
-            });
+            for (index, example) in runebender::formats::specimen_script::EXAMPLES
+                .iter()
+                .enumerate()
+            {
+                rows.push(MenuRow {
+                    label: std::borrow::Cow::Owned(format!("Script: {}", example.title)),
+                    action: MenuAction::AddNode(format!("{SPECIMEN_SCRIPT_TEMPLATE}{index}")),
+                });
+            }
         }
         if rows.is_empty() {
             return;
@@ -923,7 +934,7 @@ impl Widget for GraphWidget {
             let content_state = match &nb.content {
                 Some(nl::NodeContent::Script(content)) => Some(&content.state),
                 Some(nl::NodeContent::Image(content)) => Some(&content.state),
-                None => None,
+                Some(nl::NodeContent::Glyphs(_)) | None => None,
             };
             let mark_text = match (self.rows.get(&nb.id), content_state) {
                 (_, Some(nl::ContentState::Running)) => "Running\u{2026}",
@@ -1007,6 +1018,24 @@ impl Widget for GraphWidget {
                     pal.text_muted,
                     Anchor::End,
                 );
+            }
+            // A font's character set, fitted into the content area with its baseline up.
+            if let (Some(nl::NodeContent::Glyphs(content)), Some(area)) =
+                (&nb.content, nb.content_rect())
+            {
+                let bounds = content.outline.bounding_box();
+                if bounds.width() > 0.0 && bounds.height() > 0.0 {
+                    let scale =
+                        (area.width() / bounds.width()).min(area.height() / bounds.height());
+                    let fit = Affine::translate((
+                        area.x0 + (area.width() - bounds.width() * scale) / 2.0,
+                        area.y0 + (area.height() - bounds.height() * scale) / 2.0,
+                    )) * Affine::scale_non_uniform(scale, -scale)
+                        * Affine::translate((-bounds.x0, -bounds.y1));
+                    painter
+                        .fill(&(tf * fit * (*content.outline).clone()), pal.text)
+                        .draw();
+                }
             }
             // A proof with nothing to show says why: it has not run, or how its run failed.
             if let (Some(nl::NodeContent::Image(content)), Some(area)) =
@@ -1159,7 +1188,7 @@ impl Widget for GraphWidget {
                             Some(NodeRegion::Content)
                                 if matches!(
                                     self.content.get(id),
-                                    Some(nl::NodeContent::Image(_))
+                                    Some(nl::NodeContent::Image(_) | nl::NodeContent::Glyphs(_))
                                 ) =>
                             {
                                 let origin = self.graph.node(id).map(|n| n.pos).unwrap_or_default();
@@ -1177,6 +1206,7 @@ impl Widget for GraphWidget {
                                 let origin = match self.content.get(id) {
                                     Some(nl::NodeContent::Script(content)) => content.size,
                                     Some(nl::NodeContent::Image(content)) => content.size,
+                                    Some(nl::NodeContent::Glyphs(content)) => content.size,
                                     None => [
                                         crate::application::view::render::px32(nl::LIVE_W),
                                         crate::application::view::render::px32(nl::IMAGE_H),
@@ -1267,6 +1297,7 @@ impl Widget for GraphWidget {
                             match content {
                                 nl::NodeContent::Script(content) => content.size = size,
                                 nl::NodeContent::Image(content) => content.size = size,
+                                nl::NodeContent::Glyphs(content) => content.size = size,
                             }
                         }
                         self.relayout();
@@ -1360,6 +1391,7 @@ impl Widget for GraphWidget {
                         let size = match self.content.get(id) {
                             Some(nl::NodeContent::Script(content)) => content.size,
                             Some(nl::NodeContent::Image(content)) => content.size,
+                            Some(nl::NodeContent::Glyphs(content)) => content.size,
                             None => return,
                         };
                         ctx.submit_action::<GraphEvent>(GraphEvent::Resize { node: id, size });

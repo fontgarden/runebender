@@ -1115,7 +1115,8 @@ mod tests {
                 .iter()
                 .filter(|node| node.type_name == "live.proof")
                 .count(),
-            graph_live::SPECIMEN_PAGES
+            graph_live::SPECIMEN_PAGES + 1,
+            "the built-in pages and the example script's proof"
         );
         assert!(live_autorun_waiting(&app), "the first render does not wait");
         live_autorun_tick(&mut app);
