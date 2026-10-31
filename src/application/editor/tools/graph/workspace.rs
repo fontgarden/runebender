@@ -1026,6 +1026,40 @@ mod tests {
     }
 
     #[test]
+    fn undo_in_the_graph_steps_the_graph_history() {
+        use crate::application::editor::tools::graph::controls::{
+            move_live_node, select_live_specimen,
+        };
+        use runebender::workflows::graph_session::GraphGuard;
+        let project = Project::new_font(std::env::temp_dir().join("graph-undo.ufo"));
+        let mut app = Workspace::from_model(FontModel::from_project(project)).unwrap();
+        app.mode = crate::application::workspace::Mode::Graph;
+        select_live_specimen(&mut app);
+        let before = app.live_graph_session().unwrap().snapshot();
+        let node = before.graph.nodes[0].id;
+        let guard = GraphGuard {
+            identity: before.identity.clone(),
+            revision: before.revision,
+        };
+        move_live_node(&mut app, guard, node, [400.0, 400.0]);
+        assert_ne!(
+            app.live_graph_session().unwrap().snapshot().graph,
+            before.graph
+        );
+
+        app.dispatch(crate::application::widgets::shortcuts::AppAction::Undo);
+        assert_eq!(
+            app.live_graph_session().unwrap().snapshot().graph,
+            before.graph
+        );
+        app.dispatch(crate::application::widgets::shortcuts::AppAction::Redo);
+        assert_ne!(
+            app.live_graph_session().unwrap().snapshot().graph,
+            before.graph
+        );
+    }
+
+    #[test]
     fn opening_a_live_graph_forgets_a_node_selected_in_another_graph() {
         use crate::application::editor::tools::graph::controls::select_live_specimen;
         let project = Project::new_font(std::env::temp_dir().join("graph-selection.ufo"));
@@ -1063,6 +1097,11 @@ mod tests {
         let mut app = Workspace::from_model(FontModel::from_project(project)).unwrap();
         app.mode = crate::application::workspace::Mode::Graph;
         select_live_specimen(&mut app);
+        assert!(
+            !live_autorun_waiting(&app),
+            "with Auto off the graph waits for Run"
+        );
+        app.graph.auto_run = true;
         let graph = app.live_graph_session().unwrap().snapshot().graph;
         assert!(
             graph

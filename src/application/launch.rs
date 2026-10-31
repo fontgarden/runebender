@@ -156,6 +156,8 @@ pub(crate) fn run(
             && matches!(workspace.mode, crate::application::workspace::Mode::Graph)
             && workspace.live_graph.is_some()
         {
+            // A capture shows the graph rendered, as if the designer pressed Run.
+            workspace.graph.auto_run = true;
             crate::application::editor::tools::graph::controls::live_autorun_tick(workspace);
             for _ in 0..1200 {
                 workspace.live_graph_pump();

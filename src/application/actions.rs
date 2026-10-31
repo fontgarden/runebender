@@ -148,7 +148,11 @@ impl Entry {
                 Mode::Overview => {
                     !app.overview_undo.is_empty() || app.can_metadata_history_step(false)
                 }
-                Mode::Graph => app.can_metadata_history_step(false),
+                Mode::Graph => {
+                    crate::application::editor::tools::graph::controls::live_graph_can_step(
+                        app, false,
+                    ) || app.can_metadata_history_step(false)
+                }
             },
             A::Redo => match app.mode {
                 Mode::Editor(index) => {
@@ -162,7 +166,11 @@ impl Entry {
                 Mode::Overview => {
                     !app.overview_redo.is_empty() || app.can_metadata_history_step(true)
                 }
-                Mode::Graph => app.can_metadata_history_step(true),
+                Mode::Graph => {
+                    crate::application::editor::tools::graph::controls::live_graph_can_step(
+                        app, true,
+                    ) || app.can_metadata_history_step(true)
+                }
             },
             A::MetaballsToCubic | A::MetaballsToHyperbezier => editor,
             A::FontMetaballsToCubic => matches!(app.mode, Mode::Overview),
@@ -311,7 +319,7 @@ pub(crate) const ACTIONS: &[Entry] = &[
     Entry {
         menu: "Graph",
         title: "Run Graph",
-        accelerator: None,
+        accelerator: Some("CmdOrCtrl+Enter"),
         action: AppAction::GraphRun,
     },
     Entry {
@@ -950,6 +958,8 @@ fn action_for_key_impl(
         let expected = accelerator.rsplit('+').next()?;
         let matches = if expected == "Escape" {
             matches!(key, Key::Named(NamedKey::Escape))
+        } else if expected == "Enter" {
+            matches!(key, Key::Named(NamedKey::Enter))
         } else {
             matches!(key, Key::Character(c) if c.eq_ignore_ascii_case(expected))
         };

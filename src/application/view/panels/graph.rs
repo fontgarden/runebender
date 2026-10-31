@@ -48,6 +48,9 @@ use crate::application::editor::tools::graph::execution::LiveGraphPhase;
 #[cfg(unix)]
 use runebender::workflows::graph_session::{GraphRunHandle, GraphRunStatus};
 
+/// Node types a live graph can run: one current font feeding Python recipes and proofs.
+const LIVE_RUNNABLE: [&str; 3] = ["live.font", "live.python", "live.proof"];
+
 struct CanvasProjection {
     graph: Arc<NodeGraph>,
 
@@ -458,6 +461,7 @@ pub(crate) fn graph_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
         .iter()
         .any(|node| node.type_name == "live.python");
     let running = view.running;
+    let auto_run = app.graph.auto_run;
     let can_cancel = view.can_cancel;
     let can_clear = view.can_clear;
     let can_apply = view.can_apply;
@@ -473,11 +477,66 @@ pub(crate) fn graph_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
     // The left tab rail and the inspector's first header occupy this same
     // 36-pixel band. One square, keylined control style keeps the file tabs
     // and commands from reading as two unrelated toolbars.
+    // The strip sits in a portal: its buttons scroll sideways on a narrow window instead of
+    // widening the column, which would push the canvas under the inspector.
     let strip = bottom_keyline(
         sized_box(
+            portal(
             xrow(
                 Region::Inline,
                 (
+                    // Run and its state lead, so a narrow strip never hides them.
+                    recipes::toggle(
+                        pal,
+                        if running {
+                            "Running\u{2026}"
+                        } else {
+                            "Run"
+                        }
+                        .into(),
+                        running,
+                        move |app: &mut Workspace| {
+                            if running {
+                                app.note = "A Graph comparison is already running".into();
+                            } else if live {
+                                run_live_comparison(app);
+                            } else {
+                                app.run_graph();
+                            }
+                        },
+                    ),
+                    (live && !has_python).then(|| {
+                        recipes::toggle(pal, "Auto".into(), auto_run, |app: &mut Workspace| {
+                            app.graph.auto_run = !app.graph.auto_run;
+                        })
+                    }),
+                    (live && can_cancel).then(|| {
+                        recipes::toggle(
+                            pal,
+                            "Cancel".into(),
+                            true,
+                            cancel_live_comparison,
+                        )
+                    }),
+                    // Results clear themselves as the specimen renders again; only a
+                    // comparison's results wait for an explicit Clear.
+                    (live && has_python && can_clear).then(|| {
+                        recipes::toggle(pal, "Clear".into(), false, clear_live_results)
+                    }),
+                    (live && has_python).then(|| {
+                        recipes::toggle(
+                            pal,
+                            if can_apply { "Apply" } else { "Apply unavailable" }.into(),
+                            can_apply,
+                            move |app: &mut Workspace| {
+                                if can_apply {
+                                    apply_live_comparison(app);
+                                } else {
+                                    app.note = "Apply becomes available after a current comparison finishes".into();
+                                }
+                            },
+                        )
+                    }),
                     recipes::toggle(pal, "Specimen".into(), live, select_live_specimen),
                     xrow(Region::Inline, files),
                     unlisted,
@@ -526,57 +585,13 @@ pub(crate) fn graph_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
                             },
                         )
                     }),
-                    recipes::toggle(
-                        pal,
-                        if running {
-                            "Running\u{2026}"
-                        } else {
-                            "Run"
-                        }
-                        .into(),
-                        running,
-                        move |app: &mut Workspace| {
-                            if running {
-                                app.note = "A Graph comparison is already running".into();
-                            } else if live {
-                                run_live_comparison(app);
-                            } else {
-                                app.run_graph();
-                            }
-                        },
-                    ),
-                    (live && can_cancel).then(|| {
-                        recipes::toggle(
-                            pal,
-                            "Cancel".into(),
-                            true,
-                            cancel_live_comparison,
-                        )
-                    }),
-                    // Results clear themselves as the specimen renders again; only a
-                    // comparison's results wait for an explicit Clear.
-                    (live && has_python && can_clear).then(|| {
-                        recipes::toggle(pal, "Clear".into(), false, clear_live_results)
-                    }),
-                    (live && has_python).then(|| {
-                        recipes::toggle(
-                            pal,
-                            if can_apply { "Apply" } else { "Apply unavailable" }.into(),
-                            can_apply,
-                            move |app: &mut Workspace| {
-                                if can_apply {
-                                    apply_live_comparison(app);
-                                } else {
-                                    app.note = "Apply becomes available after a current comparison finishes".into();
-                                }
-                            },
-                        )
-                    }),
                 ),
             )
             .padding(Space::Sm)
             .gap(Space::Sm)
             .background_color(pal.panel),
+            )
+            .constrain_vertical(true),
         )
         .dims(Dimensions::new(
             Dim::Stretch,
@@ -632,6 +647,20 @@ pub(crate) fn graph_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
         .graph
         .expanded
         .filter(|&node| proof_image(&view.content, &view.graph, &view.registry, node).is_some());
+    // The add menu offers only what this kind of graph can run.
+    let addable: Arc<Vec<String>> = Arc::new(if view.live {
+        LIVE_RUNNABLE
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect()
+    } else {
+        view.registry
+            .types
+            .iter()
+            .filter(|t| !t.name.starts_with("live."))
+            .map(|t| t.name.clone())
+            .collect()
+    });
     let canvas = graph_canvas(
         view.graph,
         view.registry,
@@ -642,6 +671,7 @@ pub(crate) fn graph_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
         expanded,
         app.graph.fit_request,
         app.graph.zoom.unwrap_or(1.0),
+        addable,
         move |app: &mut Workspace, ev| match ev {
             GraphEvent::Changed(graph) => {
                 if live {

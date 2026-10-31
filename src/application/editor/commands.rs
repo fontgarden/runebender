@@ -1025,6 +1025,13 @@ impl Workspace {
                 self.review.annotations.lock().unwrap().undo(&prefix);
             }
             A::Redo if self.proof_view && self.review.pencil => {}
+            // In the graph, Undo and Redo step the graph's own history first.
+            A::Undo
+                if matches!(self.mode, Mode::Graph)
+                    && super::tools::graph::controls::live_graph_step(self, false) => {}
+            A::Redo
+                if matches!(self.mode, Mode::Graph)
+                    && super::tools::graph::controls::live_graph_step(self, true) => {}
             A::Undo => self.undo_active_edit(false),
             A::Redo => self.undo_active_edit(true),
             A::Overview => {
@@ -1176,10 +1183,14 @@ impl Workspace {
             A::GraphOpen => self.command_open_graph(),
             A::GraphSave => self.save_graph_file(),
             A::GraphRun => {
-                if self.graph.open.is_none() {
-                    self.enter_graph_mode();
+                if self.graph.live_selected {
+                    super::tools::graph::controls::run_live_comparison(self);
+                } else {
+                    if self.graph.open.is_none() {
+                        self.enter_graph_mode();
+                    }
+                    self.run_graph();
                 }
-                self.run_graph();
             }
             A::Copy => self.copy_contours(),
             A::Paste => self.paste_contours(),

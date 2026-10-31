@@ -193,6 +193,50 @@ pub(crate) fn edit_live_code(app: &mut Workspace, guard: GraphGuard, node: u32, 
     }
 }
 
+/// Whether the shown live graph has a graph-history step in this direction.
+pub(crate) fn live_graph_can_step(app: &Workspace, redo: bool) -> bool {
+    #[cfg(unix)]
+    if app.graph.live_selected
+        && let Some(session) = app.live_graph_session()
+    {
+        let snapshot = session.snapshot();
+        return if redo {
+            snapshot.can_redo
+        } else {
+            snapshot.can_undo
+        };
+    }
+    let _ = (app, redo);
+    false
+}
+
+/// Undo or redo one edit of the shown live graph; false when it has none to step.
+pub(crate) fn live_graph_step(app: &mut Workspace, redo: bool) -> bool {
+    if !live_graph_can_step(app, redo) {
+        return false;
+    }
+    #[cfg(unix)]
+    if let Some(session) = app.live_graph_session_mut() {
+        let snapshot = session.snapshot();
+        let guard = GraphGuard {
+            identity: snapshot.identity,
+            revision: snapshot.revision,
+        };
+        let mutation = if redo {
+            GraphMutation::Redo
+        } else {
+            GraphMutation::Undo
+        };
+        if let Err(error) =
+            session.mutate_interactive(GraphInteractiveMutationRequest { guard, mutation })
+        {
+            app.note = error.to_string();
+        }
+        return true;
+    }
+    false
+}
+
 /// Commit only the final header-drag position through the canonical graph guard.
 pub(crate) fn move_live_node(app: &mut Workspace, guard: GraphGuard, node: u32, pos: [f32; 2]) {
     #[cfg(unix)]
@@ -565,6 +609,7 @@ const RENDER_SETTLE: std::time::Duration = std::time::Duration::from_secs(1);
 pub(crate) fn live_autorun_waiting(app: &Workspace) -> bool {
     matches!(app.mode, crate::application::workspace::Mode::Graph)
         && app.graph.live_selected
+        && app.graph.auto_run
         && !app.live_graph_need_pump()
         && app
             .graph

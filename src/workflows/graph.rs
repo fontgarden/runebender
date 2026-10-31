@@ -892,6 +892,53 @@ impl NodeGraph {
         self.links.push(Link(from, output.into(), to, input.into()));
     }
 
+    /// Why a new link from `output` of `from` into `input` of `to` would be wrong, if it would:
+    /// a missing node or port, a different value kind, or a cycle. A link may replace the one
+    /// already into `input`, as [`Self::connect`] does.
+    pub fn link_problem(
+        &self,
+        registry: &Registry,
+        from: u32,
+        output: &str,
+        to: u32,
+        input: &str,
+    ) -> Option<String> {
+        let node_type = |id: u32| {
+            let node = self.node(id)?;
+            registry.get(&node.type_name)
+        };
+        let Some(source) = node_type(from) else {
+            return Some(format!("node {from} is missing or has an unknown type"));
+        };
+        let Some(target) = node_type(to) else {
+            return Some(format!("node {to} is missing or has an unknown type"));
+        };
+        let Some(out_port) = source.output(output) else {
+            return Some(format!("{} has no output {output}", source.title));
+        };
+        let Some(in_port) = target.input(input) else {
+            return Some(format!("{} has no input {input}", target.title));
+        };
+        if out_port.kind != in_port.kind {
+            return Some(format!(
+                "{} does not go into {}",
+                out_port.kind, in_port.kind
+            ));
+        }
+        // The link closes a cycle when `from` already reads, directly or not, from `to`.
+        let mut pending = vec![to];
+        let mut seen = HashSet::new();
+        while let Some(id) = pending.pop() {
+            if id == from {
+                return Some("that link would make a cycle".into());
+            }
+            if seen.insert(id) {
+                pending.extend(self.links.iter().filter(|l| l.from() == id).map(Link::to));
+            }
+        }
+        None
+    }
+
     /// The link into an input, if any.
     pub fn link_into(&self, node: u32, input: &str) -> Option<&Link> {
         self.links

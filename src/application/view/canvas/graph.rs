@@ -133,6 +133,8 @@ pub(crate) struct GraphWidget {
     boxes: Vec<NodeBox>,
     viewport: ViewPort,
     fitted: bool,
+    /// The designer panned or zoomed, so arriving content no longer refits the view.
+    view_moved: bool,
     size: Size,
     selected: Option<u32>,
     /// What the pointer is over while nothing is being dragged.
@@ -144,6 +146,10 @@ pub(crate) struct GraphWidget {
     drag: Option<Drag>,
     /// The right-click menu's layer, while it is up.
     menu: Option<WidgetId>,
+    /// Node types the add menu offers: only those this graph can run.
+    addable: Arc<Vec<String>>,
+    /// A wire dropped on empty canvas: the node chosen from the menu takes it.
+    pending_wire: Option<(u32, String, Kind)>,
     code_font_size: f32,
 }
 
@@ -219,9 +225,6 @@ fn decode_png(png: &nl::ImmutablePng) -> Option<ImageData> {
 
 struct SpecimenPreview {
     image: WidgetPod<MasonryImage>,
-    zoom: f64,
-    pan: Vec2,
-    drag: Option<Point>,
 }
 
 impl SpecimenPreview {
@@ -229,13 +232,12 @@ impl SpecimenPreview {
         Self {
             image: NewWidget::new(MasonryImage::new(image).with_alt_text("Specimen proof image"))
                 .to_pod(),
-            zoom: 1.0,
-            pan: Vec2::ZERO,
-            drag: None,
         }
     }
 }
 
+/// A proof shown on its node, fitted and still. It takes no pointer input: a drag on it moves
+/// the node and the wheel zooms the canvas, as on any node. Expand the node to inspect it.
 impl Widget for SpecimenPreview {
     type Action = ();
 
@@ -258,65 +260,9 @@ impl Widget for SpecimenPreview {
     }
 
     fn layout(&mut self, ctx: &mut LayoutCtx<'_>, _props: &PropertiesRef<'_>, size: Size) {
-        let child = Size::new(size.width * self.zoom, size.height * self.zoom);
-        ctx.run_layout(&mut self.image, child);
-        ctx.place_child(
-            &mut self.image,
-            Point::new(
-                (size.width - child.width) / 2.0 + self.pan.x,
-                (size.height - child.height) / 2.0 + self.pan.y,
-            ),
-        );
+        ctx.run_layout(&mut self.image, size);
+        ctx.place_child(&mut self.image, Point::ORIGIN);
         ctx.set_clip_path(size.to_rect());
-    }
-
-    fn on_pointer_event(
-        &mut self,
-        ctx: &mut EventCtx<'_>,
-        _props: &mut PropertiesMut<'_>,
-        event: &PointerEvent,
-    ) {
-        match event {
-            PointerEvent::Down(PointerButtonEvent {
-                button: Some(PointerButton::Primary),
-                state,
-                ..
-            }) => {
-                if state.count >= 2 {
-                    self.zoom = 1.0;
-                    self.pan = Vec2::ZERO;
-                    self.drag = None;
-                    ctx.request_layout();
-                } else {
-                    self.drag = Some(ctx.local_position(state.position));
-                    ctx.capture_pointer();
-                }
-                ctx.set_handled();
-            }
-            PointerEvent::Move(PointerUpdate { current, .. }) => {
-                let at = ctx.local_position(current.position);
-                if let Some(last) = self.drag.replace(at) {
-                    self.pan += at - last;
-                    ctx.request_layout();
-                    ctx.set_handled();
-                }
-            }
-            PointerEvent::Up(_) => {
-                self.drag = None;
-                ctx.set_handled();
-            }
-            PointerEvent::Scroll(PointerScrollEvent { delta, .. }) => {
-                let dy = match delta {
-                    ScrollDelta::PixelDelta(delta) => delta.y,
-                    ScrollDelta::LineDelta(_, y) => f64::from(*y) * 20.0,
-                    _ => 0.0,
-                };
-                self.zoom = (self.zoom * (dy * 0.0015).exp()).clamp(0.25, 8.0);
-                ctx.request_layout();
-                ctx.set_handled();
-            }
-            _ => {}
-        }
     }
 
     fn paint(
@@ -415,6 +361,7 @@ impl GraphWidget {
         at: Point,
     ) {
         this.widget.menu = None;
+        let wire = this.widget.pending_wire.take();
         if let MenuAction::AddNode(type_name) = action {
             let id = this.widget.graph.add(
                 &type_name,
@@ -423,6 +370,16 @@ impl GraphWidget {
                     crate::application::view::render::px32(nl::snap(at.y)),
                 ],
             );
+            if let Some((from, output, kind)) = wire
+                && let Some(input) = this.widget.first_input(id, kind)
+                && this
+                    .widget
+                    .graph
+                    .link_problem(&this.widget.registry, from, &output, id, &input)
+                    .is_none()
+            {
+                this.widget.graph.connect(from, &output, id, &input);
+            }
             this.widget.selected = Some(id);
             this.widget.relayout();
             let graph = this.widget.graph.clone();
@@ -437,6 +394,60 @@ impl GraphWidget {
     /// The menu closed without a choice.
     pub(crate) fn forget_menu(this: &mut masonry::core::WidgetMut<'_, Self>) {
         this.widget.menu = None;
+        this.widget.pending_wire = None;
+    }
+
+    /// Open the add-node menu at a local point: the node types this graph can run, and with a
+    /// dropped wire only those that take its kind.
+    fn open_add_menu(
+        &mut self,
+        ctx: &mut EventCtx<'_>,
+        local: Point,
+        wire: Option<(u32, String, Kind)>,
+    ) {
+        if self.menu.is_some() {
+            return;
+        }
+        let at = self.to_canvas(local);
+        let rows: Vec<MenuRow> = self
+            .registry
+            .types
+            .iter()
+            .filter(|t| t.implemented && self.addable.contains(&t.name))
+            .filter(|t| {
+                wire.as_ref()
+                    .is_none_or(|(_, _, kind)| t.inputs.iter().any(|port| port.kind == *kind))
+            })
+            .map(|t| MenuRow {
+                label: std::borrow::Cow::Owned(t.title.clone()),
+                action: MenuAction::AddNode(t.name.clone()),
+            })
+            .collect();
+        if rows.is_empty() {
+            return;
+        }
+        self.pending_wire = wire;
+        let menu = ContextMenu::new(
+            ctx.widget_id(),
+            MenuTarget::Graph,
+            rows,
+            self.palette.clone(),
+            at,
+        );
+        let menu = NewWidget::new(menu);
+        self.menu = Some(menu.id());
+        ctx.create_layer(LayerType::Other, menu, ctx.to_window(local));
+    }
+
+    /// The first input of a node that takes `kind`, by the node's type.
+    fn first_input(&self, node: u32, kind: Kind) -> Option<String> {
+        let node = self.graph.node(node)?;
+        let node_type = self.registry.get(&node.type_name)?;
+        node_type
+            .inputs
+            .iter()
+            .find(|port| port.kind == kind)
+            .map(|port| port.name.clone())
     }
 
     fn relayout(&mut self) {
@@ -671,6 +682,11 @@ impl Widget for GraphWidget {
     }
 
     fn layout(&mut self, ctx: &mut LayoutCtx<'_>, _props: &PropertiesRef<'_>, size: Size) {
+        // The first layouts can run before the panels settle; refit at the final size until
+        // the designer moves the view.
+        if size != self.size && !self.view_moved {
+            self.fitted = false;
+        }
         self.size = size;
         // An expanded image covers the graph, so the nodes' editors and
         // previews are hidden under it.
@@ -1036,32 +1052,8 @@ impl Widget for GraphWidget {
                 state,
                 ..
             }) => {
-                // The node types to add, as a layer rooted in window
-                // space, the way the editor's menu is.
-                if self.menu.is_none() {
-                    let local = ctx.local_position(state.position);
-                    let at = self.to_canvas(local);
-                    let rows: Vec<MenuRow> = self
-                        .registry
-                        .types
-                        .iter()
-                        .filter(|t| t.implemented)
-                        .map(|t| MenuRow {
-                            label: std::borrow::Cow::Owned(t.title.clone()),
-                            action: MenuAction::AddNode(t.name.clone()),
-                        })
-                        .collect();
-                    let menu = ContextMenu::new(
-                        ctx.widget_id(),
-                        MenuTarget::Graph,
-                        rows,
-                        self.palette.clone(),
-                        at,
-                    );
-                    let menu = NewWidget::new(menu);
-                    self.menu = Some(menu.id());
-                    ctx.create_layer(LayerType::Other, menu, ctx.to_window(local));
-                }
+                let local = ctx.local_position(state.position);
+                self.open_add_menu(ctx, local, None);
                 ctx.set_handled();
             }
             PointerEvent::Down(PointerButtonEvent {
@@ -1076,11 +1068,32 @@ impl Widget for GraphWidget {
                 let local = ctx.local_position(state.position);
                 let at = self.to_canvas(local);
                 let drag = match nl::hit(&self.boxes, at) {
+                    // Double-clicking empty canvas adds a node there, as in ComfyUI.
+                    Hit::Empty if state.count >= 2 => {
+                        self.open_add_menu(ctx, local, None);
+                        ctx.set_handled();
+                        return;
+                    }
                     Hit::Node(id) => {
                         self.selected = Some(id);
                         ctx.submit_action::<GraphEvent>(GraphEvent::Selected(Some(id)));
                         match nl::node_region_hit(&self.boxes, at).map(|hit| hit.region) {
-                            Some(NodeRegion::Header) => {
+                            // The whole node body drags, not only its title strip.
+                            Some(NodeRegion::Header | NodeRegion::Body) => {
+                                let origin = self.graph.node(id).map(|n| n.pos).unwrap_or_default();
+                                Drag::Move {
+                                    id,
+                                    start: at,
+                                    origin,
+                                }
+                            }
+                            // A proof on a node is part of the node: dragging it moves the node.
+                            Some(NodeRegion::Content)
+                                if matches!(
+                                    self.content.get(id),
+                                    Some(nl::NodeContent::Image(_))
+                                ) =>
+                            {
                                 let origin = self.graph.node(id).map(|n| n.pos).unwrap_or_default();
                                 Drag::Move {
                                     id,
@@ -1127,9 +1140,10 @@ impl Widget for GraphWidget {
                                     .and_then(|n| self.registry.get(&n.type_name))
                                     .and_then(|t| t.output(link.output()).map(|p| p.kind))
                                     .unwrap_or(Kind::Text);
+                                // Committed once, on release, so detaching and
+                                // reattaching is one undo step.
                                 self.graph.links.retain(|l| l != &link);
                                 self.relayout();
-                                self.emit_changed(ctx);
                                 Drag::Wire {
                                     from: link.from(),
                                     output: link.output().to_string(),
@@ -1195,6 +1209,7 @@ impl Widget for GraphWidget {
                         let d = local - *last;
                         *last = local;
                         self.viewport.pan(d.x, d.y);
+                        self.view_moved = true;
                         ctx.request_layout();
                         ctx.request_render();
                     }
@@ -1236,14 +1251,31 @@ impl Widget for GraphWidget {
                     Some(Drag::Wire {
                         from, output, kind, ..
                     }) => {
-                        if let Hit::Input(to, input, want) = nl::hit(&self.boxes, at) {
-                            if to != from && want == kind {
-                                self.graph.connect(from, &output, to, &input);
-                                self.relayout();
-                            } else if want != kind {
-                                ctx.submit_action::<GraphEvent>(GraphEvent::Note(format!(
-                                    "{kind} does not go into {want}"
-                                )));
+                        let target = match nl::hit(&self.boxes, at) {
+                            Hit::Input(to, input, _) => Some((to, input)),
+                            // Dropping on a node body takes its first input of this kind.
+                            Hit::Node(to) => self.first_input(to, kind).map(|input| (to, input)),
+                            Hit::Empty => {
+                                self.emit_changed(ctx);
+                                self.open_add_menu(ctx, local, Some((from, output, kind)));
+                                ctx.request_render();
+                                ctx.set_handled();
+                                return;
+                            }
+                            Hit::Output(..) => None,
+                        };
+                        if let Some((to, input)) = target {
+                            match self
+                                .graph
+                                .link_problem(&self.registry, from, &output, to, &input)
+                            {
+                                None => {
+                                    self.graph.connect(from, &output, to, &input);
+                                    self.relayout();
+                                }
+                                Some(problem) => {
+                                    ctx.submit_action::<GraphEvent>(GraphEvent::Note(problem));
+                                }
                             }
                         }
                         self.emit_changed(ctx);
@@ -1283,6 +1315,7 @@ impl Widget for GraphWidget {
                 };
                 let factor = (dy * 0.0015).exp();
                 self.viewport.zoom_about(at, factor, ZOOM_MIN, ZOOM_MAX);
+                self.view_moved = true;
                 ctx.submit_action::<GraphEvent>(GraphEvent::Zoom(self.viewport.zoom));
                 ctx.request_layout();
                 ctx.request_render();
@@ -1390,6 +1423,7 @@ pub(crate) struct GraphView<F> {
     content: Arc<NodeContentMap>,
     selected: Option<u32>,
     expanded: Option<u32>,
+    addable: Arc<Vec<String>>,
     on_event: F,
 }
 
@@ -1403,10 +1437,12 @@ pub(crate) fn graph_canvas<F: Fn(&mut Workspace, GraphEvent) + 'static>(
     expanded: Option<u32>,
     fit_request: u64,
     zoom: f64,
+    addable: Arc<Vec<String>>,
     on_event: F,
 ) -> GraphView<F> {
     GraphView {
         expanded,
+        addable,
         fit_request,
         zoom,
         graph,
@@ -1444,6 +1480,7 @@ impl<F: Fn(&mut Workspace, GraphEvent) + 'static> View<Workspace, (), ViewCtx> f
             boxes: Vec::new(),
             viewport: ViewPort::new(),
             fitted: false,
+            view_moved: false,
             size: Size::ZERO,
             selected: self.selected,
             hover: Hit::Empty,
@@ -1451,6 +1488,8 @@ impl<F: Fn(&mut Workspace, GraphEvent) + 'static> View<Workspace, (), ViewCtx> f
             expanded: self.expanded,
             drag: None,
             menu: None,
+            addable: self.addable.clone(),
+            pending_wire: None,
             code_font_size: 0.0,
         };
         widget.relayout();
@@ -1474,6 +1513,7 @@ impl<F: Fn(&mut Workspace, GraphEvent) + 'static> View<Workspace, (), ViewCtx> f
         }
         if self.fit_request != prev.fit_request {
             element.widget.fitted = false;
+            element.widget.view_moved = false;
             element.ctx.request_layout();
             dirty = true;
         } else if self.zoom != prev.zoom && self.zoom != element.widget.viewport.zoom {
@@ -1484,6 +1524,7 @@ impl<F: Fn(&mut Workspace, GraphEvent) + 'static> View<Workspace, (), ViewCtx> f
             widget
                 .viewport
                 .zoom_about(middle, factor, ZOOM_MIN, ZOOM_MAX);
+            widget.view_moved = true;
             element.ctx.request_layout();
             dirty = true;
         }
@@ -1497,12 +1538,21 @@ impl<F: Fn(&mut Workspace, GraphEvent) + 'static> View<Workspace, (), ViewCtx> f
             element.widget.relayout();
             dirty = true;
         }
+        if !Arc::ptr_eq(&self.addable, &prev.addable) {
+            element.widget.addable = self.addable.clone();
+        }
         if !Arc::ptr_eq(&self.rows, &prev.rows) {
             element.widget.rows = self.rows.clone();
             dirty = true;
         }
         if self.content != prev.content {
             element.widget.content = self.content.clone();
+            // Proofs arrive after the first fit and enlarge their nodes; keep the whole graph in
+            // view until the designer moves the view.
+            if !element.widget.view_moved {
+                element.widget.fitted = false;
+                element.ctx.request_layout();
+            }
             let wanted_editors: Vec<u32> = self
                 .content
                 .by_node
@@ -1698,6 +1748,7 @@ mod tests {
             boxes: Vec::new(),
             viewport: ViewPort::new(),
             fitted: false,
+            view_moved: false,
             size: Size::ZERO,
             selected: None,
             hover: Hit::Empty,
@@ -1705,6 +1756,8 @@ mod tests {
             expanded: None,
             drag: None,
             menu: None,
+            addable: Arc::default(),
+            pending_wire: None,
             code_font_size: 0.0,
         };
         widget.relayout();
@@ -1752,6 +1805,44 @@ mod tests {
             harness.pop_action::<TextAction>(),
             Some((TextAction::Changed(text), _)) if text.contains("pass")
         ));
+    }
+
+    #[test]
+    fn a_proof_on_a_node_stays_still_under_the_pointer_and_drags_its_node() {
+        let (widget, _) = fixture();
+        let proof = 2;
+        let image = widget.preview_images[&proof].id();
+        let mut harness = TestHarness::create_with_size(
+            crate::application::view::default_property_set(),
+            NewWidget::new(widget),
+            (1100, 720),
+        );
+        while harness.pop_action::<GraphEvent>().is_some() {}
+        let origin =
+            |harness: &TestHarness<_>| harness.get_widget_with_id(image).ctx().bounding_box();
+        let before = origin(&harness);
+
+        // Hovering across the proof moves nothing.
+        let centre = harness
+            .get_widget_with_id(image)
+            .ctx()
+            .bounding_box()
+            .center();
+        harness.mouse_move(centre + Vec2::new(30.0, 20.0));
+        harness.mouse_move(centre + Vec2::new(-30.0, -20.0));
+        assert_eq!(origin(&harness), before);
+        assert!(harness.pop_action::<GraphEvent>().is_none());
+
+        // Dragging the proof moves its node, as a drag anywhere on a node does.
+        harness.mouse_move(centre);
+        harness.mouse_button_press(Some(PointerButton::Primary));
+        harness.mouse_move(centre + Vec2::new(64.0, 32.0));
+        harness.mouse_button_release(Some(PointerButton::Primary));
+        let mut moved = false;
+        while let Some((event, _)) = harness.pop_action::<GraphEvent>() {
+            moved |= matches!(event, GraphEvent::MoveNode { node, .. } if node == proof);
+        }
+        assert!(moved, "the drag moves the proof's node");
     }
 
     #[test]

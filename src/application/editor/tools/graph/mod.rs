@@ -110,6 +110,9 @@ pub(crate) struct GraphState {
     pub(crate) live_selected: bool,
     /// User-visible comma- or whitespace-separated glyph names captured by the next comparison.
     pub(crate) live_scope: String,
+    /// Run the live graph again by itself once font edits settle. Off by default, so a graph
+    /// runs only when the designer asks; graphs with Python recipes always wait for Run.
+    pub(crate) auto_run: bool,
     /// The document revision the live graph last rendered, so it renders again after edits.
     pub(crate) rendered_revision: Option<u64>,
     /// A newer revision seen while waiting for edits to settle, and when it was first seen.

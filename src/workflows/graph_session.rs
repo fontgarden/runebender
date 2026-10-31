@@ -1611,7 +1611,7 @@ impl GraphSession {
         let before = self.graph.clone();
         let old_hash = self.semantic_hash.clone();
         let candidate = match &mutation {
-            GraphMutation::Patch { edits } => apply_patch(&self.graph, edits)?,
+            GraphMutation::Patch { edits } => apply_patch(&self.graph, &self.registry, edits)?,
             GraphMutation::Undo => self.undo.last().cloned().ok_or_else(|| {
                 GraphSessionError::new(GraphSessionErrorCode::HistoryEmpty, "graph undo is empty")
             })?,
@@ -1691,11 +1691,22 @@ impl GraphSession {
     }
 }
 
-fn apply_patch(graph: &NodeGraph, edits: &[GraphEdit]) -> Result<NodeGraph, GraphSessionError> {
+fn apply_patch(
+    graph: &NodeGraph,
+    registry: &Registry,
+    edits: &[GraphEdit],
+) -> Result<NodeGraph, GraphSessionError> {
     let mut candidate = graph.clone();
     for (index, edit) in edits.iter().enumerate() {
         match edit {
             GraphEdit::AddNode { node } => {
+                if registry.get(&node.type_name).is_none() {
+                    return Err(GraphSessionError::edit(
+                        index,
+                        Some(node.id),
+                        "unknown node type",
+                    ));
+                }
                 if candidate.node(node.id).is_some() {
                     return Err(GraphSessionError::edit(
                         index,
@@ -1763,6 +1774,15 @@ fn apply_patch(graph: &NodeGraph, edits: &[GraphEdit]) -> Result<NodeGraph, Grap
                         Some(link.to()),
                         "cannot connect a missing node",
                     ));
+                }
+                if let Some(problem) = candidate.link_problem(
+                    registry,
+                    link.from(),
+                    link.output(),
+                    link.to(),
+                    link.input(),
+                ) {
+                    return Err(GraphSessionError::edit(index, Some(link.to()), problem));
                 }
                 candidate.connect(link.from(), link.output(), link.to(), link.input());
             }
@@ -2893,6 +2913,68 @@ mod tests {
         assert!(session.graph_receipts.is_empty());
         assert_eq!(session.snapshot().semantic_revision, 0);
         assert_eq!(session.snapshot().revision, 100);
+    }
+
+    #[test]
+    fn edits_reject_cycles_mismatched_kinds_and_unknown_node_types() {
+        let mut session = new_session();
+        let mut python = graph_live::comparison_starter(variable::SourceId(3))
+            .node(3)
+            .unwrap()
+            .clone();
+        python.id = 5;
+        session
+            .mutate(mutation(
+                &session,
+                "human",
+                "add-second-recipe",
+                vec![
+                    GraphEdit::AddNode { node: python },
+                    GraphEdit::Connect {
+                        link: Link(3, "font".into(), 5, "font".into()),
+                    },
+                ],
+            ))
+            .unwrap();
+        let before = session.snapshot().graph;
+        for (key, edit, expected) in [
+            (
+                "cycle",
+                GraphEdit::Connect {
+                    link: Link(5, "font".into(), 3, "font".into()),
+                },
+                "cycle",
+            ),
+            (
+                "kind",
+                GraphEdit::Connect {
+                    link: Link(1, "font".into(), 3, "parameters".into()),
+                },
+                "does not go into",
+            ),
+            (
+                "unknown",
+                GraphEdit::AddNode {
+                    node: Node {
+                        id: 9,
+                        type_name: "core.nonexistent".into(),
+                        pos: [0.0, 0.0],
+                        values: BTreeMap::new(),
+                    },
+                },
+                "unknown node type",
+            ),
+        ] {
+            let error = session
+                .mutate(mutation(&session, "human", key, vec![edit]))
+                .unwrap_err();
+            assert!(error.message.contains(expected), "{key}: {}", error.message);
+        }
+        assert_eq!(
+            session.snapshot().graph,
+            before,
+            "a rejected edit changes nothing"
+        );
     }
 
     #[test]
