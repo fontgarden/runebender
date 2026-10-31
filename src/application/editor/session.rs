@@ -2369,8 +2369,12 @@ impl Workspace {
 
     /// Pick a tool while preserving any text composition already on the tab.
     pub(crate) fn select_tool(&mut self, tool: Tool) {
+        self.cancel_interpolation_draft();
         self.tool_before_space_pan = None;
         self.tool = tool;
+        if tool == Tool::Interpolation {
+            self.begin_interpolation();
+        }
         if tool == Tool::Metaball && self.session.metaballs.selected.is_empty() {
             Arc::make_mut(&mut self.session).select_all_metaballs();
         }
@@ -2389,6 +2393,7 @@ impl Workspace {
         if !matches!(self.mode, Mode::Editor(_)) || self.tool_before_space_pan.is_some() {
             return;
         }
+        self.cancel_interpolation_draft();
         self.tool_before_space_pan = Some(self.tool);
         self.tool = Tool::Hand;
     }
@@ -2747,6 +2752,9 @@ impl Workspace {
         let Mode::Editor(_) = self.mode else {
             return;
         };
+        if self.cancel_interpolation_draft() {
+            return;
+        }
         self.follow_history_into_part(redo);
         if self.metadata_history_step(redo) {
             return;

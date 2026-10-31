@@ -329,6 +329,8 @@ pub struct Project {
     sources: Vec<SourceState>,
     pub(super) variable: VariableData,
     source_history: sources::SourceHistory,
+    pub(super) hoi_history:
+        super::history::TransactionHistory<super::model::designspace::CanonicalDesignspace>,
     document_history: super::history::DocumentHistory,
     edit_transaction_history: edit_transactions::EditTransactionHistory,
     source_metadata_history: super::history::SourceMetadataHistory,
@@ -535,6 +537,7 @@ impl Project {
         let mut project = Self {
             variable,
             source_history: sources::SourceHistory::default(),
+            hoi_history: super::history::TransactionHistory::default(),
             document_history: super::history::DocumentHistory::default(),
             edit_transaction_history: edit_transactions::EditTransactionHistory::default(),
             source_metadata_history: super::history::SourceMetadataHistory::default(),
@@ -843,6 +846,7 @@ impl Project {
             sources: inputs.into_iter().map(SourceState::from_input).collect(),
             variable,
             source_history: sources::SourceHistory::default(),
+            hoi_history: super::history::TransactionHistory::default(),
             document_history: super::history::DocumentHistory::default(),
             edit_transaction_history: edit_transactions::EditTransactionHistory::default(),
             source_metadata_history: super::history::SourceMetadataHistory::default(),
@@ -1133,6 +1137,16 @@ impl Project {
         glyph_name: &str,
         location: &Location,
     ) -> Result<super::interpolation::InterpolatedLayer, String> {
+        self.try_interpolated_layer_with_hoi(glyph_name, location, &self.hoi_trajectories()?)
+    }
+
+    pub(crate) fn try_interpolated_layer_with_hoi(
+        &self,
+        glyph_name: &str,
+        location: &Location,
+        records: &[super::model::hoi_trajectories::HoiTrajectory],
+    ) -> Result<super::interpolation::InterpolatedLayer, String> {
+        self.require_evaluable_hoi_records(Some(glyph_name), records)?;
         let axes = self
             .document_designspace()
             .map(super::model::designspace::CanonicalDesignspace::axes)
@@ -1209,6 +1223,7 @@ impl Project {
                 }
             }
         }
+        self.apply_hoi_trajectories(glyph_name, location, &mut interpolated, records)?;
         Ok(interpolated)
     }
 

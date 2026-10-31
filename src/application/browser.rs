@@ -213,6 +213,21 @@ where
                 &mut self.app,
             );
         });
+        // Match Xilem's native driver: global shortcuts still need the menu shell
+        // when a pointer-operated panel control leaves no widget focused.
+        fn menu_root(
+            root: masonry::core::WidgetRef<'_, dyn masonry::core::Widget>,
+        ) -> Option<masonry::core::WidgetId> {
+            if root
+                .downcast::<crate::application::widgets::menu_shell::MenuShell>()
+                .is_some()
+            {
+                return Some(root.id());
+            }
+            root.children().into_iter().find_map(menu_root)
+        }
+        let fallback = menu_root(self.root.get_layer_root(0));
+        self.root.set_focus_fallback(fallback);
         self.view = next;
     }
     fn drain(&mut self) {
@@ -531,7 +546,7 @@ where
     }
     fn state(&self) -> String {
         let w = self.app.workspace.as_ref().unwrap();
-        serde_json::json!({"source":w.font.document_source().display().to_string(),"graph":w.graph.open.as_ref().map(|g| &g.graph),"simd":cfg!(target_feature="simd128"),"scale":self.scale,"mode":match w.mode { Mode::Overview=>"overview",Mode::Editor(_)=>"editor",Mode::Graph=>"graph" },"modified":w.modified,"glyph":w.session.glyph_name,"selected_points":w.selected_points,"glyph_count":w.font.glyphs.len(),"note":w.note,"points":w.session.points().into_iter().map(|p|(p.point.x,p.point.y)).collect::<Vec<_>>(),"zoom":w.session.viewport.zoom}).to_string()
+        serde_json::json!({"source":w.font.document_source().display().to_string(),"graph":w.graph.open.as_ref().map(|g| &g.graph),"simd":cfg!(target_feature="simd128"),"scale":self.scale,"mode":match w.mode { Mode::Overview=>"overview",Mode::Editor(_)=>"editor",Mode::Graph=>"graph" },"modified":w.modified,"tool":format!("{:?}",w.tool),"interpolation": if w.interpolation_is_active() {w.interpolation_canvas().ok().map(|data| serde_json::json!({"selected":data.selected,"progress":w.interpolation.progress,"interval":w.interpolation.interval,"records":w.font.project.hoi_trajectories().ok(),"comparison":data.comparison_status,"preview_only":data.preview_only}))} else {None},"glyph":w.session.glyph_name,"selected_points":w.selected_points,"glyph_count":w.font.glyphs.len(),"note":w.note,"points":w.session.points().into_iter().map(|p|(p.point.x,p.point.y)).collect::<Vec<_>>(),"zoom":w.session.viewport.zoom}).to_string()
     }
 }
 fn create<V, F>(

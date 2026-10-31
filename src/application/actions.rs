@@ -117,6 +117,14 @@ impl Entry {
             );
         };
         let editor = matches!(app.mode, Mode::Editor(_));
+        if editor && app.interpolation_is_active() {
+            if !crate::application::editor::tools::interpolation::command_allowed(self.action) {
+                return false;
+            }
+            if matches!(self.action, A::DeselectAll | A::InvertSelection) {
+                return !app.interpolation.selected.is_empty();
+            }
+        }
         match self.action {
             A::Save => app.untitled || (app.modified && app.font.is_writable()),
             A::RevertToSaved => !app.untitled,
@@ -847,6 +855,12 @@ pub(crate) const ACTIONS: &[Entry] = &[
         title: "Measure",
         accelerator: Some("M"),
         action: AppAction::Tool(Tool::Measure),
+    },
+    Entry {
+        menu: "",
+        title: "Edit Interpolation",
+        accelerator: Some("I"),
+        action: AppAction::Tool(Tool::Interpolation),
     },
     Entry {
         menu: "",

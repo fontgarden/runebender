@@ -1,0 +1,21 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<glyph name="dot" format="2">
+  <advance width="1000"/>
+  <unicode hex="0042"/>
+  <outline>
+    <contour identifier="outer">
+      <point x="550" y="350" type="curve" smooth="yes" identifier="outer.p00"/>
+      <point x="550" y="300.294373" identifier="outer.p01"/>
+      <point x="509.705627" y="260" identifier="outer.p02"/>
+      <point x="460" y="260" type="curve" smooth="yes" identifier="outer.p03"/>
+      <point x="410.294373" y="260" identifier="outer.p04"/>
+      <point x="370" y="300.294373" identifier="outer.p05"/>
+      <point x="370" y="350" type="curve" smooth="yes" identifier="outer.p06"/>
+      <point x="370" y="399.705627" identifier="outer.p07"/>
+      <point x="410.294373" y="440" identifier="outer.p08"/>
+      <point x="460" y="440" type="curve" smooth="yes" identifier="outer.p09"/>
+      <point x="509.705627" y="440" identifier="outer.p10"/>
+      <point x="550" y="399.705627" identifier="outer.p11"/>
+    </contour>
+  </outline>
+</glyph>

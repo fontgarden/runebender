@@ -31,6 +31,7 @@ pub mod edit_batch;
 pub mod font_ops;
 pub mod generated;
 pub mod history;
+pub mod hoi;
 mod interpolation;
 pub mod model;
 pub mod new_font;

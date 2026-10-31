@@ -8,6 +8,8 @@
 //! reloads every staged artifact before any live destination is replaced.
 
 pub mod memory;
+mod original_glif;
+use original_glif::OriginalGlif;
 pub(in crate::font) mod source_format;
 pub(crate) mod ufo_codec;
 
@@ -25,6 +27,7 @@ use crate::formats::glyphs_import::ConversionResult;
 pub(crate) struct PreservedFiles {
     files: BTreeMap<PathBuf, Vec<u8>>,
     glif_paths: BTreeMap<(String, String), PathBuf>,
+    original_glifs: BTreeMap<(String, String), OriginalGlif>,
 }
 
 impl PreservedFiles {
@@ -93,6 +96,26 @@ impl PreservedFiles {
             }
             plist::to_file_xml(&contents_path, &contents)
                 .map_err(|error| format!("{}: {error}", contents_path.display()))?;
+        }
+        Ok(())
+    }
+
+    fn restore_unchanged_glifs(&self, root: &Path, font: &norad::Font) -> Result<(), String> {
+        for layer in font.layers.iter() {
+            for glyph in layer.iter() {
+                let key = (layer.name().to_string(), glyph.name().to_string());
+                let (Some(original), Some(file)) =
+                    (self.original_glifs.get(&key), self.glif_paths.get(&key))
+                else {
+                    continue;
+                };
+                let encoded = glyph.encode_xml().map_err(|error| error.to_string())?;
+                if let Some(bytes) = original.unchanged_bytes(&encoded) {
+                    let path = root.join(layer.path()).join(file);
+                    fs::write(&path, bytes)
+                        .map_err(|error| format!("{}: {error}", path.display()))?;
+                }
+            }
         }
         Ok(())
     }
@@ -495,6 +518,9 @@ fn stage_ufo(source: &SourceExport, stage: &Path) -> Result<(), String> {
         ));
     }
     source.preserved.restore_glif_paths(stage, &source.font)?;
+    source
+        .preserved
+        .restore_unchanged_glifs(stage, &source.font)?;
     source.preserved.write_into(stage)?;
     let final_font = norad::Font::load(stage)
         .map_err(|error| format!("staged {}: {error}", source.destination.display()))?;
@@ -735,7 +761,25 @@ fn capture_preserved_files(root: &Path, font: &norad::Font) -> Result<PreservedF
             })
         })
         .collect();
-    Ok(PreservedFiles { files, glif_paths })
+    let mut original_glifs = BTreeMap::new();
+    for layer in font.layers.iter() {
+        for glyph in layer.iter() {
+            let file = layer
+                .get_path(glyph.name().as_str())
+                .ok_or("missing imported GLIF path")?;
+            let path = root.join(layer.path()).join(file);
+            let bytes = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+            original_glifs.insert(
+                (layer.name().to_string(), glyph.name().to_string()),
+                OriginalGlif::capture(bytes, glyph)?,
+            );
+        }
+    }
+    Ok(PreservedFiles {
+        files,
+        glif_paths,
+        original_glifs,
+    })
 }
 
 fn validate_relative_file(path: &Path) -> Result<(), String> {

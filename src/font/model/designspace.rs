@@ -755,6 +755,19 @@ impl CanonicalDesignspace {
         })
     }
 
+    /// Read supported HOI authoring records without consuming unknown source data.
+    pub fn hoi_trajectories(&self) -> Result<Vec<super::hoi_trajectories::HoiTrajectory>, String> {
+        super::hoi_trajectories::read_trajectories(&self.lib)
+    }
+
+    /// Replace supported HOI metadata in this draft without touching glyph layers.
+    pub(crate) fn set_hoi_trajectories(
+        &mut self,
+        records: &[super::hoi_trajectories::HoiTrajectory],
+    ) -> Result<bool, String> {
+        super::hoi_trajectories::write_trajectories(&mut self.lib, records)
+    }
+
     /// Ordered canonical axes.
     pub fn axes(&self) -> &[CanonicalAxis] {
         &self.axes

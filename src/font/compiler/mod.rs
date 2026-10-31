@@ -6,7 +6,9 @@
 //! Preview and export share Babelfont's fontc source. No saved UFO, subprocess,
 //! Python environment or repository build script participates in this pipeline.
 
+mod hoi_export;
 mod metadata;
+pub use hoi_export::{HoiBakeOptions, HoiBakeReport};
 pub mod proof;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod proof_jobs;
@@ -346,6 +348,15 @@ impl Project {
     }
 
     fn snapshot_with_features(
+        &self,
+        feature_text: Option<&str>,
+    ) -> Result<babelfont::Font, String> {
+        let mut font = self.source_snapshot_with_features(feature_text)?;
+        self.bake_hoi_snapshot(&mut font, HoiBakeOptions::default())?;
+        Ok(font)
+    }
+
+    fn source_snapshot_with_features(
         &self,
         feature_text: Option<&str>,
     ) -> Result<babelfont::Font, String> {

@@ -204,6 +204,7 @@ impl Workspace {
             .unwrap_or_default();
         let initial_text = std::env::var("RUNEBENDER_TEXT").unwrap_or_default();
         let tool = match std::env::var("RUNEBENDER_TOOL").as_deref() {
+            Ok("interpolation") => Tool::Interpolation,
             Ok("hand") => Tool::Hand,
             Ok("metaball") => Tool::Metaball,
             Ok("measure") => Tool::Measure,
@@ -362,6 +363,8 @@ impl Workspace {
             active_tab: 0,
             session,
             selected_points: 0,
+            interpolation:
+                crate::application::editor::tools::interpolation::InterpolationState::default(),
             tool,
             tool_before_space_pan: None,
             sketch,

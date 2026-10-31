@@ -339,6 +339,15 @@ impl<'a> ContourView<'a> {
         self.preserved.id
     }
 
+    /// Existing source-file identifier, without adding one to the glyph on save.
+    pub fn source_identifier(self) -> Option<&'a str> {
+        self.preserved
+            .metadata
+            .identifier
+            .as_ref()
+            .map(AsRef::as_ref)
+    }
+
     /// Whether the contour connects its last point to its first point.
     pub fn is_closed(self) -> bool {
         self.path.closed
@@ -396,6 +405,15 @@ impl<'a> PointView<'a> {
     /// Stable identity retained across ordinary edits and reorder.
     pub fn id(self) -> PointId {
         self.preserved.id
+    }
+
+    /// Existing source-file identifier, without adding one to the glyph on save.
+    pub fn source_identifier(self) -> Option<&'a str> {
+        self.preserved
+            .metadata
+            .identifier
+            .as_ref()
+            .map(AsRef::as_ref)
     }
 
     /// Position in font design coordinates.

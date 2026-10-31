@@ -1,0 +1,13 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<glyph name="box" format="2">
+  <advance width="1000"/>
+  <unicode hex="0041"/>
+  <outline>
+    <contour identifier="outer">
+      <point x="690" y="280" type="line" identifier="outer.p00"/>
+      <point x="690" y="420" type="line" identifier="outer.p01"/>
+      <point x="830" y="420" type="line" identifier="outer.p02"/>
+      <point x="830" y="280" type="line" identifier="outer.p03"/>
+    </contour>
+  </outline>
+</glyph>

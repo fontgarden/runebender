@@ -970,6 +970,31 @@ impl Workspace {
     }
 
     fn dispatch_inner(&mut self, action: shortcuts::AppAction) {
+        if self.interpolation_is_active() && matches!(self.mode, Mode::Editor(_)) {
+            use super::tools::interpolation::{InterpolationEvent, command_allowed};
+            if !command_allowed(action) {
+                self.note = "Leave interpolation mode to edit a source drawing".into();
+                return;
+            }
+            let selection = match action {
+                shortcuts::AppAction::SelectAll => Some(InterpolationEvent::SelectAll),
+                shortcuts::AppAction::DeselectAll => Some(InterpolationEvent::Select(Vec::new())),
+                shortcuts::AppAction::InvertSelection => {
+                    self.interpolation_canvas().ok().map(|canvas| {
+                        InterpolationEvent::Select(
+                            (0..canvas.connections.len())
+                                .filter(|index| !canvas.selected.contains(index))
+                                .collect(),
+                        )
+                    })
+                }
+                _ => None,
+            };
+            if let Some(event) = selection {
+                self.interpolation_event(event);
+                return;
+            }
+        }
         #[cfg(target_arch = "wasm32")]
         if let Some(note) = crate::application::browser::intercept(action, self.modified) {
             self.note = note;

@@ -35,7 +35,11 @@ pub(crate) fn editor_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<>
         app.font
             .reference_outlines(&app.session.glyph_name, &app.reference_layers),
     );
-    let interp = app.interp_preview();
+    let interp = if app.interpolation_is_active() {
+        None
+    } else {
+        app.interp_preview()
+    };
     let groups = (
         app.font.kern_group(&app.session.glyph_name, true),
         app.font.kern_group(&app.session.glyph_name, false),
@@ -84,6 +88,7 @@ pub(crate) fn editor_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<>
         app.shapes.ghost.clone(),
         app.editor_focus.clone(),
         |app: &mut Workspace, ev| match ev {
+            canvas::editor::EditorEvent::Interpolation(event) => app.interpolation_event(event),
             canvas::editor::EditorEvent::Selection(n) => {
                 app.selected_points = n;
                 app.refresh_coord_bufs();
@@ -128,4 +133,9 @@ pub(crate) fn editor_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<>
             }
         },
     )
+    .interpolation(if app.interpolation_is_active() {
+        app.interpolation_canvas().ok()
+    } else {
+        None
+    })
 }

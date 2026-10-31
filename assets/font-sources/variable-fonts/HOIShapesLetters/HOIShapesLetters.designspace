@@ -1,0 +1,23 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<designspace format="5.0">
+  <axes>
+    <axis tag="wght" name="Weight" minimum="100" maximum="900" default="400"/>
+  </axes>
+  <sources>
+    <source filename="HOIShapesLetters-Light.ufo" name="light" familyname="HOI Shapes Letters" stylename="Light">
+      <location>
+        <dimension name="Weight" xvalue="100"/>
+      </location>
+    </source>
+    <source filename="HOIShapesLetters-Regular.ufo" name="regular" familyname="HOI Shapes Letters" stylename="Regular">
+      <location>
+        <dimension name="Weight" xvalue="400"/>
+      </location>
+    </source>
+    <source filename="HOIShapesLetters-Bold.ufo" name="bold" familyname="HOI Shapes Letters" stylename="Bold">
+      <location>
+        <dimension name="Weight" xvalue="900"/>
+      </location>
+    </source>
+  </sources>
+</designspace>

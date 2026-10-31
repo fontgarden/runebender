@@ -30,6 +30,13 @@ Run `node web/folder.cjs` with the Playwright variables below to check this path
 opens the Virtua Grotesk sources through the test hooks, edits a point, and compares the
 saved file set with the opened one.
 
+Run `node web/hoi-preservation.cjs` against the built editor to check that HOI Shapes opens and all 18 unchanged GLIFs retain their exact bytes in a browser save package.
+This check uses only the synthetic fixture and writes no font files.
+Run `node web/hoi-editing.cjs` to exercise the interpolation tool with real pointer and keyboard input at 1280 × 800, DPR 1.
+It covers trajectory and control dragging, cancellation, selection, easing, scrubbing, compiled comparison, a read-only filled preview, history, interval scope, and save/reopen with all 18 GLIFs unchanged.
+Set `RUNEBENDER_HOI_PROOF_DIR` to save a screenshot of the authored result.
+The browser host refreshes Masonry's keyboard-focus fallback after rebuilding, so shortcuts remain available after panel controls leave no widget focused.
+
 ## Build
 
 Install the Rust `wasm32-unknown-unknown` target and wasm-bindgen-cli 0.2.127,
@@ -116,3 +123,6 @@ in memory; executing its proof/export workflow requires the desktop application.
 For menu appearance checks, run `node web/menu-appearance.cjs` with the same
 Playwright/Chrome variables and `RUNEBENDER_PROOFS` set to a capture directory.
 The browser uses the shared in-window header; macOS normally keeps its OS menus.
+
+The HOI preservation check also compares scoped trajectory metadata when present.
+Set `RUNEBENDER_HOI_SOURCE` to the generated Phase 2 proof's `source/` directory to exercise the authored package; see `docs/HOI-RESEARCH-PLAN.md` for its generation command.

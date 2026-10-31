@@ -1,0 +1,35 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<glyph name="ring" format="2">
+  <advance width="1000"/>
+  <unicode hex="0043"/>
+  <outline>
+    <contour identifier="outer">
+      <point x="760" y="350" type="curve" smooth="yes" identifier="outer.p00"/>
+      <point x="760" y="222.974508" identifier="outer.p01"/>
+      <point x="643.594035" y="120" identifier="outer.p02"/>
+      <point x="500" y="120" type="curve" smooth="yes" identifier="outer.p03"/>
+      <point x="356.405965" y="120" identifier="outer.p04"/>
+      <point x="240" y="222.974508" identifier="outer.p05"/>
+      <point x="240" y="350" type="curve" smooth="yes" identifier="outer.p06"/>
+      <point x="240" y="477.025492" identifier="outer.p07"/>
+      <point x="356.405965" y="580" identifier="outer.p08"/>
+      <point x="500" y="580" type="curve" smooth="yes" identifier="outer.p09"/>
+      <point x="643.594035" y="580" identifier="outer.p10"/>
+      <point x="760" y="477.025492" identifier="outer.p11"/>
+    </contour>
+    <contour identifier="inner">
+      <point x="660" y="350" type="curve" smooth="yes" identifier="inner.p00"/>
+      <point x="660" y="427.319865" identifier="inner.p01"/>
+      <point x="588.36556" y="490" identifier="inner.p02"/>
+      <point x="500" y="490" type="curve" smooth="yes" identifier="inner.p03"/>
+      <point x="411.63444" y="490" identifier="inner.p04"/>
+      <point x="340" y="427.319865" identifier="inner.p05"/>
+      <point x="340" y="350" type="curve" smooth="yes" identifier="inner.p06"/>
+      <point x="340" y="272.680135" identifier="inner.p07"/>
+      <point x="411.63444" y="210" identifier="inner.p08"/>
+      <point x="500" y="210" type="curve" smooth="yes" identifier="inner.p09"/>
+      <point x="588.36556" y="210" identifier="inner.p10"/>
+      <point x="660" y="272.680135" identifier="inner.p11"/>
+    </contour>
+  </outline>
+</glyph>

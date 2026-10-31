@@ -9,6 +9,7 @@ pub(crate) mod editor;
 pub(crate) mod editor_info;
 pub(crate) mod graph;
 pub(crate) mod info;
+pub(crate) mod interpolation;
 pub(crate) mod local_ai;
 pub(crate) mod preview;
 pub(crate) mod scripts;

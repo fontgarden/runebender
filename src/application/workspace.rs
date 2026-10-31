@@ -50,6 +50,8 @@ pub(crate) struct UiActionRecord {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Tool {
     Select,
+    /// Edit point trajectories between fixed neighboring sources.
+    Interpolation,
     Lasso,
     /// Moves the editor viewport without changing the glyph or selection.
     Hand,
@@ -85,6 +87,10 @@ pub(crate) struct OverviewEditBatch {
 /// before it. The depth keeps metadata Undo ordered with outline edits.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum MetadataEdit {
+    Interpolation {
+        glyph: String,
+        undo_depth: usize,
+    },
     AgentGroup {
         group: runebender::font::project::EditHistoryGroupId,
         addresses: Vec<runebender::font::variable::GlyphLayerAddress>,
@@ -204,6 +210,7 @@ pub(crate) struct Workspace {
     pub(crate) tabs: Vec<Tab>,
     pub(crate) active_tab: usize,
     pub(crate) selected_points: usize,
+    pub(crate) interpolation: crate::application::editor::tools::interpolation::InterpolationState,
     pub(crate) tool: Tool,
     /// The persistent tool restored when a temporary Space-held pan ends.
     /// `None` distinguishes a selected Hand tool from the temporary override.

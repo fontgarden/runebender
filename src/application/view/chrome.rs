@@ -105,7 +105,12 @@ pub(crate) fn header_tools(app: &Workspace) -> impl WidgetView<Workspace> + use<
         let style = ControlStyle::new(pal, ControlKind::Tool)
             .on(pal, Ground::Header)
             .selected(pal, app.tool == tool);
-        let button = icon_button(style, icon, icon, move |app: &mut Workspace| {
+        let title = if tool == Tool::Interpolation {
+            "Edit Interpolation (I)"
+        } else {
+            icon
+        };
+        let button = icon_button(style, icon, title, move |app: &mut Workspace| {
             app.review.pencil = false;
             app.select_tool(tool);
         })
@@ -129,6 +134,7 @@ pub(crate) fn header_tools(app: &Workspace) -> impl WidgetView<Workspace> + use<
             tool_group(ToolGroup::Shapes, app.tool, app.palette.clone()),
             tile("knife", Tool::Knife),
             tile("measure", Tool::Measure),
+            tile("select-all-layers", Tool::Interpolation),
             // No icon is drawn for it yet; two overlapping shapes are what a label is.
             tile("intersect", Tool::Label),
             tile("text", Tool::Text),

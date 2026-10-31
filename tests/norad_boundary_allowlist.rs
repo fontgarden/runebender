@@ -17,6 +17,7 @@ const ALLOWED_BOUNDARIES: &[&str] = &[
     "font/model/glyph_metadata.rs",
     "font/persistence/memory.rs",
     "font/persistence/mod.rs",
+    "font/persistence/original_glif.rs",
     "font/persistence/source_format.rs",
     "font/persistence/ufo_codec.rs",
     "font/project/constructors.rs",

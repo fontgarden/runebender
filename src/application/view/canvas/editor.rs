@@ -4,6 +4,9 @@
 //! The glyph editor island: a canvas widget that owns the edit session
 //! and gesture state, and the view that hosts it.
 
+mod interpolation;
+use crate::application::editor::tools::interpolation::InterpolationCanvas;
+
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -376,6 +379,7 @@ impl EditorWidget {
 /// What the editor reports upward.
 #[derive(Debug)]
 pub(crate) enum EditorEvent {
+    Interpolation(crate::application::editor::tools::interpolation::InterpolationEvent),
     /// The glyph changed; the app should refresh its cached preview.
     Edited,
     /// Selection changed; carries how many points are selected.
@@ -384,7 +388,10 @@ pub(crate) enum EditorEvent {
     ToggleComponentAlignment,
     /// A composed sort was activated: open that glyph without losing the line,
     /// and keep the tool that established the interaction.
-    EditGlyph { name: String, tool: Tool },
+    EditGlyph {
+        name: String,
+        tool: Tool,
+    },
     /// The committed logical text changed; park it with the active tab.
     TextChanged(String),
     /// Widget-owned selected shaped occurrence and its proof settings.
@@ -392,14 +399,21 @@ pub(crate) enum EditorEvent {
     /// Session-only brush ink changed; the canonical glyph did not.
     SketchChanged,
     /// The local AI shapes tool: a box was dragged; the old ghost is stale.
-    AiShapeBox { rect: Rect },
+    AiShapeBox {
+        rect: Rect,
+    },
     /// The local AI shapes tool: draw `word` into `rect`; `seed` 0 is
     /// the most likely drawing, another seed another option.
-    AiShapeDraw { rect: Rect, seed: u64 },
+    AiShapeDraw {
+        rect: Rect,
+        seed: u64,
+    },
     /// The local AI shapes tool: the box was dismissed.
     AiShapeDrop,
     /// The local AI shapes tool: the ghost was added to the glyph.
-    AiShapeKept { word: String },
+    AiShapeKept {
+        word: String,
+    },
     /// Open a component of the open glyph in place.
     EnterComponent(ComponentId),
     /// Move to another part of the composite, selecting one of its points.
@@ -423,7 +437,10 @@ fn dispatch_editor_event(
     event: EditorEvent,
     on_event: impl FnOnce(&mut Workspace, EditorEvent),
 ) {
-    if matches!(&event, EditorEvent::SketchChanged) {
+    if matches!(
+        &event,
+        EditorEvent::SketchChanged | EditorEvent::Interpolation(_)
+    ) {
         on_event(app, event);
         return;
     }
@@ -582,6 +599,9 @@ enum Drag {
 }
 
 pub(crate) struct EditorWidget {
+    hoi: Option<Arc<InterpolationCanvas>>,
+    hoi_drag: Option<interpolation::InterpolationDrag>,
+    hoi_control: Option<usize>,
     session: Session,
     palette: Arc<Palette>,
     /// The glyph's kerning groups, shown in the floating metrics card.
@@ -1310,6 +1330,9 @@ impl EditorWidget {
     }
 
     fn fit(&mut self) {
+        if self.tool == Tool::Interpolation && self.fit_interpolation() {
+            return;
+        }
         // A neural canvas has no advance or metrics box to frame, and its
         // ink sits wherever the calligraphy was traced. Frame the ink.
         if self.session.neural && self.fit_ink() {
@@ -1923,7 +1946,12 @@ impl Widget for EditorWidget {
         // use this same press/release lifecycle, so panning never changes the
         // persistent tool and releasing Space restores the normal drawing.
         if self.preview_mode {
-            if let Some(text) = &self.text {
+            if let Some(data) = &self.hoi {
+                painter
+                    .fill(&*data.preview, pal.editor_ink())
+                    .transform(view_affine)
+                    .draw();
+            } else if let Some(text) = &self.text {
                 for sort in text.placed() {
                     painter
                         .fill(&(view_affine * sort.path), pal.editor_ink())
@@ -1946,6 +1974,11 @@ impl Widget for EditorWidget {
                         .draw();
                 }
             }
+            return;
+        }
+
+        if self.tool == Tool::Interpolation {
+            self.paint_interpolation(painter);
             return;
         }
 
@@ -2884,6 +2917,9 @@ impl Widget for EditorWidget {
         _props: &mut PropertiesMut<'_>,
         event: &PointerEvent,
     ) {
+        if self.tool == Tool::Interpolation && self.interpolation_pointer(ctx, event) {
+            return;
+        }
         // Off a master the view is a read-only instance: swallow edit clicks.
         if self.interp.is_some()
             && let PointerEvent::Down(PointerButtonEvent {
@@ -4052,6 +4088,10 @@ impl Widget for EditorWidget {
         _props: &mut PropertiesMut<'_>,
         event: &TextEvent,
     ) {
+        if self.tool == Tool::Interpolation {
+            self.interpolation_key(ctx, event);
+            return;
+        }
         if self.tool == Tool::Text && self.text.is_some() {
             self.cursor_blink_elapsed_ns = 0;
             self.cursor_visible = true;
@@ -4500,6 +4540,15 @@ impl Widget for EditorWidget {
     }
 
     fn get_cursor(&self, _ctx: &QueryCtx<'_>, _pos: Point) -> CursorIcon {
+        if self.tool == Tool::Interpolation {
+            return if self.hoi_drag.is_some() {
+                CursorIcon::Grabbing
+            } else if self.interpolation_hit(_pos).is_some() {
+                CursorIcon::Pointer
+            } else {
+                CursorIcon::Default
+            };
+        }
         let resizing = match self.drag {
             Drag::AiResize { handle } => Some(handle),
             _ => self.ai_hover,
@@ -4561,6 +4610,7 @@ fn interp_eq(a: &Option<Arc<kurbo::BezPath>>, b: &Option<Arc<kurbo::BezPath>>) -
 // View wrapper.
 
 pub(crate) struct EditorView<F> {
+    hoi: Option<Arc<InterpolationCanvas>>,
     session: Arc<Session>,
     palette: Arc<Palette>,
     groups: (String, String),
@@ -4609,6 +4659,7 @@ pub(crate) fn editor<F: Fn(&mut Workspace, EditorEvent) + 'static>(
         .unwrap_or_else(|error| error.into_inner())
         .revision();
     EditorView {
+        hoi: None,
         session,
         palette,
         groups,
@@ -4705,6 +4756,13 @@ pub(crate) struct PlacedImage {
     pub to_glyph: Affine,
 }
 
+impl<F> EditorView<F> {
+    pub(crate) fn interpolation(mut self, data: Option<Arc<InterpolationCanvas>>) -> Self {
+        self.hoi = data;
+        self
+    }
+}
+
 impl<F> ViewMarker for EditorView<F> {}
 impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> for EditorView<F> {
     type Element = Pod<EditorWidget>;
@@ -4718,6 +4776,9 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
             session.fitted = false;
         }
         let widget = EditorWidget {
+            hoi: self.hoi.clone(),
+            hoi_drag: None,
+            hoi_control: None,
             session,
             palette: self.palette.clone(),
             groups: self.groups.clone(),
@@ -4770,6 +4831,25 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
         _: &mut Workspace,
     ) {
         let mut dirty = false;
+        if self.hoi != prev.hoi {
+            let reframe = match (&self.hoi, &prev.hoi) {
+                (Some(a), Some(b)) => a.glyph != b.glyph || a.interval != b.interval,
+                (Some(_), None) => true,
+                _ => false,
+            };
+            let obsolete = match (&self.hoi, &prev.hoi) {
+                (Some(a), Some(b)) => a.revision != b.revision || a.preview_only != b.preview_only,
+                _ => true,
+            };
+            element.widget.hoi = self.hoi.clone();
+            if reframe || obsolete {
+                element.widget.hoi_drag = None;
+            }
+            if reframe {
+                element.widget.fit_interpolation();
+            }
+            dirty = true;
+        }
         if !Arc::ptr_eq(&self.palette, &prev.palette) {
             element.widget.palette = self.palette.clone();
             dirty = true;
@@ -4793,6 +4873,7 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
             dirty = true;
         }
         if self.tool != prev.tool {
+            element.widget.hoi_drag = None;
             element.widget.tool = self.tool;
             element.widget.cursor_blink_elapsed_ns = 0;
             element.widget.cursor_visible = true;
@@ -4981,6 +5062,9 @@ mod tests {
 
     fn widget() -> EditorWidget {
         EditorWidget {
+            hoi: None,
+            hoi_drag: None,
+            hoi_control: None,
             session: session(),
             palette: Arc::new(Palette::load("dark")),
             groups: (String::new(), String::new()),
@@ -7667,6 +7751,120 @@ mod tests {
         println!("undo rebuild                 {:.2} ms", ms(undo_rebuild));
         println!("font snapshot for preview    {:.2} ms", ms(snapshot_time));
         println!("preview compile (threaded)   {:.2} ms", ms(compile));
+    }
+    #[test]
+    fn hoi_pointer_drag_control_cancel_and_undo_preserve_the_master() {
+        use crate::application::editor::tools::interpolation::InterpolationEvent;
+        use kurbo::{CubicBez, ParamCurve, Vec2};
+        use masonry::core::keyboard::{Code, KeyboardEvent, Modifiers};
+        let mut app = Workspace::open(std::path::Path::new(
+            "assets/font-sources/variable-fonts/HOIShapes/HOIShapes.designspace",
+        ))
+        .unwrap();
+        app.open_glyph(app.font.index_of("box").unwrap());
+        app.select_tool(Tool::Interpolation);
+        app.set_interpolation_interval(0);
+        let original = app.session.projected_glyph().unwrap();
+        let mut editor = widget();
+        editor.session = (*app.session).clone();
+        editor.tool = Tool::Interpolation;
+        editor.hoi = Some(app.interpolation_canvas().unwrap());
+        let mut harness =
+            TestHarness::create_with_size(default_property_set(), editor.prepare(), (1000, 700));
+        let dispatch = |harness: &mut TestHarness<EditorWidget>, app: &mut Workspace| {
+            while let Some((event, _)) = harness.pop_action::<EditorEvent>() {
+                harness.edit_root_widget(|root| {
+                    dispatch_editor_event(app, &mut root.widget.session, event, |app, event| {
+                        match event {
+                            EditorEvent::Interpolation(event) => app.interpolation_event(event),
+                            EditorEvent::Undo => app.undo_open_glyph(false),
+                            EditorEvent::Redo => app.undo_open_glyph(true),
+                            _ => panic!("unexpected outline event"),
+                        }
+                    });
+                    root.widget.hoi = Some(app.interpolation_canvas().unwrap());
+                });
+            }
+        };
+        let at = harness.edit_root_widget(|root| {
+            let p = root.widget.hoi.as_ref().unwrap().connections[0].points;
+            root.widget.session.viewport.affine() * CubicBez::new(p[0], p[1], p[2], p[3]).eval(0.5)
+        });
+        harness.mouse_move(at);
+        harness.mouse_button_press(Some(PointerButton::Primary));
+        dispatch(&mut harness, &mut app);
+        for dy in [10.0, 20.0, 40.0] {
+            harness.mouse_move(at + Vec2::new(0.0, -dy));
+            dispatch(&mut harness, &mut app);
+        }
+        assert!(
+            app.font.project.hoi_trajectories().unwrap().is_empty(),
+            "drag stays transient"
+        );
+        harness.mouse_button_release(Some(PointerButton::Primary));
+        dispatch(&mut harness, &mut app);
+        assert_eq!(app.metadata_undo.len(), 1);
+        let committed = app.font.project.hoi_trajectories().unwrap();
+        assert_eq!(committed.len(), 1);
+        assert_eq!(app.session.projected_glyph().unwrap(), original);
+
+        let control = harness.edit_root_widget(|root| {
+            root.widget.session.viewport.affine()
+                * root.widget.hoi.as_ref().unwrap().connections[0].points[1]
+        });
+        harness.mouse_move(control);
+        harness.mouse_button_press(Some(PointerButton::Primary));
+        dispatch(&mut harness, &mut app);
+        harness.mouse_move(control + Vec2::new(30.0, -20.0));
+        dispatch(&mut harness, &mut app);
+        harness.process_text_event(TextEvent::Keyboard(KeyboardEvent {
+            state: KeyState::Down,
+            key: Key::Named(NamedKey::Escape),
+            code: Code::Escape,
+            ..KeyboardEvent::default()
+        }));
+        dispatch(&mut harness, &mut app);
+        harness.mouse_button_release(Some(PointerButton::Primary));
+        dispatch(&mut harness, &mut app);
+        assert_eq!(app.font.project.hoi_trajectories().unwrap(), committed);
+        assert_eq!(app.metadata_undo.len(), 1);
+
+        harness.process_text_event(TextEvent::Keyboard(KeyboardEvent {
+            state: KeyState::Down,
+            key: Key::Character("z".into()),
+            code: Code::KeyZ,
+            modifiers: Modifiers::META,
+            ..KeyboardEvent::default()
+        }));
+        dispatch(&mut harness, &mut app);
+        assert!(app.font.project.hoi_trajectories().unwrap().is_empty());
+        assert_eq!(app.session.projected_glyph().unwrap(), original);
+        app.interpolation_event(InterpolationEvent::SelectAll);
+        assert_eq!(app.interpolation_canvas().unwrap().selected.len(), 4);
+        app.set_interpolation_preview(1);
+        let viewport = harness.edit_root_widget(|root| {
+            root.widget.hoi = Some(app.interpolation_canvas().unwrap());
+            assert!(root.widget.interpolation_hit(at).is_none());
+            root.widget.session.viewport.affine()
+        });
+        harness.mouse_move(at);
+        harness.mouse_button_press(Some(PointerButton::Primary));
+        harness.mouse_move(at + Vec2::new(30.0, -20.0));
+        harness.mouse_button_release(Some(PointerButton::Primary));
+        for key in [NamedKey::ArrowUp, NamedKey::Delete] {
+            harness.process_text_event(TextEvent::Keyboard(KeyboardEvent {
+                state: KeyState::Down,
+                key: Key::Named(key),
+                ..KeyboardEvent::default()
+            }));
+        }
+        assert!(
+            harness.pop_action::<EditorEvent>().is_none(),
+            "preview clicks and keys cannot edit"
+        );
+        harness.edit_root_widget(|root| {
+            assert_eq!(root.widget.session.viewport.affine(), viewport);
+        });
     }
 }
 

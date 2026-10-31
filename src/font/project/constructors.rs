@@ -109,6 +109,7 @@ impl Project {
             sources: vec![state],
             variable,
             source_history: sources::SourceHistory::default(),
+            hoi_history: super::super::history::TransactionHistory::default(),
             document_history: super::super::history::DocumentHistory::default(),
             edit_transaction_history: edit_transactions::EditTransactionHistory::default(),
             source_metadata_history: super::super::history::SourceMetadataHistory::default(),

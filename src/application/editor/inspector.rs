@@ -459,6 +459,7 @@ impl Workspace {
             | MetadataEdit::SourceMetadata {
                 glyph, undo_depth, ..
             }
+            | MetadataEdit::Interpolation { glyph, undo_depth }
             | MetadataEdit::SourceStructure {
                 glyph, undo_depth, ..
             } => (glyph, *undo_depth),
@@ -526,6 +527,25 @@ impl Workspace {
                     "{} Unicode for {glyph}",
                     if redo { "Redid" } else { "Undid" }
                 )
+            }
+            MetadataEdit::Interpolation { .. } => {
+                let direction = if redo {
+                    HistoryDirection::Redo
+                } else {
+                    HistoryDirection::Undo
+                };
+                match self.font.project.replay_hoi_history(direction) {
+                    Ok(runebender::font::history::HistoryReplayOutcome::Applied) => {
+                        self.cancel_interpolation_draft();
+                        self.modified = true;
+                    }
+                    Ok(_) => return false,
+                    Err(error) => {
+                        self.note = error.to_string();
+                        return true;
+                    }
+                }
+                format!("{} interpolation", if redo { "Redid" } else { "Undid" })
             }
             MetadataEdit::SourceMetadata { label, .. } => {
                 let direction = if redo {
@@ -668,6 +688,7 @@ impl Workspace {
             | MetadataEdit::SourceMetadata {
                 glyph, undo_depth, ..
             }
+            | MetadataEdit::Interpolation { glyph, undo_depth }
             | MetadataEdit::SourceStructure {
                 glyph, undo_depth, ..
             } => (glyph, *undo_depth),

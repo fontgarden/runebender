@@ -336,6 +336,7 @@ pub struct MemoryBookkeeping {
     pub glif_paths: HashMap<PathBuf, HashMap<(String, String), String>>,
     /// Per source path, files outside the UFO specification, written back unchanged.
     pub preserved: HashMap<PathBuf, Vec<(String, Vec<u8>)>>,
+    original_glifs: HashMap<PathBuf, HashMap<String, super::OriginalGlif>>,
 }
 
 /// A project opened from in-memory files plus the host's save bookkeeping.
@@ -763,8 +764,32 @@ pub fn open_memory_project(
         if selected.is_empty() {
             return Err(format!("{}: no files", source_path.display()));
         }
-        let decoded = decode_ufo_files(selected)
+        let decoded = decode_ufo_files(selected.iter().copied())
             .map_err(|error| format!("{}: {error}", source_path.display()))?;
+        let mut originals = HashMap::new();
+        for ((layer_name, glyph_name), file) in &decoded.glif_paths {
+            let layer = decoded
+                .font
+                .layers
+                .get(layer_name)
+                .ok_or("missing decoded layer")?;
+            let directory = decoded
+                .layer_directories
+                .get(layer_name)
+                .cloned()
+                .unwrap_or_else(|| layer.path().to_string_lossy().into_owned());
+            let path = format!("{directory}/{file}");
+            let bytes = selected
+                .iter()
+                .find(|(name, _)| *name == path)
+                .map(|(_, bytes)| bytes.to_vec())
+                .ok_or("missing original GLIF bytes")?;
+            let glyph = layer.get_glyph(glyph_name).ok_or("missing decoded glyph")?;
+            originals.insert(path, super::OriginalGlif::capture(bytes, glyph)?);
+        }
+        bookkeeping
+            .original_glifs
+            .insert(source_path.clone(), originals);
         bookkeeping
             .layer_directories
             .insert(source_path.clone(), decoded.layer_directories);
@@ -849,7 +874,8 @@ pub fn open_memory_project(
 
 /// The files that persist `project`, relative to the folder it was opened from.
 ///
-/// Every source is written in full; the designspace only when its metadata changed.
+/// Every source is written in full, retaining original bytes for unchanged glyphs.
+/// The designspace is written only when its metadata changed.
 /// Call [`crate::font::project::Project::mark_saved`] once the host has written them.
 pub fn memory_save_files(
     project: &crate::font::project::Project,
@@ -876,6 +902,16 @@ pub fn memory_save_files(
             .map_err(|error| format!("{}: {error}", path.display()))?;
         let prefix = path.to_string_lossy();
         for (file, bytes) in encoded.files {
+            let retained = bookkeeping
+                .original_glifs
+                .get(&path)
+                .and_then(|files| files.get(&file))
+                .and_then(|original| original.unchanged_bytes(&bytes));
+            let bytes = if let Some(original) = retained {
+                original.to_vec()
+            } else {
+                bytes
+            };
             save.files.push((format!("{prefix}/{file}"), bytes));
         }
         for directory in encoded.layer_directories {

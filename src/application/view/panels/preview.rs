@@ -110,7 +110,14 @@ fn outline_strip(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     use masonry::imaging::Painter;
     use masonry::kurbo::{Affine, Shape, Size};
     // Off-master preview remains the interpolated current glyph.
-    let interp = app.interp_preview();
+    let hoi = app.interpolation_is_active();
+    let hoi_canvas = hoi.then(|| app.interpolation_canvas().ok()).flatten();
+    let stable_bounds = hoi_canvas.as_ref().map(|data| data.reference_bounds());
+    let interp = if hoi {
+        hoi_canvas.map(|data| data.preview.clone())
+    } else {
+        app.interp_preview()
+    };
     let outline = match &interp {
         Some(o) => o.clone(),
         None => app.session.outline_arc(),
@@ -138,7 +145,7 @@ fn outline_strip(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     } else {
         &app.preview_text
     };
-    let has_preview_text = !proof_text.is_empty();
+    let has_preview_text = !hoi && !proof_text.is_empty();
     let (preview_paths, advance) = if !has_preview_text {
         let mut paths = vec![(*outline).clone()];
         if has_components {
@@ -174,11 +181,13 @@ fn outline_strip(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
             advance,
         )
     };
-    let preview_bounds = preview_paths
-        .iter()
-        .filter(|path| !path.elements().is_empty())
-        .map(|path| path.bounding_box())
-        .reduce(|bounds, next| bounds.union(next));
+    let preview_bounds = stable_bounds.or_else(|| {
+        preview_paths
+            .iter()
+            .filter(|path| !path.elements().is_empty())
+            .map(|path| path.bounding_box())
+            .reduce(|bounds, next| bounds.union(next))
+    });
     let drawing = canvas(move |_app: &mut Workspace, _ctx, scene, size: Size| {
         let mut p = Painter::new(scene);
         if let Some(bounds) = preview_bounds {
@@ -269,7 +278,14 @@ fn preview_contours(layer: runebender::font::LayerView<'_>) -> Vec<PreviewContou
 pub(crate) fn glyph_preview(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     use masonry::imaging::Painter;
     use masonry::kurbo::{Affine, Circle, Line, Point, Rect, Shape, Size, Stroke};
-    let data = if matches!(app.mode, crate::application::workspace::Mode::Editor(_)) {
+    let hoi = app
+        .interpolation_is_active()
+        .then(|| app.interpolation_canvas().ok())
+        .flatten();
+    let stable_bounds = hoi.as_ref().map(|data| data.reference_bounds());
+    let data = if app.interpolation_is_active() {
+        hoi.map(|data| (data.preview.clone(), Vec::new()))
+    } else if matches!(app.mode, crate::application::workspace::Mode::Editor(_)) {
         app.session.current_layer().map(|layer| {
             let mut outline = app.session.outline();
             outline.extend(app.session.components.clone());
@@ -307,7 +323,7 @@ pub(crate) fn glyph_preview(app: &Workspace) -> impl WidgetView<Workspace> + use
             let Some((outline, contours)) = &data else {
                 return;
             };
-            let bounds = outline.bounding_box();
+            let bounds = stable_bounds.unwrap_or_else(|| outline.bounding_box());
             // A neural canvas is a whole piece of writing: points would only
             // crowd it. Fill the space with solid copies of the ink instead.
             if neural {

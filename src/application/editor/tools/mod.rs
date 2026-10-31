@@ -11,6 +11,7 @@
 pub(crate) mod ai_shapes;
 pub(crate) mod chat;
 pub(crate) mod graph;
+pub(crate) mod interpolation;
 pub(crate) mod label;
 pub(crate) mod local_ai;
 pub(crate) mod metaballs;

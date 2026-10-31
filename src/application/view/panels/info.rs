@@ -20,6 +20,10 @@ use runebender::outline::glyph_paths::round_units;
 use xilem::WidgetView;
 
 pub(crate) fn info_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
+    use xilem::core::one_of::Either;
+    if app.interpolation_is_active() && matches!(app.mode, Mode::Editor(_)) {
+        return Either::A(super::interpolation::panel(app));
+    }
     let pal = &app.palette;
     let row = move |k: String, v: String| recipes::kv(pal, k, v);
     let (_name, _adv, pts, _cp) = match app.mode {
@@ -199,7 +203,7 @@ pub(crate) fn info_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
             ControlSize::Row.px()
         },
     );
-    recipes::panel_stack((
+    Either::B(recipes::panel_stack((
         // GPUI leads edit mode with selection geometry and its tools;
         // the overview still begins with glyph identity because these
         // optional edit groups disappear there.
@@ -262,5 +266,5 @@ pub(crate) fn info_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
                 .map(|body| recipes::panel_group(pal, body)),
         )),
         editing.then(|| recipes::panel_group(pal, measure_section(app))),
-    ))
+    )))
 }
