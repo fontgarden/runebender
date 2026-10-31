@@ -17,7 +17,7 @@ use crate::application::editor::tools::graph::controls::{
     add_live_specimen_script, apply_live_comparison, cancel_live_comparison, change_live_graph,
     clear_live_results, edit_live_code, edit_live_scope, move_live_node, open_live_comparison_file,
     run_live_comparison, save_live_comparison_file, save_proof_image, select_live_comparison,
-    select_live_specimen, set_live_script_language,
+    select_live_specimen,
 };
 use crate::application::editor::tools::graph::file_label;
 use crate::application::view::canvas::graph::{GraphEvent, graph_canvas};
@@ -687,54 +687,6 @@ pub(crate) fn graph_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
         pal.outline,
     );
     let choices = (!live).then(|| graph_choices(app)).flatten();
-    // A selected specimen script offers its two languages.
-    let script_language = live
-        .then(|| {
-            let id = app.graph.selected?;
-            let node = view.graph.node(id)?;
-            (node.type_name == runebender::workflows::graph_live::SPECIMEN_SCRIPT)
-                .then(|| {
-                    ScriptLanguage::from_name(
-                        node.values
-                            .get("language")
-                            .and_then(serde_json::Value::as_str),
-                    )
-                })
-                .map(|language| (id, language))
-        })
-        .flatten()
-        .map(|(id, current)| {
-            let toggles: Vec<_> = [
-                (ScriptLanguage::Designbot, "Designbot"),
-                (ScriptLanguage::Drawbot, "DrawBot"),
-            ]
-            .into_iter()
-            .map(|(language, title)| {
-                let guard = live_guard.clone();
-                recipes::toggle(
-                    pal,
-                    title.into(),
-                    language == current,
-                    move |app: &mut Workspace| {
-                        if let Some(guard) = guard.clone() {
-                            set_live_script_language(app, guard, id, language);
-                        }
-                    },
-                )
-            })
-            .collect();
-            xrow(
-                Region::List,
-                (
-                    label("Language")
-                        .text_size(TextSize::Caption.px())
-                        .color(pal.text_muted),
-                    xrow(Region::Inline, toggles),
-                ),
-            )
-            .padding(Space::Sm)
-            .gap(Space::Sm)
-        });
     let scope = (live && has_python).then(|| {
         xrow(
             Region::List,
@@ -875,7 +827,6 @@ pub(crate) fn graph_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
         flex_col((
             strip,
             scope,
-            script_language,
             choices,
             report,
             problems,

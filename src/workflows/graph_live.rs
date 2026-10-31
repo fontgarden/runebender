@@ -22,7 +22,7 @@ pub fn default_proof_recipe() -> Value {
 }
 
 /// The proof recipe a run uses for `node`: its own `recipe` value, or the default, with the
-/// code of a specimen script wired into its `recipe` input.
+/// code of a specimen script wired into its `code` input.
 pub fn effective_proof_recipe(graph: &NodeGraph, node: u32) -> Value {
     let mut recipe = graph
         .node(node)
@@ -30,7 +30,7 @@ pub fn effective_proof_recipe(graph: &NodeGraph, node: u32) -> Value {
         .cloned()
         .unwrap_or_else(default_proof_recipe);
     let script = graph
-        .link_into(node, "recipe")
+        .link_into(node, "code")
         .and_then(|link| graph.node(link.from()))
         .filter(|source| source.type_name == SPECIMEN_SCRIPT);
     if let (Some(script), Some(fields)) = (script, recipe.as_object_mut()) {
@@ -65,7 +65,7 @@ pub fn types() -> Vec<NodeType> {
         ("live.font", "Current font", false, true),
         ("live.fork", "Font version", true, true),
         ("live.python", "Python recipe", true, true),
-        ("live.proof", "Designbot proof", true, false),
+        ("live.proof", "DesignBot proof", true, false),
         ("live.apply", "Apply to current font", true, false),
     ]
     .into_iter()
@@ -128,6 +128,14 @@ pub fn types() -> Vec<NodeType> {
             }
             if name == "live.proof" {
                 ports.push(Port {
+                    name: "code".into(),
+                    kind: Kind::Text,
+                    required: false,
+                    default: None,
+                    help: "A specimen script; when connected, its code draws the whole proof."
+                        .into(),
+                });
+                ports.push(Port {
                     name: "recipe".into(),
                     kind: Kind::Parameters,
                     required: false,
@@ -147,38 +155,28 @@ pub fn types() -> Vec<NodeType> {
     .collect()
 }
 
-/// A code node: Designbot Rust by default, `DrawBot` Python as the fallback. Its recipe output
-/// goes into a proof's `recipe` input, and that proof renders the code with the font it reads.
+/// A code node holding a `DesignBot` script. Its code output goes into a proof's `code` input, and
+/// that proof renders the script with the font it reads.
 fn specimen_script_type() -> NodeType {
     NodeType {
         name: SPECIMEN_SCRIPT.into(),
         title: "Specimen script".into(),
-        help: "Drawing code a proof renders with its font: Designbot Rust, or DrawBot Python."
-            .into(),
+        help: "A DesignBot script that a proof renders with its font.".into(),
         implemented: true,
         execution: NodeExecution::new(NodeCachePolicy::Never, NodeEffects::TrustedProcess),
-        inputs: vec![
-            Port {
-                name: "code".into(),
-                kind: Kind::Text,
-                required: false,
-                default: Some(json!(ScriptLanguage::Designbot.starter())),
-                help: "Drawing code. FONT_PATH and FONT_FAMILY name the font being proofed.".into(),
-            },
-            Port {
-                name: "language".into(),
-                kind: Kind::Text,
-                required: false,
-                default: Some(json!(ScriptLanguage::Designbot.name())),
-                help: "designbot (Rust, the default) or drawbot (Python).".into(),
-            },
-        ],
+        inputs: vec![Port {
+            name: "code".into(),
+            kind: Kind::Text,
+            required: false,
+            default: Some(json!(ScriptLanguage::Designbot.starter())),
+            help: "DesignBot Rust. FONT_PATH and FONT_FAMILY name the font being proofed.".into(),
+        }],
         outputs: vec![Port {
-            name: "recipe".into(),
-            kind: Kind::Parameters,
+            name: "code".into(),
+            kind: Kind::Text,
             required: false,
             default: None,
-            help: "The script, for a proof's recipe input.".into(),
+            help: "The script, for a proof's code input.".into(),
         }],
     }
 }
@@ -456,9 +454,7 @@ pub fn specimen_starter(source_id: SourceId, recipes: Vec<Value>) -> NodeGraph {
     // proof is added last, so the built-in pages render first while the script compiles.
     let example = crate::formats::specimen_script::EXAMPLES[2];
     let script = graph.add(SPECIMEN_SCRIPT, [32.0, y]);
-    let values = &mut graph.node_mut(script).unwrap().values;
-    values.insert("language".into(), json!(ScriptLanguage::Designbot.name()));
-    values.insert(
+    graph.node_mut(script).unwrap().values.insert(
         "code".into(),
         json!(example.code(ScriptLanguage::Designbot)),
     );
@@ -473,7 +469,7 @@ pub fn specimen_starter(source_id: SourceId, recipes: Vec<Value>) -> NodeGraph {
             recipe
         });
     graph.connect(source, "font", proof, "font");
-    graph.connect(script, "recipe", proof, "recipe");
+    graph.connect(script, "code", proof, "code");
     graph
 }
 
@@ -755,7 +751,7 @@ mod tests {
         );
 
         let script = graph.add(SPECIMEN_SCRIPT, [0.0, 600.0]);
-        graph.connect(script, "recipe", proof, "recipe");
+        graph.connect(script, "code", proof, "code");
         let recipe = effective_proof_recipe(&graph, proof);
         assert_eq!(recipe["specimen_script"]["language"], "designbot");
         assert_eq!(

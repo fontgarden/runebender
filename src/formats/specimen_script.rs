@@ -3,7 +3,7 @@
 
 //! Specimen scripts: designer-written drawing code rendered against a compiled font.
 //!
-//! A script is Designbot Rust (the default) or `DrawBot` Python (the fallback).
+//! A script is `DesignBot` Rust (the default) or `DrawBot` Python (the fallback).
 //! `DrawBot` comes from `DRAWBOT_BIN`, the `[specimen]` config, `~/Runebender/python`, or `PATH`.
 //! The renderer writes the compiled font to a temporary TTF, prepends `FONT_PATH` and
 //! `FONT_FAMILY`, and runs the installed `designbot` or `drawbot` command with a time limit.
@@ -12,7 +12,7 @@
 //! Known gaps:
 //! - Scriptes run with the designer's own permissions; they are trusted code, like a
 //!   Python recipe, and are not sandboxed.
-//! - Designbot compiles the script with Cargo. The first render on a machine takes minutes
+//! - `DesignBot` compiles the script with Cargo. The first render on a machine takes minutes
 //!   while its dependency cache warms; later edits recompile only the script.
 
 use std::io::Read as _;
@@ -28,7 +28,7 @@ use super::designbot::{RendererIdentity, hash_executable, resolve_tool};
 pub const MAX_SCRIPT_BYTES: usize = 64 * 1024;
 /// Largest image a script may produce, in bytes.
 const MAX_SCRIPT_PNG_BYTES: u64 = 32 * 1024 * 1024;
-/// Designbot compiles the script; a cold Cargo cache needs minutes.
+/// `DesignBot` compiles the script; a cold Cargo cache needs minutes.
 const DESIGNBOT_TIME_LIMIT: Duration = Duration::from_secs(300);
 /// `DrawBot` interprets the script.
 const DRAWBOT_TIME_LIMIT: Duration = Duration::from_secs(60);
@@ -41,7 +41,7 @@ const MAX_DIAGNOSTIC_BYTES: u64 = 4096;
 )]
 #[serde(rename_all = "lowercase")]
 pub enum ScriptLanguage {
-    /// Designbot Rust, run by the `designbot` command.
+    /// `DesignBot` Rust, run by the `designbot` command.
     #[default]
     Designbot,
     /// `DrawBot` Python, run by the `drawbot` command from drawbot-skia.
@@ -49,7 +49,7 @@ pub enum ScriptLanguage {
 }
 
 impl ScriptLanguage {
-    /// The language named by a node value, or Designbot.
+    /// The language named by a node value, or `DesignBot`.
     pub fn from_name(name: Option<&str>) -> Self {
         match name {
             Some(name) if name.eq_ignore_ascii_case("drawbot") => Self::Drawbot,
@@ -117,7 +117,7 @@ pub fn configure_tools(designbot: Option<std::path::PathBuf>, drawbot: Option<st
 /// Python environment for `DrawBot`, then `PATH`.
 fn renderer(language: ScriptLanguage) -> Result<std::path::PathBuf, String> {
     let (variable, name, label) = match language {
-        ScriptLanguage::Designbot => ("DESIGNBOT_BIN", "designbot", "Designbot"),
+        ScriptLanguage::Designbot => ("DESIGNBOT_BIN", "designbot", "DesignBot"),
         ScriptLanguage::Drawbot => ("DRAWBOT_BIN", "drawbot", "DrawBot"),
     };
     let configured = CONFIGURED.get().and_then(|tools| match language {
@@ -184,7 +184,7 @@ pub fn render(script: &SpecimenScript, font: &[u8]) -> Result<RenderedSpecimenSc
     let output = dir.join("specimen.png");
     let (label, executable, source, arguments, limit) = match script.language {
         ScriptLanguage::Designbot => {
-            // Designbot keys its compile cache by the script's path, so every Designbot script
+            // DesignBot keys its compile cache by the script's path, so every DesignBot script
             // is written to one fixed path: an edit then recompiles only the script, not every
             // dependency. The lock below keeps two renders from sharing that file at once.
             let stable = std::env::temp_dir().join("runebender-designbot-specimen");
@@ -196,7 +196,7 @@ pub fn render(script: &SpecimenScript, font: &[u8]) -> Result<RenderedSpecimenSc
                 rust_string(&family),
             );
             (
-                "Designbot",
+                "DesignBot",
                 renderer(ScriptLanguage::Designbot)?,
                 (source_path.clone(), preamble),
                 vec![
@@ -350,7 +350,7 @@ fn python_string(value: &str) -> String {
 pub struct ScriptExample {
     /// The name the add menu shows.
     pub title: &'static str,
-    /// The Designbot Rust version.
+    /// The `DesignBot` Rust version.
     pub designbot: &'static str,
     /// The `DrawBot` Python version.
     pub drawbot: &'static str,

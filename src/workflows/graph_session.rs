@@ -2038,7 +2038,7 @@ fn execution_plan(
     let sources = nodes_of_type("live.font");
     let scripts = nodes_of_type("live.python");
     let proofs = nodes_of_type("live.proof");
-    // Specimen scripts are data a proof reads through its recipe input; they never run alone.
+    // Specimen scripts are code a proof reads through its code input; they never run alone.
     let specimen_scripts = nodes_of_type(super::graph_live::SPECIMEN_SCRIPT);
     for &node in &specimen_scripts {
         let feeds_proofs = graph
@@ -2046,7 +2046,7 @@ fn execution_plan(
             .iter()
             .filter(|link| link.from() == node)
             .all(|link| {
-                link.input() == "recipe"
+                link.input() == "code"
                     && graph
                         .node(link.to())
                         .is_some_and(|target| target.type_name == "live.proof")
@@ -2054,7 +2054,7 @@ fn execution_plan(
         if !feeds_proofs || graph.links.iter().any(|link| link.to() == node) {
             return Err(GraphSessionError::new(
                 GraphSessionErrorCode::UnsupportedTopology,
-                "a specimen script takes no inputs and feeds only proof recipe inputs",
+                "a specimen script takes no inputs and feeds only proof code inputs",
             ));
         }
     }
@@ -2095,11 +2095,11 @@ fn execution_plan(
         .copied()
         .collect();
     let input = |node: u32| -> Result<u32, GraphSessionError> {
-        // A proof's recipe may come from a specimen script; only the font input orders the run.
+        // A proof's code may come from a specimen script; only the font input orders the run.
         let links: Vec<_> = graph
             .links
             .iter()
-            .filter(|link| link.to() == node && link.input() != "recipe")
+            .filter(|link| link.to() == node && link.input() != "code")
             .collect();
         if links.len() != 1
             || links[0].input() != "font"
@@ -2932,7 +2932,7 @@ mod tests {
     }
 
     #[test]
-    fn the_plan_accepts_specimen_scripts_only_on_proof_recipes() {
+    fn the_plan_accepts_specimen_scripts_only_on_proof_code_inputs() {
         let mut graph = graph_live::specimen_starter(
             variable::SourceId(0),
             vec![graph_live::default_proof_recipe()],
@@ -2944,14 +2944,14 @@ mod tests {
             .unwrap()
             .id;
         let script = graph.add(graph_live::SPECIMEN_SCRIPT, [0.0, 600.0]);
-        graph.connect(script, "recipe", proof, "recipe");
+        graph.connect(script, "code", proof, "code");
         let plan = execution_plan(&graph, 2).expect("a scripted proof runs");
         assert!(plan.proofs.iter().any(|step| step.node == proof));
 
         let python = graph.add("live.python", [300.0, 600.0]);
         let source = graph.nodes[0].id;
         graph.connect(source, "font", python, "font");
-        graph.connect(script, "recipe", python, "parameters");
+        graph.connect(script, "code", python, "code");
         assert!(execution_plan(&graph, 2).is_err());
     }
 

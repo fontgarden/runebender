@@ -335,7 +335,7 @@ python3 -m venv ~/Runebender/python
 ```
 
 DrawBot is found in this order: `DRAWBOT_BIN`, `drawbot` under `[specimen]` in `~/.config/runebender/config.toml`, this environment, then `PATH`.
-Designbot is found from `DESIGNBOT_BIN`, `designbot` under `[specimen]`, then `PATH`.
+DesignBot is found from `DESIGNBOT_BIN`, `designbot` under `[specimen]`, then `PATH`.
 
 ## 4. Models on disk
 

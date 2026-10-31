@@ -238,8 +238,8 @@ pub(crate) fn live_graph_step(app: &mut Workspace, redo: bool) -> bool {
 }
 
 /// Add an example specimen script and the proof that renders it, at `pos` or below the graph:
-/// the current font feeds the proof, and the script feeds the proof's recipe. `example` indexes
-/// `specimen_script::EXAMPLES`; the script starts in Designbot.
+/// the current font feeds the proof, and the script feeds the proof's code input. `example` indexes
+/// `specimen_script::EXAMPLES`.
 pub(crate) fn add_live_specimen_script(app: &mut Workspace, pos: Option<[f32; 2]>, example: usize) {
     #[cfg(unix)]
     {
@@ -276,10 +276,6 @@ pub(crate) fn add_live_specimen_script(app: &mut Workspace, pos: Option<[f32; 2]
         let example = EXAMPLES[example.min(EXAMPLES.len() - 1)];
         let mut script_node = node(script, SPECIMEN_SCRIPT, [left, top]);
         script_node.values.insert(
-            "language".into(),
-            serde_json::Value::String(ScriptLanguage::Designbot.name().into()),
-        );
-        script_node.values.insert(
             "code".into(),
             serde_json::Value::String(example.code(ScriptLanguage::Designbot).into()),
         );
@@ -292,7 +288,7 @@ pub(crate) fn add_live_specimen_script(app: &mut Workspace, pos: Option<[f32; 2]
                 link: Link(font.id, "font".into(), proof, "font".into()),
             },
             GraphEdit::Connect {
-                link: Link(script, "recipe".into(), proof, "recipe".into()),
+                link: Link(script, "code".into(), proof, "code".into()),
             },
         ];
         let guard = GraphGuard {
@@ -308,53 +304,6 @@ pub(crate) fn add_live_specimen_script(app: &mut Workspace, pos: Option<[f32; 2]
     #[cfg(not(unix))]
     {
         let _ = (pos, example);
-        app.note = "Live graph editing is available in the native editor".into();
-    }
-}
-
-/// Switch a specimen script's language. An unedited example becomes the same example in this
-/// language, and empty code becomes this language's starter, so the node keeps working code.
-pub(crate) fn set_live_script_language(
-    app: &mut Workspace,
-    guard: GraphGuard,
-    node: u32,
-    language: runebender::formats::specimen_script::ScriptLanguage,
-) {
-    #[cfg(unix)]
-    {
-        use runebender::formats::specimen_script::ScriptExample;
-        let Some(current) = app
-            .live_graph_session()
-            .and_then(|session| session.snapshot().graph.node(node).cloned())
-        else {
-            return;
-        };
-        let code = current
-            .values
-            .get("code")
-            .and_then(serde_json::Value::as_str);
-        let replacement = match code {
-            None => Some(language.starter()),
-            Some(code) if code.trim().is_empty() => Some(language.starter()),
-            Some(code) => ScriptExample::matching(code).map(|example| example.code(language)),
-        };
-        let mut edits = vec![GraphEdit::SetValue {
-            node,
-            field: "language".into(),
-            value: serde_json::Value::String(language.name().into()),
-        }];
-        if let Some(replacement) = replacement {
-            edits.push(GraphEdit::SetValue {
-                node,
-                field: "code".into(),
-                value: serde_json::Value::String(replacement.into()),
-            });
-        }
-        live_interactive_mutation(app, guard, edits);
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (guard, node, language);
         app.note = "Live graph editing is available in the native editor".into();
     }
 }

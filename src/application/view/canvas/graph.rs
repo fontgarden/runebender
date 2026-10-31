@@ -195,7 +195,13 @@ fn code_editor(text: &str, text_color: Color) -> (WidgetPod<Portal<SourceTextAre
         });
     let area_id = source.id();
     let portal = Portal::new(source).content_must_fill(true);
-    (NewWidget::new(portal).to_pod(), area_id)
+    // Scrollbars show only while the pointer is over the code, so a node reads as a page of code.
+    let portal = NewWidget::new(portal).with_props({
+        let mut props = PropertySet::new();
+        props.insert(masonry::properties::AutoHideScrollBar(true));
+        props
+    });
+    (portal.to_pod(), area_id)
 }
 
 fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
