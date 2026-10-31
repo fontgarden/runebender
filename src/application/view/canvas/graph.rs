@@ -73,7 +73,12 @@ pub(crate) enum GraphEvent {
     Zoom(f64),
     /// A title-bar button of an image node was clicked.
     Image { node: u32, action: nl::ImageAction },
+    /// The add menu's template: a specimen script and the proof that renders it, at `pos`.
+    AddSpecimenScript { pos: [f32; 2] },
 }
+
+/// The add menu entry that places a specimen script and its proof together.
+const SPECIMEN_SCRIPT_TEMPLATE: &str = "template.specimen_script";
 
 /// What a drag on the canvas is doing.
 #[derive(Debug, Clone)]
@@ -105,6 +110,32 @@ enum Drag {
     Action { id: u32, action: nl::ImageAction },
     /// A child widget or inert node body owns the press.
     Idle,
+}
+
+/// Break a message into at most `max_lines` lines of at most `width` characters, at spaces
+/// where it can; the last line ends with an ellipsis when text remains.
+fn wrap_lines(message: &str, width: usize, max_lines: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    for paragraph in message.lines() {
+        let mut line = String::new();
+        for word in paragraph.split_whitespace() {
+            if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > width {
+                lines.push(std::mem::take(&mut line));
+            }
+            if !line.is_empty() {
+                line.push(' ');
+            }
+            line.extend(word.chars().take(width));
+        }
+        lines.push(line);
+    }
+    if lines.len() > max_lines {
+        lines.truncate(max_lines);
+        if let Some(last) = lines.last_mut() {
+            last.push('\u{2026}');
+        }
+    }
+    lines
 }
 
 /// A rectangle with rounded corners as a path, so the affine applies to it.
@@ -362,6 +393,18 @@ impl GraphWidget {
     ) {
         this.widget.menu = None;
         let wire = this.widget.pending_wire.take();
+        if let MenuAction::AddNode(type_name) = &action
+            && type_name == SPECIMEN_SCRIPT_TEMPLATE
+        {
+            this.ctx
+                .submit_action::<GraphEvent>(GraphEvent::AddSpecimenScript {
+                    pos: [
+                        crate::application::view::render::px32(nl::snap(at.x)),
+                        crate::application::view::render::px32(nl::snap(at.y)),
+                    ],
+                });
+            return;
+        }
         if let MenuAction::AddNode(type_name) = action {
             let id = this.widget.graph.add(
                 &type_name,
@@ -409,7 +452,7 @@ impl GraphWidget {
             return;
         }
         let at = self.to_canvas(local);
-        let rows: Vec<MenuRow> = self
+        let mut rows: Vec<MenuRow> = self
             .registry
             .types
             .iter()
@@ -423,6 +466,13 @@ impl GraphWidget {
                 action: MenuAction::AddNode(t.name.clone()),
             })
             .collect();
+        let script = runebender::workflows::graph_live::SPECIMEN_SCRIPT.to_string();
+        if wire.is_none() && self.addable.contains(&script) {
+            rows.push(MenuRow {
+                label: std::borrow::Cow::Borrowed("Specimen script and proof"),
+                action: MenuAction::AddNode(SPECIMEN_SCRIPT_TEMPLATE.into()),
+            });
+        }
         if rows.is_empty() {
             return;
         }
@@ -957,6 +1007,24 @@ impl Widget for GraphWidget {
                     pal.text_muted,
                     Anchor::End,
                 );
+            }
+            // A proof with nothing to show says why: it has not run, or how its run failed.
+            if let (Some(nl::NodeContent::Image(content)), Some(area)) =
+                (&nb.content, nb.content_rect())
+                && content.image.is_none()
+                && content.previous_image.is_none()
+            {
+                let lines: Vec<String> = match &content.state {
+                    nl::ContentState::Running => Vec::new(),
+                    nl::ContentState::Error(message) => wrap_lines(message, 64, 8),
+                    _ => vec!["Run (\u{2318}\u{21a9}) to render".into()],
+                };
+                let line_height = nl::ROW_H * zoom;
+                let mut at = tf * Point::new(area.x0 + nl::PAD, area.y0 + nl::ROW_H);
+                for line in &lines {
+                    text_label::draw(painter, at, line, text_px, pal.text_muted, Anchor::Start);
+                    at.y += line_height;
+                }
             }
             // A result line under the box, when the node has one.
             if let Some(RowState::Done(_, Some(note))) = self.rows.get(&nb.id) {
@@ -1805,6 +1873,16 @@ mod tests {
             harness.pop_action::<TextAction>(),
             Some((TextAction::Changed(text), _)) if text.contains("pass")
         ));
+    }
+
+    #[test]
+    fn error_lines_wrap_at_spaces_and_end_with_an_ellipsis_when_cut() {
+        assert_eq!(
+            wrap_lines("error: expected one of a b c", 12, 8),
+            ["error:", "expected one", "of a b c"]
+        );
+        let cut = wrap_lines("one\ntwo\nthree", 20, 2);
+        assert_eq!(cut, ["one", "two\u{2026}"]);
     }
 
     #[test]

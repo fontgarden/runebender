@@ -237,9 +237,9 @@ pub(crate) fn live_graph_step(app: &mut Workspace, redo: bool) -> bool {
     false
 }
 
-/// Add a specimen script and the proof that renders it, below the graph: the current font
-/// feeds the proof, and the script feeds the proof's recipe.
-pub(crate) fn add_live_specimen_script(app: &mut Workspace) {
+/// Add a specimen script and the proof that renders it, at `pos` or below the graph: the
+/// current font feeds the proof, and the script feeds the proof's recipe.
+pub(crate) fn add_live_specimen_script(app: &mut Workspace, pos: Option<[f32; 2]>) {
     #[cfg(unix)]
     {
         use runebender::workflows::graph::{Link, Node};
@@ -262,7 +262,7 @@ pub(crate) fn add_live_specimen_script(app: &mut Workspace) {
             .iter()
             .map(|node| node.pos[1])
             .fold(0.0_f32, f32::max);
-        let top = bottom + 480.0;
+        let [left, top] = pos.unwrap_or([font.pos[0], bottom + 480.0]);
         let script = graph.next_id();
         let proof = script + 1;
         let node = |id: u32, type_name: &str, pos: [f32; 2]| Node {
@@ -273,10 +273,10 @@ pub(crate) fn add_live_specimen_script(app: &mut Workspace) {
         };
         let edits = vec![
             GraphEdit::AddNode {
-                node: node(script, SPECIMEN_SCRIPT, [font.pos[0], top]),
+                node: node(script, SPECIMEN_SCRIPT, [left, top]),
             },
             GraphEdit::AddNode {
-                node: node(proof, "live.proof", [font.pos[0] + 704.0, top]),
+                node: node(proof, "live.proof", [left + 704.0, top]),
             },
             GraphEdit::Connect {
                 link: Link(font.id, "font".into(), proof, "font".into()),
@@ -291,10 +291,13 @@ pub(crate) fn add_live_specimen_script(app: &mut Workspace) {
         };
         live_interactive_mutation(app, guard, edits);
         app.graph.selected = Some(script);
-        app.graph.fit_request = app.graph.fit_request.wrapping_add(1);
+        if pos.is_none() {
+            app.graph.fit_request = app.graph.fit_request.wrapping_add(1);
+        }
     }
     #[cfg(not(unix))]
     {
+        let _ = pos;
         app.note = "Live graph editing is available in the native editor".into();
     }
 }

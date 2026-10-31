@@ -513,134 +513,116 @@ pub(crate) fn graph_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
     // The left tab rail and the inspector's first header occupy this same
     // 36-pixel band. One square, keylined control style keeps the file tabs
     // and commands from reading as two unrelated toolbars.
-    // The strip sits in a portal: its buttons scroll sideways on a narrow window instead of
-    // widening the column, which would push the canvas under the inspector.
+    // Laid out as ComfyUI's bar is: which graph on the left, then file commands, run state
+    // and Run at the right, Run as the one primary action. Nodes and templates are added from
+    // the canvas menu, not here. The row sits in a portal that fills the strip, so a narrow
+    // window scrolls the buttons sideways instead of widening the column.
+    let run_label = if running { "Running\u{2026}" } else { "Run" };
     let strip = bottom_keyline(
         sized_box(
             portal(
-            xrow(
-                Region::Inline,
-                (
-                    // Run and its state lead, so a narrow strip never hides them.
-                    recipes::toggle(
-                        pal,
-                        if running {
-                            "Running\u{2026}"
-                        } else {
-                            "Run"
-                        }
-                        .into(),
-                        running,
-                        move |app: &mut Workspace| {
-                            if running {
-                                app.note = "A Graph comparison is already running".into();
-                            } else if live {
-                                run_live_comparison(app);
-                            } else {
-                                app.run_graph();
-                            }
-                        },
-                    ),
-                    (live && !has_python).then(|| {
-                        recipes::toggle(pal, "Auto".into(), auto_run, |app: &mut Workspace| {
-                            app.graph.auto_run = !app.graph.auto_run;
-                        })
-                    }),
-                    (live && can_cancel).then(|| {
-                        recipes::toggle(
+                xrow(
+                    Region::Inline,
+                    (
+                        recipes::toggle(pal, "Specimen".into(), live, select_live_specimen),
+                        (live && !has_python).then(|| {
+                            recipes::toggle(
+                                pal,
+                                "Comparison".into(),
+                                false,
+                                select_live_comparison,
+                            )
+                        }),
+                        xrow(Region::Inline, files),
+                        unlisted,
+                        FlexSpacer::Flex(1.0),
+                        (!live).then(|| {
+                            recipes::action(pal, "New".into(), |app: &mut Workspace| {
+                                app.graph.live_selected = false;
+                                app.new_graph_file();
+                            })
+                        }),
+                        (!live).then(|| {
+                            recipes::action(pal, "Open\u{2026}".into(), |app: &mut Workspace| {
+                                app.graph.live_selected = false;
+                                app.command_open_graph();
+                            })
+                        }),
+                        (!live).then(|| {
+                            recipes::action(pal, "Save".into(), |app: &mut Workspace| {
+                                app.save_graph_file();
+                            })
+                        }),
+                        (live && source.is_some()).then(|| {
+                            let source = source.expect("checked above");
+                            recipes::action(
+                                pal,
+                                "Open\u{2026}".into(),
+                                move |app: &mut Workspace| {
+                                    open_live_comparison_file(app, SourceId(source));
+                                },
+                            )
+                        }),
+                        live.then(|| {
+                            recipes::action(
+                                pal,
+                                "Save As\u{2026}".into(),
+                                save_live_comparison_file,
+                            )
+                        }),
+                        // Results clear themselves as the specimen renders again; only a
+                        // comparison's results wait for an explicit Clear.
+                        (live && has_python && can_clear).then(|| {
+                            recipes::action(pal, "Clear".into(), clear_live_results)
+                        }),
+                        (live && has_python).then(|| {
+                            recipes::toggle(
+                                pal,
+                                if can_apply { "Apply" } else { "Apply unavailable" }.into(),
+                                can_apply,
+                                move |app: &mut Workspace| {
+                                    if can_apply {
+                                        apply_live_comparison(app);
+                                    } else {
+                                        app.note = "Apply becomes available after a current comparison finishes".into();
+                                    }
+                                },
+                            )
+                        }),
+                        (live && can_cancel).then(|| {
+                            recipes::action(pal, "Cancel".into(), cancel_live_comparison)
+                        }),
+                        (live && !has_python).then(|| {
+                            recipes::toggle(pal, "Auto".into(), auto_run, |app: &mut Workspace| {
+                                app.graph.auto_run = !app.graph.auto_run;
+                            })
+                        }),
+                        recipes::primary_action(
                             pal,
-                            "Cancel".into(),
-                            true,
-                            cancel_live_comparison,
-                        )
-                    }),
-                    // Results clear themselves as the specimen renders again; only a
-                    // comparison's results wait for an explicit Clear.
-                    (live && has_python && can_clear).then(|| {
-                        recipes::toggle(pal, "Clear".into(), false, clear_live_results)
-                    }),
-                    (live && has_python).then(|| {
-                        recipes::toggle(
-                            pal,
-                            if can_apply { "Apply" } else { "Apply unavailable" }.into(),
-                            can_apply,
+                            run_label.into(),
                             move |app: &mut Workspace| {
-                                if can_apply {
-                                    apply_live_comparison(app);
+                                if running {
+                                    app.note = "The graph is already running".into();
+                                } else if live {
+                                    run_live_comparison(app);
                                 } else {
-                                    app.note = "Apply becomes available after a current comparison finishes".into();
+                                    app.run_graph();
                                 }
                             },
-                        )
-                    }),
-                    recipes::toggle(pal, "Specimen".into(), live, select_live_specimen),
-                    xrow(Region::Inline, files),
-                    unlisted,
-                    FlexSpacer::Flex(1.0),
-                    live.then(|| {
-                        recipes::toggle(
-                            pal,
-                            "Add Script".into(),
-                            false,
-                            add_live_specimen_script,
-                        )
-                    }),
-                    (live && !has_python).then(|| {
-                        recipes::toggle(
-                            pal,
-                            "Add Comparison".into(),
-                            false,
-                            select_live_comparison,
-                        )
-                    }),
-                    (!live).then(|| {
-                        recipes::toggle(pal, "New".into(), false, |app: &mut Workspace| {
-                            app.graph.live_selected = false;
-                            app.new_graph_file();
-                        })
-                    }),
-                    (!live).then(|| {
-                        recipes::toggle(pal, "Open".into(), false, |app: &mut Workspace| {
-                            app.graph.live_selected = false;
-                            app.command_open_graph();
-                        })
-                    }),
-                    (!live).then(|| {
-                        recipes::toggle(pal, "Save".into(), false, |app: &mut Workspace| {
-                            app.save_graph_file();
-                        })
-                    }),
-                    live.then(|| {
-                        recipes::toggle(
-                            pal,
-                            "Save As\u{2026}".into(),
-                            false,
-                            save_live_comparison_file,
-                        )
-                    }),
-                    (live && source.is_some()).then(|| {
-                        let source = source.expect("checked above");
-                        recipes::toggle(
-                            pal,
-                            "Open\u{2026}".into(),
-                            false,
-                            move |app: &mut Workspace| {
-                                open_live_comparison_file(app, SourceId(source));
-                            },
-                        )
-                    }),
-                ),
+                        ),
+                    ),
+                )
+                .padding(Space::Sm)
+                .gap(Space::Sm),
             )
-            .padding(Space::Sm)
-            .gap(Space::Sm)
-            .background_color(pal.panel),
-            )
-            .constrain_vertical(true),
+            .constrain_vertical(true)
+            .must_fill(true),
         )
         .dims(Dimensions::new(
             Dim::Stretch,
             Dim::Fixed(Length::px(design::RAIL_TAB_HEIGHT)),
-        )),
+        ))
+        .background_color(pal.panel),
         pal.outline,
     );
     let choices = (!live).then(|| graph_choices(app)).flatten();
@@ -810,6 +792,7 @@ pub(crate) fn graph_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
                 app.graph.content_sizes.insert(node, size);
             }
             GraphEvent::Note(note) => app.note = note,
+            GraphEvent::AddSpecimenScript { pos } => add_live_specimen_script(app, Some(pos)),
             GraphEvent::Zoom(zoom) => app.graph.zoom = Some(zoom),
             GraphEvent::Image { node, action } => match action {
                 ImageAction::Expand => app.graph.expanded = Some(node),

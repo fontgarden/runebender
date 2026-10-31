@@ -640,6 +640,27 @@ pub(crate) fn prose_muted(pal: &Palette, text: String) -> impl WidgetView<Worksp
         .line_break_mode(masonry::properties::LineBreaking::WordWrap)
 }
 
+/// The one main command of a bar, such as Run: a [`ControlKind::Primary`] button at control
+/// height that takes the width of its label.
+pub(crate) fn primary_action<F: Fn(&mut Workspace) + Send + Sync + 'static>(
+    pal: &Palette,
+    text: String,
+    on_click: F,
+) -> impl WidgetView<Workspace> + use<F> {
+    let style = ControlStyle::new(pal, ControlKind::Primary);
+    sized_box(
+        button(
+            style,
+            label(text)
+                .text_size(TextSize::Body.px())
+                .color(style.ink()),
+            move |app: &mut Workspace| on_click(app),
+        )
+        .padding(Space::Md),
+    )
+    .dims(Dimensions::new(Dim::Auto, Dim::from(ControlSize::Control)))
+}
+
 /// A labeled push button at control height.
 pub(crate) fn action<F: Fn(&mut Workspace) + Send + Sync + 'static>(
     pal: &Palette,
