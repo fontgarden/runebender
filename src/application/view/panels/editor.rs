@@ -46,7 +46,7 @@ pub(crate) fn editor_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<>
         .iter()
         .find(|glyph| glyph.name == app.session.glyph_name)
         .and_then(|glyph| glyph.mark.as_deref())
-        .and_then(|label| app.palette.mark(label));
+        .and_then(|label| app.palette.mark_tile(label));
     editor(
         app.session.clone(),
         app.palette.clone(),

@@ -157,6 +157,7 @@ pub(crate) struct Palette {
     pub field_outline: Color,
     roles: HashMap<String, Color>,
     marks: HashMap<String, Color>,
+    mark_tiles: HashMap<String, Color>,
     mark_order: Vec<String>,
     /// Whether glyph marks color the tile face rather than its outline and ink.
     pub marks_filled: bool,
@@ -263,6 +264,11 @@ impl Palette {
                 .collect(),
             marks: t
                 .marks
+                .iter()
+                .map(|(k, v)| (k.clone(), color(*v)))
+                .collect(),
+            mark_tiles: t
+                .mark_tiles
                 .iter()
                 .map(|(k, v)| (k.clone(), color(*v)))
                 .collect(),
@@ -693,6 +699,11 @@ impl Palette {
 
     pub(crate) fn mark(&self, label: &str) -> Option<Color> {
         self.marks.get(label).copied()
+    }
+
+    /// A mark as a glyph tile or metrics card face, at the theme's `markTileStep`.
+    pub(crate) fn mark_tile(&self, label: &str) -> Option<Color> {
+        self.mark_tiles.get(label).copied()
     }
 }
 

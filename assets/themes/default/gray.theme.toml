@@ -48,11 +48,16 @@ dim = "oklch(-0.17 -0.02 0)"
 base = "oklch(0.0 0.0 0)"
 bright = "oklch(0.13 -0.03 0)"
 deep = "oklch(-0.26 0.0 0)"
+# Glyph tiles and the metrics card: base lightness with less chroma, so large areas stay calm.
+tile = "oklch(0.0 -0.05 0)"
 
 # How the palettes are applied to glyph tiles and outline points.
 [drawing]
 # Rainbow step used for glyph marks: dim, base, bright, or deep.
 markStep = "base"
+# Rainbow step for glyph tile faces and the metrics card header; defaults to markStep.
+# Points, anchors, combs, and the mark picker keep markStep.
+markTileStep = "tile"
 # Glyph mark treatment: fill colors the tile; border colors its outline.
 markStyle = "fill"
 # Outline around a tile with a filled rainbow mark.

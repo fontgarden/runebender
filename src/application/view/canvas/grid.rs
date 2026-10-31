@@ -303,7 +303,7 @@ pub(crate) fn cell_of(font: &FontModel, index: usize, palette: &Palette) -> Cell
         codepoint: g.codepoint,
         outline: g.outline.clone(),
         advance: g.advance,
-        mark: g.mark.as_deref().and_then(|m| palette.mark(m)),
+        mark: g.mark.as_deref().and_then(|m| palette.mark_tile(m)),
         caption_widths: caption_widths(&g.name, g.codepoint, g.advance),
         aspect: ink_aspect(&g.outline),
     }

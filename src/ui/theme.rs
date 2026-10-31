@@ -192,6 +192,8 @@ struct ThemeFile {
     // Keep the original top-level settings readable in existing custom themes.
     #[serde(rename = "markStep")]
     mark_step: Option<String>,
+    #[serde(rename = "markTileStep")]
+    mark_tile_step: Option<String>,
     #[serde(rename = "markStyle")]
     mark_style: Option<String>,
     #[serde(rename = "markOutline")]
@@ -214,6 +216,7 @@ struct ThemeFile {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DrawingDef {
     mark_step: Option<String>,
+    mark_tile_step: Option<String>,
     mark_style: Option<String>,
     mark_outline: Option<String>,
     mark_ink: Option<String>,
@@ -417,6 +420,9 @@ pub struct Theme {
     /// Glyph mark colours in palette order, drawn at this theme's
     /// `markStep`. Matches the web's `--rb-mark-{name}` variables.
     pub marks: Vec<(String, ColorRgba)>,
+    /// Mark colors for glyph tiles in the same order, drawn at `markTileStep`.
+    /// They equal `marks` unless the theme names a separate tile step.
+    pub mark_tiles: Vec<(String, ColorRgba)>,
     /// Corner radii and stroke width for this theme.
     pub geometry: Geometry,
     /// Native window appearance, separate from shape and color tokens.
@@ -687,6 +693,12 @@ pub fn parse_theme(source: &str) -> Result<Theme, String> {
     merge_drawing_setting(&file.id, "markStep", &mut file.mark_step, drawing.mark_step)?;
     merge_drawing_setting(
         &file.id,
+        "markTileStep",
+        &mut file.mark_tile_step,
+        drawing.mark_tile_step,
+    )?;
+    merge_drawing_setting(
+        &file.id,
         "markStyle",
         &mut file.mark_style,
         drawing.mark_style,
@@ -857,19 +869,27 @@ pub fn parse_theme(source: &str) -> Result<Theme, String> {
         }
     }
     let mark_step = file.mark_step.as_deref().unwrap_or("base");
-    let marks = file
-        .rainbow
-        .marks
-        .iter()
-        .map(|mark| {
-            let token = format!("rainbow.{mark}.{mark_step}");
-            resolve_token(&file, &token)
-                .map(|color| (mark.clone(), color))
-                .ok_or_else(|| {
-                    format!("theme '{theme_id}' rainbow.marks.{mark} has unknown color '{token}'")
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let marks_at = |step: &str| {
+        file.rainbow
+            .marks
+            .iter()
+            .map(|mark| {
+                let token = format!("rainbow.{mark}.{step}");
+                resolve_token(&file, &token)
+                    .map(|color| (mark.clone(), color))
+                    .ok_or_else(|| {
+                        format!(
+                            "theme '{theme_id}' rainbow.marks.{mark} has unknown color '{token}'"
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()
+    };
+    let marks = marks_at(mark_step)?;
+    let mark_tiles = match file.mark_tile_step.as_deref() {
+        Some(step) => marks_at(step)?,
+        None => marks.clone(),
+    };
     for label in MARK_LABELS {
         if marks.iter().filter(|(name, _)| name == label).count() != 1 {
             return Err(format!(
@@ -957,6 +977,7 @@ pub fn parse_theme(source: &str) -> Result<Theme, String> {
         text,
         roles,
         marks,
+        mark_tiles,
     })
 }
 
@@ -1369,6 +1390,29 @@ mod tests {
     }
 
     #[test]
+    fn mark_tiles_use_their_own_step_and_default_to_the_mark_step() {
+        let gray = load_theme("gray").unwrap();
+        assert_ne!(gray.mark_tiles, gray.marks, "Gray tiles use the tile step");
+        let names = |marks: &[(String, ColorRgba)]| {
+            marks.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>()
+        };
+        assert_eq!(names(&gray.mark_tiles), names(&gray.marks));
+        let source = builtin_theme_source("gray")
+            .unwrap()
+            .replace("markTileStep = \"tile\"\n", "");
+        let fallback = parse_theme(&source).unwrap();
+        assert_eq!(fallback.mark_tiles, fallback.marks);
+        let unknown = builtin_theme_source("gray")
+            .unwrap()
+            .replace("markTileStep = \"tile\"", "markTileStep = \"faint\"");
+        assert!(
+            parse_theme(&unknown)
+                .unwrap_err()
+                .contains("rainbow.marks.red")
+        );
+    }
+
+    #[test]
     fn grouped_drawing_settings_preserve_legacy_theme_appearance() {
         for &id in BUILTIN_THEME_IDS {
             let source = builtin_theme_source(id).unwrap();
@@ -1380,6 +1424,7 @@ mod tests {
                 .extend(drawing.as_table().unwrap().clone());
             let legacy = parse_theme(&toml::to_string(&file).unwrap()).unwrap();
             assert_eq!(grouped.marks, legacy.marks, "{id}");
+            assert_eq!(grouped.mark_tiles, legacy.mark_tiles, "{id}");
             assert_eq!(grouped.mark_style, legacy.mark_style, "{id}");
             assert_eq!(grouped.mark_outline, legacy.mark_outline, "{id}");
             assert_eq!(grouped.mark_ink, legacy.mark_ink, "{id}");
