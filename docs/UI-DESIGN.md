@@ -105,10 +105,10 @@ The separate Toggle action changes only the visible revision, keeping its contro
 Theme files begin with `formatVersion`, `id`, and `name`, followed by the Base UI and Rainbow palette definitions.
 The built-in Rainbow palette contains the seven mark-picker hues: red, orange, yellow, green, blue, purple, and pink.
 The `[drawing]` section follows the palettes and controls how their colors appear on glyph tiles and outline points.
-It contains `markStep`, `markTileStep`, `markStyle`, `markOutline`, `markInk`, `pointStyle`, `pointOutline`, and `pointHalo`.
-`markTileStep` names the Rainbow step for glyph tiles and the metrics card header, so these large areas can use less chroma than points and other small marks.
-It defaults to `markStep`.
-Gray uses a `tile` step with 0.05 less chroma than `base`.
+It contains `markStep`, `markTileStep`, `markTileOpacity`, `markStyle`, `markOutline`, `markInk`, `pointStyle`, `pointOutline`, and `pointHalo`.
+`markTileStep` names the Rainbow step for glyph tiles and the metrics card header, and defaults to `markStep`.
+`markTileOpacity` blends those tile colors over `surfaces.canvas`, the way the label tool draws letter colors, and the result stays opaque.
+Gray draws its tiles at 0.85 opacity; points, anchors, combs, and the mark picker keep the full colors.
 Existing custom themes can keep these settings at the top level, but must not also define the same setting in `[drawing]`.
 Dark, Dark Gray, Gray, Light Gray, Light, Strawberry, and Campfire explicitly define panel, tile, and control rounding, slider states, header ink, backdrop tint, and panel shadows.
 Gray uses 6-pixel tile corners; the other built-ins use 8-pixel tile corners.

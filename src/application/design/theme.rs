@@ -479,6 +479,11 @@ impl Palette {
         self.role("controlSelected")
     }
 
+    /// Face of a selected glyph tile, which may sit darker than other selected controls.
+    pub(crate) fn selected_cell_bg(&self) -> Color {
+        self.role("cellSelectedFill")
+    }
+
     /// Contrasting ink for selected controls, separate from glyph and sidebar labels.
     pub(crate) fn selected_ink(&self) -> Color {
         self.role("controlSelectedInk")

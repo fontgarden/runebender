@@ -314,7 +314,7 @@ pub(crate) fn cell_of(font: &FontModel, index: usize, palette: &Palette) -> Cell
 fn cell_colors(palette: &Palette, mark: Option<Color>, selected: bool) -> (Color, Color, Color) {
     if selected {
         (
-            palette.selected_bg(),
+            palette.selected_cell_bg(),
             palette.selected_content_ink(),
             palette.outline,
         )
@@ -1230,7 +1230,7 @@ mod thumbnail_tests {
         let mark = palette.mark("green").expect("green mark");
         let unmarked = (palette.panel, palette.glyph_ink, palette.outline);
         let selected = (
-            palette.selected_bg(),
+            palette.selected_cell_bg(),
             palette.selected_content_ink(),
             palette.outline,
         );
