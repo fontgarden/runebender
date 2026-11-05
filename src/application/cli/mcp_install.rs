@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 /// A client that reads an MCP server list from a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub(crate) enum McpClient {
+    /// `~/.gemini/config/mcp_config.json`.
+    Antigravity,
     /// `~/.claude.json`, the user scope of Claude Code.
     ClaudeCode,
     /// `~/.codex/config.toml`.
@@ -26,7 +28,8 @@ pub(crate) enum McpClient {
 }
 
 impl McpClient {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
+        Self::Antigravity,
         Self::ClaudeCode,
         Self::Codex,
         Self::ClaudeDesktop,
@@ -35,6 +38,7 @@ impl McpClient {
 
     fn name(self) -> &'static str {
         match self {
+            Self::Antigravity => "antigravity",
             Self::ClaudeCode => "claude-code",
             Self::Codex => "codex",
             Self::ClaudeDesktop => "claude-desktop",
@@ -45,6 +49,7 @@ impl McpClient {
     /// The configuration file, under the given home directory.
     fn config_path(self, home: &Path) -> PathBuf {
         match self {
+            Self::Antigravity => home.join(".gemini").join("config").join("mcp_config.json"),
             Self::ClaudeCode => home.join(".claude.json"),
             Self::Codex => home.join(".codex").join("config.toml"),
             Self::ClaudeDesktop => claude_desktop_config(home),
@@ -245,12 +250,15 @@ mod tests {
         assert_eq!(dry[0]["written"], false);
         assert!(!home.join(".cursor").exists());
         let first = install(&[], false, &home, binary).unwrap();
-        assert_eq!(first.len(), 4);
+        assert_eq!(first.len(), 5);
         assert!(first.iter().all(|report| report["written"] == true));
         let second = install(&[], false, &home, binary).unwrap();
         assert!(second.iter().all(|report| report["changed"] == false));
         let codex = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap();
         assert!(codex.contains("command = \"/opt/rb\""));
+        let antigravity =
+            std::fs::read_to_string(home.join(".gemini/config/mcp_config.json")).unwrap();
+        assert!(antigravity.contains("\"command\": \"/opt/rb\""));
         let _ = std::fs::remove_dir_all(&home);
     }
 }
