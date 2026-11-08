@@ -453,6 +453,60 @@ fn dispatch_editor_event(
     }
 }
 
+/// Cells along the longer side of the thickness field's grid.
+const THICKNESS_CELLS: usize = 256;
+
+/// Cache key for the thickness image: the outline's geometry and the ramp's colors.
+fn thickness_key(outline: &kurbo::BezPath, pal: &Palette) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for element in outline.elements() {
+        std::mem::discriminant(element).hash(&mut hasher);
+        let points: &[Point] = match element {
+            kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => std::slice::from_ref(p),
+            kurbo::PathEl::QuadTo(a, b) => &[*a, *b],
+            kurbo::PathEl::CurveTo(a, b, c) => &[*a, *b, *c],
+            kurbo::PathEl::ClosePath => &[],
+        };
+        for p in points {
+            p.x.to_bits().hash(&mut hasher);
+            p.y.to_bits().hash(&mut hasher);
+        }
+    }
+    for t in [0.0, 0.5, 1.0] {
+        for component in pal.thickness_fill(t).components {
+            component.to_bits().hash(&mut hasher);
+        }
+    }
+    hasher.finish()
+}
+
+/// Rasterize the thickness field of `outline` as a straight-alpha RGBA image,
+/// with the affine that places its pixels in design space.
+fn thickness_image(outline: &kurbo::BezPath, pal: &Palette) -> Option<(ImageData, Affine)> {
+    let field = runebender::analysis::thickness::thickness_field(outline, THICKNESS_CELLS)?;
+    let mut rgba = vec![0_u8; field.width * field.height * 4];
+    for (k, pixel) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+        let coverage = field.coverage[k];
+        if coverage <= 0.0 {
+            continue;
+        }
+        let color = pal
+            .thickness_fill(field.ramp(f64::from(field.thickness[k])))
+            .multiply_alpha(coverage)
+            .to_rgba8();
+        pixel.copy_from_slice(&[color.r, color.g, color.b, color.a]);
+    }
+    let image = ImageData {
+        data: Blob::new(Arc::new(rgba)),
+        format: ImageFormat::Rgba8,
+        alpha_type: ImageAlphaType::Alpha,
+        width: u32::try_from(field.width).ok()?,
+        height: u32::try_from(field.height).ok()?,
+    };
+    Some((image, field.pixel_to_design()))
+}
+
 /// One color per letter for the label tool, cycling through the theme's mark colors.
 /// The colors of labeled letters: the theme's mark palette in its own order, cycling from
 /// red through the rainbow and back. The same colors the glyph grid uses.
@@ -614,6 +668,9 @@ pub(crate) struct EditorWidget {
     /// The sketch ink last rasterized for the canvas, by sketch revision and ink alpha,
     /// so a zoom or hover repaint does not rebuild and re-upload a 512 px image.
     sketch_image: Option<(u64, u32, ImageData)>,
+    /// The thickness field last rasterized for the canvas, by outline and ramp
+    /// colors, so a zoom or hover repaint does not recompute the field.
+    thickness_image: Option<(u64, ImageData, Affine)>,
     /// Space is held: pan while showing only the filled design.
     preview_mode: bool,
     ghosts: Arc<Vec<Arc<kurbo::BezPath>>>,
@@ -2393,6 +2450,29 @@ impl Widget for EditorWidget {
                 pal.outline_fill()
             };
             painter.fill(&outline, fill).draw();
+            // Thickness: the local thickness field of the ink as an image,
+            // colored on the warm ramp. Painted over the fill and under the
+            // outline stroke, so the band replaces the ink and the edge stays
+            // crisp. The field is cached by outline, so only an edit recomputes it.
+            if self.view.thickness && self.interp.is_none() {
+                let design_outline = self.session.outline();
+                let key = thickness_key(&design_outline, &pal);
+                let image = match &self.thickness_image {
+                    Some((cached, image, placement)) if *cached == key => {
+                        Some((image.clone(), *placement))
+                    }
+                    _ => {
+                        let image = thickness_image(&design_outline, &pal);
+                        self.thickness_image = image
+                            .clone()
+                            .map(|(image, placement)| (key, image, placement));
+                        image
+                    }
+                };
+                if let Some((image, pixel_to_design)) = image {
+                    painter.draw_image(&image, affine * pixel_to_design);
+                }
+            }
             painter
                 .stroke(&outline, &Stroke::new(pal.stroke), pal.role("pathStroke"))
                 .draw();
@@ -4691,6 +4771,8 @@ pub(crate) struct ViewOptions {
     pub grid_lines: bool,
     /// The curvature comb.
     pub comb: bool,
+    /// Stroke thickness rungs across the ink, colored on a warm ramp.
+    pub thickness: bool,
     /// A dot per on-curve node, colored by continuity level.
     pub continuity: bool,
     /// Tint the outline and handles by segment length.
@@ -4787,6 +4869,7 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
             sketch: self.sketch.clone(),
             sketch_source: self.sketch_source,
             sketch_image: None,
+            thickness_image: None,
             preview_mode: self.preview_mode,
             ghosts: self.ghosts.clone(),
             interp: self.interp.clone(),
@@ -5073,6 +5156,7 @@ mod tests {
             sketch: Arc::new(Mutex::new(SketchLayer::new("A".into(), 0, 500.0))),
             sketch_source: 0,
             sketch_image: None,
+            thickness_image: None,
             preview_mode: false,
             ghosts: Arc::new(Vec::new()),
             interp: None,

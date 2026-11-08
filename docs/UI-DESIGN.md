@@ -245,7 +245,7 @@ These variables control what the frame shows:
 | `RUNEBENDER_HIDDEN_DOCKS=<left,right>` | Fold these docks away, as the footer toggles do. |
 | `RUNEBENDER_SCRIPT=<label>` | Select this script group in the sidebar and open its coverage rows. |
 | `RUNEBENDER_RAIL=<ai\|chat\|scripts\|shapes>` | Open this tool pane. |
-| `RUNEBENDER_VIEW=<option,...>` | Turn on canvas view options: `comb`, `continuity`, `colorize`, `handles`, `segments`, `bearings`, `popcount`, `components`. |
+| `RUNEBENDER_VIEW=<option,...>` | Turn on canvas view options: `comb`, `thickness`, `continuity`, `colorize`, `handles`, `segments`, `bearings`, `popcount`, `components`. |
 | `RUNEBENDER_COMPONENT=<n>` | Open the open glyph's component at index `n` in place, inside its composite. |
 | `RUNEBENDER_AXIS=wght=500,wdth=80` | Set the design-space location. |
 | `RUNEBENDER_MASTER=<name>` | Make this master active, by its style name. |

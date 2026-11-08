@@ -643,6 +643,14 @@ impl Palette {
         color.with_alpha(color.components[3] * Self::EDIT_FILL_ALPHA)
     }
 
+    /// A thickness rung, on the warm half of the mark ramp: yellow where the
+    /// stroke is thin, orange at the glyph's median thickness, red where it is
+    /// thick. Opaque, unlike the comb teeth: the rungs sit on the dark ink
+    /// fill, where a see-through warm color only reads as brown.
+    pub(crate) fn thickness_fill(&self, t: f64) -> Color {
+        self.thickness_gradient(t)
+    }
+
     /// The keyline between curvature comb teeth, as see-through as the teeth.
     pub(crate) fn comb_keyline(&self) -> Color {
         let color = self.point_outline.unwrap_or(self.text);
@@ -691,19 +699,29 @@ impl Palette {
         }
     }
 
+    /// The warm end of the mark ramp for normalized stroke thickness.
+    pub(crate) fn thickness_gradient(&self, t: f64) -> Color {
+        self.mark_ramp(&["yellow", "orange", "red"], t)
+    }
+
     /// GPUI's shared mark-color ramp for normalized curvature magnitude.
     pub(crate) fn comb_gradient(&self, t: f64) -> Color {
-        let stops = ["green", "blue", "purple", "pink", "orange"];
-        let u = t.clamp(0.0, 1.0) * 4.0;
-        let (i, f) = if u < 1.0 {
-            (0, u)
-        } else if u < 2.0 {
-            (1, u - 1.0)
-        } else if u < 3.0 {
-            (2, u - 2.0)
-        } else {
-            (3, u - 3.0)
-        };
+        self.mark_ramp(&["green", "blue", "purple", "pink", "orange"], t)
+    }
+
+    /// A color at `t` in 0..=1 along a piecewise-linear ramp through named
+    /// marks, so every analysis overlay draws from the same palette.
+    fn mark_ramp(&self, stops: &[&str], t: f64) -> Color {
+        debug_assert!(stops.len() >= 2, "a mark ramp needs two stops");
+        let spans = (stops.len() - 1) as f64;
+        let u = t.clamp(0.0, 1.0) * spans;
+        // Walk the spans instead of casting: `u` is at most `spans`, so the
+        // last span catches `t == 1`.
+        let mut i = 0;
+        while i + 1 < stops.len() - 1 && u >= (i + 1) as f64 {
+            i += 1;
+        }
+        let f = u - i as f64;
         let a = self.mark(stops[i]).unwrap_or(self.text).components;
         let b = self.mark(stops[i + 1]).unwrap_or(self.text).components;
         let f = crate::application::view::render::px32(f);

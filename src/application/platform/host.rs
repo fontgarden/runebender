@@ -155,12 +155,13 @@ impl Workspace {
         // GPUI exposes background layers by default. Keep a headless override
         // for captures that need to exercise the disabled toggle.
         let show_background = std::env::var("RUNEBENDER_BACKGROUND").as_deref() != Ok("0");
-        // RUNEBENDER_VIEW=comb,continuity,colorize,handles,segments,bearings
+        // RUNEBENDER_VIEW=comb,thickness,continuity,colorize,handles,segments,bearings
         let mut view = canvas::editor::ViewOptions::default();
         if let Ok(spec) = std::env::var("RUNEBENDER_VIEW") {
             for name in spec.split(',').map(str::trim) {
                 match name {
                     "comb" => view.comb = true,
+                    "thickness" => view.thickness = true,
                     "continuity" => view.continuity = true,
                     "colorize" => view.colorize = true,
                     "handles" => view.handles = true,

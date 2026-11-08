@@ -14,4 +14,5 @@ pub mod glyph;
 pub mod measure;
 pub mod report;
 pub mod search;
+pub mod thickness;
 pub mod weight_debt;

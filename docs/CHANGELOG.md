@@ -5,8 +5,12 @@ See [the release runbook](RELEASING.md#changelog-practice) for how these entries
 
 ## Unreleased
 
-No application changes have landed since `0.1.0-alpha.1` at this documentation checkpoint.
 The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work belong in [the next-alpha checklist](RELEASING.md#next-alpha-010-alpha2), not in the list of shipped changes.
+
+### Added
+
+- Thickness overlay in the Curves section: the local thickness field of the ink (Hildebrand and Rüegsegger), filled as a smooth gradient on the warm end of the theme's mark ramp around the glyph's median thickness.
+  `RUNEBENDER_VIEW=thickness` turns it on in a headless capture.
 
 ## 0.1.0-alpha.1 — 2026-10-28
 

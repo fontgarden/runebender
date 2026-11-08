@@ -731,6 +731,15 @@ pub(crate) fn curves_section(app: &Workspace) -> impl WidgetView<Workspace> + us
                 .flex(1.0),
                 recipes::toggle(
                     pal,
+                    "Thickness".into(),
+                    view.thickness,
+                    |app: &mut Workspace| {
+                        app.view.thickness = !app.view.thickness;
+                    },
+                )
+                .flex(1.0),
+                recipes::toggle(
+                    pal,
                     "Continuity".into(),
                     view.continuity,
                     |app: &mut Workspace| {
