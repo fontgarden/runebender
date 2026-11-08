@@ -61,6 +61,10 @@ Rail tab Chat. Source: `src/application/view/panels/chat.rs`,
   model folder holds an `mmproj*.gguf` vision projector; the server passes it with
   `--mmproj`. Each picture is also written to `runebender-proof-images/` in the
   temporary folder. Source: `src/application/editor/tools/proof_image.rs`.
+  Known limit: the sentence that introduces attached pictures to the model
+  describes `proof_image`'s pair and difference; a `review_proof` picture from
+  the chat gets that same sentence. Checked findings on what a vision model
+  reads reliably are in font-garden-lab, `experiments/chat-requests-2026-10-18/requests.md`.
 - The prompt includes the design context, up to 20,000 characters.
 - A second request, constrained to a schema, restates each reply in one or two plain sentences.
 - `/review-glyph H` and the other workflow names send the workflow text.
