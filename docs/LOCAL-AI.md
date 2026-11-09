@@ -252,7 +252,7 @@ The `design_context` tool and the Chat prompt read these files.
 
 | Command | Purpose |
 | --- | --- |
-| `runebender mcp --install [clients] [--dry-run]` | Registers `runebender mcp --live` by absolute path in Claude Code, Codex, Claude Desktop and Cursor |
+| `runebender mcp --install [clients] [--dry-run]` | Registers `runebender mcp --live` by absolute path in Antigravity, Claude Code, Codex, Claude Desktop and Cursor |
 | `runebender mcp --live` | Live server for open editors |
 | `runebender mcp --font <path>` | Server for saved files |
 | `runebender agent serve --font <path>` | Headless unsaved session (Unix) |
