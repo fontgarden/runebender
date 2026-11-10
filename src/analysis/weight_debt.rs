@@ -326,10 +326,12 @@ pub fn default_layer(project: &Project, source: SourceId) -> Option<LayerId> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "integration-fonts")]
     use crate::testing::fonts;
 
+    #[cfg(feature = "integration-fonts")]
     fn virtua() -> (Project, SourceId, SourceId) {
-        let project = Project::load(&fonts::designspace()).expect("the designspace loads");
+        let project = Project::load(&fonts::virtua_designspace()).expect("the designspace loads");
         let ids: Vec<_> = project.document_sources().map(|s| s.id()).collect();
         assert_eq!(ids.len(), 2, "Virtua has two masters");
         let heavy = ids
@@ -353,6 +355,7 @@ mod tests {
         assert_eq!(Script::of("E_004", None), Script::Other);
     }
 
+    #[cfg(feature = "integration-fonts")]
     #[test]
     fn the_lightest_master_has_nothing_lighter() {
         let (project, light, heavy) = virtua();
@@ -360,6 +363,7 @@ mod tests {
         assert_eq!(lighter_master(&project, heavy), Some(light));
     }
 
+    #[cfg(feature = "integration-fonts")]
     #[test]
     fn debt_is_what_still_matches_the_lighter_master() {
         let (project, light, heavy) = virtua();
@@ -385,6 +389,7 @@ mod tests {
         assert!(report.groups.iter().any(|g| !g.drawn.is_empty()));
     }
 
+    #[cfg(feature = "integration-fonts")]
     #[test]
     fn a_fitted_offset_reports_its_error_beside_the_baseline() {
         let (project, light, heavy) = virtua();

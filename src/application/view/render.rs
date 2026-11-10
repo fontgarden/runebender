@@ -2267,9 +2267,7 @@ mod rail_width_tests {
 
     #[test]
     fn every_rail_panel_stays_inside_the_dock() {
-        let Some(mut app) = workspace_for_layout() else {
-            return;
-        };
+        let mut app = workspace_for_layout();
         let width = DOCK_WIDTH;
         let mut failures = Vec::new();
         for rail in [
@@ -2333,9 +2331,7 @@ mod rail_width_tests {
     /// that follows it, which is when the text reaches the state.
     #[test]
     fn typing_in_the_chat_field_stays_inside_the_dock() {
-        let Some(mut app) = workspace_for_layout() else {
-            return;
-        };
+        let mut app = workspace_for_layout();
         app.rail = Rail::Chat;
         let width = DOCK_WIDTH;
         let mut ctx = context();
@@ -2418,24 +2414,17 @@ pub(crate) mod panel_resize_tests_support {
         )
     }
 
-    /// A workspace on the two-master Virtua fixture with the glyph A open
-    /// in the lighter master, so panels that depend on a second master
-    /// show their rows. `None` when the fixture is not checked out.
-    pub(super) fn workspace_for_layout() -> Option<Workspace> {
-        let dir = match std::env::var_os("RUNEBENDER_TEST_FONTS") {
-            Some(dir) => std::path::PathBuf::from(dir),
-            None => std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../virtua-grotesk/sources"),
-        };
-        let designspace = dir.join("VirtuaGrotesk.designspace");
-        if !designspace.is_file() {
-            return None;
-        }
-        let project = Project::load(&designspace).ok()?;
-        let mut app = Workspace::from_model(FontModel::from_project(project)).ok()?;
+    /// A workspace on the repository-owned two-master fixture with A open.
+    /// Missing or invalid fixtures fail the layout tests instead of skipping them.
+    pub(super) fn workspace_for_layout() -> Workspace {
+        let designspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/core/Core.designspace");
+        let project = Project::load(&designspace).expect("core designspace loads");
+        let mut app = Workspace::from_model(FontModel::from_project(project))
+            .expect("core fixture opens in the workspace");
         app.set_theme("gray");
-        let index = app.font.index_of("A")?;
+        let index = app.font.index_of("A").expect("core fixture contains A");
         app.open_glyph(index);
-        Some(app)
+        app
     }
 }

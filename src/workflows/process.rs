@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-/// A clonable request to stop one process before it produces a terminal result.
+/// A cloneable request to stop one process before it produces a terminal result.
 #[derive(Clone, Debug, Default)]
 pub struct ProcessCancellation(Arc<AtomicBool>);
 

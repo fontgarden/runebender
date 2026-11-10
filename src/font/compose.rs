@@ -843,7 +843,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("CanonicalCompose.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()
@@ -901,7 +902,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("DuplicateUnicodeCompose.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()
@@ -932,7 +934,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("InvalidCanonicalCompose.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         assert_eq!(
             plan_project(&project, SourceId(0), Some(&["Aacute".into()])),
             Err(DocumentEditError::InvalidLayerMetadata)
@@ -1014,7 +1017,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("CanonicalExplicitCompose.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()

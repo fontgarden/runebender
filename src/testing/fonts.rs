@@ -1,37 +1,35 @@
 // Copyright 2026 the Runebender Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Where the tests find their fixture fonts.
+//! Repository-owned core fixtures and explicitly enabled full-font integration fixtures.
 //!
-//! The Virtua Grotesk sources live in their own repository,
-//! eliheuer/virtua-grotesk, not here, so this crate stays small and
-//! the tests run against the current font. Tests look for them in
-//! `$RUNEBENDER_TEST_FONTS`, or in `../virtua-grotesk/sources` next
-//! to this checkout. CI checks that repository out alongside.
+//! `tests/fixtures/core/generate.py` defines the original synthetic core font.
+//! Core tests never inspect `RUNEBENDER_TEST_FONTS` or an adjacent checkout.
 
 use std::path::PathBuf;
 
-/// The fixture directory. Panics with the expected location when the
-/// fonts are not there, so a missing checkout reads as such and not
-/// as a broken test.
+#[cfg(feature = "integration-fonts")]
+#[path = "../../tests/support/virtua.rs"]
+mod virtua;
+
 pub(crate) fn dir() -> PathBuf {
-    let dir = match std::env::var_os("RUNEBENDER_TEST_FONTS") {
-        Some(dir) => PathBuf::from(dir),
-        None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../virtua-grotesk/sources"),
-    };
-    assert!(
-        dir.join("VirtuaGrotesk.designspace").is_file(),
-        "fixture fonts not found at {}: clone eliheuer/virtua-grotesk next to this \
-         repository, or set RUNEBENDER_TEST_FONTS",
-        dir.display()
-    );
-    dir
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/core")
 }
 
 pub(crate) fn regular_ufo() -> PathBuf {
-    dir().join("VirtuaGrotesk-Regular.ufo")
+    dir().join("Core-Regular.ufo")
 }
 
 pub(crate) fn designspace() -> PathBuf {
-    dir().join("VirtuaGrotesk.designspace")
+    dir().join("Core.designspace")
+}
+
+#[cfg(feature = "integration-fonts")]
+pub(crate) fn virtua_regular_ufo() -> PathBuf {
+    virtua::dir().join("VirtuaGrotesk-Regular.ufo")
+}
+
+#[cfg(feature = "integration-fonts")]
+pub(crate) fn virtua_designspace() -> PathBuf {
+    virtua::dir().join("VirtuaGrotesk.designspace")
 }

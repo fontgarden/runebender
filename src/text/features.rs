@@ -510,7 +510,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("CanonicalFeatures.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let source = SourceId(0);
         let layer = project.document_source(source).unwrap().default_layer();
         let layers = project

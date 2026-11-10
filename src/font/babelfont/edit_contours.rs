@@ -8,7 +8,29 @@ use crate::font::generated::{GeneratedContour, validate_contours};
 
 impl LayerEditDraft {
     pub(in crate::font) fn new(layer: Layer, preserved: LayerPreservation) -> Self {
-        Self { layer, preserved }
+        Self {
+            layer,
+            preserved,
+            grid_spacing: crate::outline::point_ops::DEFAULT_GRID_SPACING,
+        }
+    }
+
+    /// Set this draft's snapping policy in font units; zero disables snapping.
+    ///
+    /// Invalid values leave the policy unchanged.
+    /// The policy belongs to the edit context, not to persisted glyph data or undo history.
+    /// Returns whether the policy changed.
+    pub fn set_grid_spacing(&mut self, spacing: f64) -> bool {
+        if !spacing.is_finite() || spacing < 0.0 || self.grid_spacing == spacing {
+            return false;
+        }
+        self.grid_spacing = spacing;
+        true
+    }
+
+    /// The explicit snapping policy used by this draft's geometric operations.
+    pub fn grid_spacing(&self) -> f64 {
+        self.grid_spacing
     }
 
     pub(in crate::font) fn into_parts(self) -> (Layer, LayerPreservation) {

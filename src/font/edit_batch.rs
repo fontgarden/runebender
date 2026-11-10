@@ -1265,7 +1265,8 @@ mod tests {
         let external = Project::from_source(crate::font::project::SourceInput::from_font(
             external,
             PathBuf::from("external.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let external_source = external.source_id(0).unwrap();
 
         let before_invalid = project.document_revision();
@@ -1484,7 +1485,8 @@ mod tests {
         let mut project = Project::from_source(crate::font::project::SourceInput::from_font(
             font,
             PathBuf::from("IdentityProposal.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let source = project.source_id(0).unwrap();
         let layer = project.document_source(source).unwrap().default_layer();
         let address = GlyphLayerAddress {

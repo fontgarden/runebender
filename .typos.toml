@@ -1,0 +1,49 @@
+[files]
+# Include CI and configuration while respecting the repository's generated-output ignores.
+ignore-hidden = false
+extend-exclude = [
+    ".git/",
+    ".worktrees/",
+    "test-fonts/",
+    "Cargo.lock",
+    "web/Cargo.lock",
+    "web/package-lock.json",
+    # Serialized font inventories, font sources, and vector artwork are data, not prose.
+    "assets/data/gf-glyphsets.json",
+    "assets/data/new-font-template.json",
+    "web/demo-font.json",
+    "**/*.glif",
+    "**/*.glyphs",
+    "**/*.designspace",
+    "**/*.ufo/**",
+    "**/*.svg",
+]
+
+[default.extend-identifiers]
+# OpenType axis/table tags are fixed external identifiers, not English spellings.
+ital = "ital"
+opsz = "opsz"
+wdth = "wdth"
+wght = "wght"
+cmap = "cmap"
+glyf = "glyf"
+hmtx = "hmtx"
+# External schemas, Unicode categories, French fixture text, and a recorded commit identity.
+custom_ot_values = "custom_ot_values"
+Nd = "Nd"
+PNGs = "PNGs"
+Exemple = "Exemple"
+caf92b0 = "caf92b0"
+interruptable = "interruptable"
+# Grid-coordinate indices and Arabic glyph names.
+iy = "iy"
+iy0 = "iy0"
+iy1 = "iy1"
+teh = "teh"
+tehMarbuta = "tehMarbuta"
+
+[default.extend-words]
+# Font/foundry names and the Arabic letter ba are intentional vocabulary.
+Virtua = "Virtua"
+Underware = "Underware"
+ba = "ba"

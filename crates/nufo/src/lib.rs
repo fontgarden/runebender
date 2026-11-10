@@ -178,10 +178,10 @@ impl NeuralSample {
         if self.boundary.len() < 3 || self.boundary.len() > 4096 {
             return Err("a neural sample boundary needs 3 to 4096 corners".into());
         }
-        if !self.boundary.iter().all(finite) {
+        if !self.boundary.iter().copied().all(finite) {
             return Err("a neural sample boundary has a nonfinite or unbounded corner".into());
         }
-        if self.cuts.len() > 4096 || !self.cuts.iter().flatten().all(finite) {
+        if self.cuts.len() > 4096 || !self.cuts.iter().flatten().copied().all(finite) {
             return Err("a neural sample has too many cuts or a nonfinite cut".into());
         }
         for region in &self.regions {
@@ -197,7 +197,7 @@ impl NeuralSample {
             if polygon && (region.polygon.len() < 3 || region.polygon.len() > 4096) {
                 return Err("a neural region polygon needs 3 to 4096 corners".into());
             }
-            if !region.polygon.iter().all(finite) || !region.seed.iter().all(finite) {
+            if !region.polygon.iter().copied().all(finite) || !region.seed.into_iter().all(finite) {
                 return Err("a neural region has a nonfinite or unbounded coordinate".into());
             }
         }
@@ -205,9 +205,9 @@ impl NeuralSample {
     }
 }
 
-fn finite(point: &[f64; 2]) -> bool {
+fn finite(point: [f64; 2]) -> bool {
     point
-        .iter()
+        .into_iter()
         .all(|value| value.is_finite() && value.abs() <= 1_000_000.0)
 }
 

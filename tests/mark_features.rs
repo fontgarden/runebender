@@ -7,6 +7,11 @@
 //!
 //! Needs the Virtua Grotesk fixture, like `cli.rs`.
 
+#![cfg(feature = "integration-fonts")]
+
+#[path = "support/virtua.rs"]
+mod virtua;
+
 use std::path::PathBuf;
 
 use runebender::font::project::Project;
@@ -15,13 +20,7 @@ use runebender::text::features;
 use runebender::text::shape::{ShapedGlyph, ShapingFont, ShapingGlyph, ShapingSource};
 
 fn fixture() -> PathBuf {
-    let dir = match std::env::var_os("RUNEBENDER_TEST_FONTS") {
-        Some(dir) => PathBuf::from(dir),
-        None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../virtua-grotesk/sources"),
-    };
-    let ufo = dir.join("VirtuaGrotesk-Regular.ufo");
-    assert!(ufo.is_dir(), "fixture not found at {}", dir.display());
-    ufo
+    virtua::dir().join("VirtuaGrotesk-Regular.ufo")
 }
 
 /// The shaping font for Virtua with the generated features inlined,

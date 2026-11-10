@@ -299,7 +299,8 @@ fn project_rejects_invalid_font_info_without_changing_canonical_or_projected_sta
     let mut project = Project::from_source(SourceInput::from_font(
         source,
         PathBuf::from("InvalidFontInfo.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
     let source_id = SourceId(0);
     let canonical = project.document_font_info(source_id).unwrap().clone();
     let projection = project.encode_ufo_source(source_id).unwrap();
@@ -330,7 +331,8 @@ fn metric_metadata_restore_and_history_report_precise_invalidation() {
     let mut project = Project::from_source(SourceInput::from_font(
         norad::Font::new(),
         PathBuf::from("MetricHistory.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
     let source = SourceId(0);
     let before = project.begin_document_source_metadata_history();
     let DocumentEditOutcome::Changed { change, .. } = project

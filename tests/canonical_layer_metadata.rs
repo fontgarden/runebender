@@ -83,7 +83,8 @@ fn fixture() -> (Project, GlyphLayerAddress) {
     let project = Project::from_source(SourceInput::from_font(
         font,
         PathBuf::from("LayerMetadata.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
     let address = GlyphLayerAddress {
         glyph: "A".into(),
         layer: project
@@ -397,7 +398,8 @@ fn cubic_metaballs_survive_canonical_conversion_save_and_undo() {
     let reloaded = norad::Glyph::parse_raw(&converted.encode_xml().unwrap()).unwrap();
     let mut font = norad::Font::new();
     font.default_layer_mut().insert_glyph(reloaded.clone());
-    let loaded = Project::from_source(SourceInput::from_font(font, PathBuf::from("Roundtrip.ufo")));
+    let loaded = Project::from_source(SourceInput::from_font(font, PathBuf::from("Roundtrip.ufo")))
+        .expect("valid source fixture");
     let layer = loaded.document_source(SourceId(0)).unwrap().default_layer();
     let path = ordinary_layer_contours_to_bezpath(loaded.document_layer("A", &layer).unwrap());
     assert_eq!(path.segments().count(), 4);

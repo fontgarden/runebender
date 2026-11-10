@@ -368,7 +368,8 @@ mod tests {
         let mut project = Project::from_source(SourceInput::from_font(
             regular,
             PathBuf::from("Regular.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         project
             .sources
             .push(SourceState::new(PathBuf::from("Bold.ufo"), false));
@@ -624,7 +625,8 @@ mod tests {
             .save(&path)
             .unwrap();
 
-        let reopened = Project::from_source(SourceInput::load(&path).unwrap());
+        let reopened =
+            Project::from_source(SourceInput::load(&path).unwrap()).expect("valid source fixture");
         let source = reopened.document_sources().next().unwrap();
         let user = reopened
             .document_layer("Aacute", &source.default_layer())

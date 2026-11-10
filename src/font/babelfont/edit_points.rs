@@ -136,6 +136,7 @@ impl LayerEditDraft {
                 (delta.x, delta.y),
                 path.closed,
                 independent,
+                self.grid_spacing,
             ) {
                 ensure_finite(&[position.x, position.y])?;
                 replacements.insert(ids[index].0, position);
@@ -335,7 +336,7 @@ impl LayerEditDraft {
                 let node = &path.nodes[index];
                 let id = read_id(&node.format_specific).expect("canonical point identity");
                 if selected.contains(&id) && node.nodetype != NodeType::OffCurve && node.smooth {
-                    align_smooth_handles(&mut path.nodes, path.closed, index);
+                    align_smooth_handles(&mut path.nodes, path.closed, index, self.grid_spacing);
                 }
             }
         }
@@ -526,6 +527,7 @@ impl LayerEditDraft {
                     &segments,
                     &point,
                     &mut moved_controls,
+                    self.grid_spacing,
                 ) {
                     joined.push((end, controls));
                 } else {
@@ -825,6 +827,7 @@ fn join_segments(
     segments: &[&[usize]],
     point: &impl Fn(usize) -> kurbo::Point,
     moved: &mut HashMap<usize, kurbo::Point>,
+    spacing: f64,
 ) -> Option<Vec<usize>> {
     use kurbo::{ParamCurve as _, ParamCurveDeriv as _};
     if segments
@@ -916,8 +919,8 @@ fn join_segments(
         return Some(vec![first, last]);
     }
     let snap = |p: kurbo::Point| {
-        use crate::outline::point_ops::snap_coord;
-        kurbo::Point::new(snap_coord(p.x), snap_coord(p.y))
+        use crate::outline::point_ops::snap_to_spacing;
+        kurbo::Point::new(snap_to_spacing(p.x, spacing), snap_to_spacing(p.y, spacing))
     };
     moved.insert(first, snap(p0 + t0 * a));
     moved.insert(last, snap(p3 - t1 * b));
@@ -928,7 +931,7 @@ fn join_segments(
 ///
 /// Handle lengths are kept. With handles on both sides, the line bisects their directions;
 /// beside a straight segment, the handle continues that segment. Positions snap to the grid.
-fn align_smooth_handles(nodes: &mut [Node], closed: bool, index: usize) {
+fn align_smooth_handles(nodes: &mut [Node], closed: bool, index: usize, spacing: f64) {
     let len = nodes.len();
     let neighbor = |forward: bool| {
         if forward {
@@ -963,8 +966,8 @@ fn align_smooth_handles(nodes: &mut [Node], closed: bool, index: usize) {
     };
     let snap = |p: kurbo::Point| {
         (
-            crate::outline::point_ops::snap_coord(p.x),
-            crate::outline::point_ops::snap_coord(p.y),
+            crate::outline::point_ops::snap_to_spacing(p.x, spacing),
+            crate::outline::point_ops::snap_to_spacing(p.y, spacing),
         )
     };
     if prev_handle {

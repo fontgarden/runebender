@@ -760,8 +760,10 @@ pub fn glyph_matches_subfilter(name: &str, codepoints: &[u32], subfilter: &str) 
 mod tests {
     use super::*;
 
+    #[cfg(feature = "integration-fonts")]
     fn fixture_glyphs() -> Vec<(String, Vec<u32>)> {
-        let font = norad::Font::load(crate::testing::fonts::regular_ufo()).expect("fixture font");
+        let font =
+            norad::Font::load(crate::testing::fonts::virtua_regular_ufo()).expect("fixture font");
         font.iter_layers()
             .next()
             .expect("default layer")
@@ -775,6 +777,7 @@ mod tests {
             .collect()
     }
 
+    #[cfg(feature = "integration-fonts")]
     fn count_filter(glyphs: &[(String, Vec<u32>)], filter: &CharacterFilter) -> usize {
         glyphs
             .iter()
@@ -815,6 +818,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "integration-fonts")]
     #[test]
     fn fixture_font_coverage_matches_the_web_sidebar() {
         let glyphs = fixture_glyphs();
@@ -844,6 +848,7 @@ mod tests {
         assert_eq!(latin_core.expected_count, Some(324));
     }
 
+    #[cfg(feature = "integration-fonts")]
     #[test]
     fn language_group_rows_match_scripts_not_glyphset_latin() {
         let glyphs = fixture_glyphs();

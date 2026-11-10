@@ -39,12 +39,15 @@ pub use edit_transactions::{
     DocumentEditObjectKind, DocumentEditOperation, DocumentEditTransactionError,
     DocumentEditTransactionOutcome, DocumentLayerEdit, EditHistoryGroupId, EditHistoryGroupState,
 };
+#[path = "project/import_error.rs"]
+mod import_error;
 #[path = "project/proposal_transactions.rs"]
 mod proposal_transactions;
 #[path = "project/save_as.rs"]
 mod save_as;
 #[path = "sources.rs"]
 mod sources;
+pub use import_error::ProjectImportError;
 
 /// One designspace axis, in design coordinates.
 #[derive(Debug, Clone)]
@@ -337,11 +340,11 @@ pub struct Project {
     /// Index into `sources` of the source being edited.
     pub active: usize,
     /// Style names for the master switcher, one per master.
-    pub master_names: Vec<Arc<str>>,
+    master_names: Vec<Arc<str>>,
     /// The designspace axes, empty for a single UFO.
     pub axes: Vec<AxisInfo>,
     /// Normalized (-1..1) location of each master, by axis name.
-    pub master_locations: Vec<Location>,
+    master_locations: Vec<Location>,
     /// Font-wide variation model; glyph interpolation uses its own participating sources.
     pub model: Option<VariationModel>,
     /// Current preview location, normalized, by axis name.
@@ -525,15 +528,16 @@ impl Project {
     }
 
     /// Canonicalize one transient format-adapter source.
-    pub fn from_source(input: SourceInput) -> Self {
+    ///
+    /// Invalid metadata is returned to the caller; decoded UFO data is not assumed valid.
+    pub fn from_source(input: SourceInput) -> Result<Self, ProjectImportError> {
         let name = input
             .font
             .font_info
             .style_name
             .clone()
             .unwrap_or_else(|| "Regular".into());
-        let variable = super::persistence::ufo_codec::decode_source(&input.font)
-            .expect("a Project source input must satisfy the UFO boundary contract");
+        let variable = super::persistence::ufo_codec::decode_source(&input.font)?;
         let mut project = Self {
             variable,
             source_history: sources::SourceHistory::default(),
@@ -558,7 +562,7 @@ impl Project {
             import_warnings: Vec::new(),
         };
         project.compute_compat();
-        project
+        Ok(project)
     }
 
     /// Opens a designspace, UFO, Glyphs source, Babelfont package, or binary font. Sets `export_source` to `path` when the loader left it unset.
@@ -642,7 +646,8 @@ impl Project {
                 })
             }
             super::persistence::ImportPlan::Ufo { path, source } => {
-                Ok(Self::from_source((*source).into_source_input(path)))
+                Self::from_source((*source).into_source_input(path))
+                    .map_err(|error| error.to_string())
             }
         }
     }
@@ -810,7 +815,8 @@ impl Project {
             Some(variable) => variable,
             None => super::persistence::ufo_codec::decode_sources(
                 inputs.iter().map(|source| &source.font),
-            )?,
+            )
+            .map_err(|error| error.to_string())?,
         };
         if variable.source_ids.len() != inputs.len() {
             return Err("canonical source count does not match Designspace sources".into());
@@ -1590,6 +1596,18 @@ impl Project {
             mark_label,
             mark_color,
         })
+    }
+
+    /// Source display names in the same order as [`Self::document_sources`].
+    ///
+    /// Source operations update this read-only projection together with source identities.
+    pub fn master_names(&self) -> &[Arc<str>] {
+        &self.master_names
+    }
+
+    /// Normalized source locations in the same order as [`Self::document_sources`].
+    pub fn master_locations(&self) -> &[Location] {
+        &self.master_locations
     }
 
     /// Read one source's stable identity and metadata without its UFO projection.
@@ -2655,24 +2673,26 @@ mod tests {
         }
         let moved = crate::outline::glyph_paths::contour_to_bezpath(&glyph.contours[0]);
         assert_eq!(joining_band(&moved, 200.0, true, 2.0), None);
+    }
 
-        // And the real Arabic set: a medial beh (a composite —
-        // components must resolve) touches both edges.
-        let project = Project::load(&fonts::designspace()).expect("loads");
+    #[cfg(feature = "integration-fonts")]
+    #[test]
+    fn virtua_medial_beh_joins_both_edges() {
+        // Real Arabic composites must resolve before measuring their joining bands.
+        let project = Project::load(&fonts::virtua_designspace()).expect("loads");
         let source = project.source_id(project.active).unwrap();
-        if let Some(glyph) = project
+        let glyph = project
             .document_source_glyph_entry(source, "beh-ar.medi")
             .unwrap()
-        {
-            assert!(
-                joining_band(glyph.outline(), glyph.advance(), true, 2.0).is_some(),
-                "medial joins left"
-            );
-            assert!(
-                joining_band(glyph.outline(), glyph.advance(), false, 2.0).is_some(),
-                "medial joins right"
-            );
-        }
+            .expect("Virtua contains medial beh");
+        assert!(
+            joining_band(glyph.outline(), glyph.advance(), true, 2.0).is_some(),
+            "medial joins left"
+        );
+        assert!(
+            joining_band(glyph.outline(), glyph.advance(), false, 2.0).is_some(),
+            "medial joins right"
+        );
     }
 
     #[test]

@@ -131,6 +131,13 @@ impl Nudge {
 /// The nudge distances in effect, set once at startup.
 static NUDGE: std::sync::OnceLock<Nudge> = std::sync::OnceLock::new();
 
+/// Startup default copied into each editor session; the font engine never reads this state.
+static GRID: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+
+pub(crate) fn grid_spacing() -> f64 {
+    *GRID.get_or_init(|| Config::default().grid())
+}
+
 /// How far the arrow keys move a selection, in font units.
 pub(crate) fn nudge() -> Nudge {
     *NUDGE.get_or_init(|| Config::default().nudge())
@@ -182,7 +189,7 @@ impl Config {
 
     /// Put this config into effect for the whole process. Only the first call sets the nudge.
     pub(crate) fn apply(&self) {
-        runebender::outline::point_ops::set_grid_spacing(self.grid());
+        let _ = GRID.set(self.grid());
         let _ = NUDGE.set(self.nudge());
         let _ = NEURAL.set(self.neural());
         runebender::formats::specimen_script::configure_tools(

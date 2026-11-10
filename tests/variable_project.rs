@@ -66,7 +66,8 @@ fn replay_layer_edit(project: &mut Project, glyph: &str, layer: &LayerId, redo: 
 fn codec_glyph_path(font: &Font, glyph: &Glyph) -> kurbo::BezPath {
     let mut font = font.clone();
     font.default_layer_mut().insert_glyph(glyph.clone());
-    let project = Project::from_source(SourceInput::from_font(font, PathBuf::from("Codec.ufo")));
+    let project = Project::from_source(SourceInput::from_font(font, PathBuf::from("Codec.ufo")))
+        .expect("valid source fixture");
     let layer = project
         .document_source(SourceId(0))
         .unwrap()
@@ -90,7 +91,8 @@ fn codec_glyph_path(font: &Font, glyph: &Glyph) -> kurbo::BezPath {
 fn codec_contours_path(glyph: &Glyph) -> kurbo::BezPath {
     let mut font = Font::new();
     font.default_layer_mut().insert_glyph(glyph.clone());
-    let project = Project::from_source(SourceInput::from_font(font, PathBuf::from("Codec.ufo")));
+    let project = Project::from_source(SourceInput::from_font(font, PathBuf::from("Codec.ufo")))
+        .expect("valid source fixture");
     let layer = project
         .document_source(SourceId(0))
         .unwrap()
@@ -469,8 +471,8 @@ fn assert_single_source_metadata(label: &str, project: Project) {
 fn mapped_axes_sources_and_instances_use_the_same_coordinates() {
     let (_scratch, project) = fixture();
     assert_eq!(project.active, 0);
-    assert_eq!(project.master_locations[0], location(0.0, 0.0));
-    assert_eq!(project.master_locations[1], location(1.0, 0.0));
+    assert_eq!(project.master_locations()[0], location(0.0, 0.0));
+    assert_eq!(project.master_locations()[1], location(1.0, 0.0));
     assert_eq!(project.instances[0].1, location(0.5, 0.0));
     assert_eq!(project.axes[0].user.normalized_to_user(0.5), 650.0);
 }
@@ -489,7 +491,8 @@ fn single_source_constructors_expose_canonical_source_metadata() {
     let direct_project = Project::from_source(SourceInput::from_font(
         direct_font.clone(),
         scratch.0.join("Direct.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
 
     let loaded_path = scratch.0.join("Loaded.ufo");
     direct_font.save(&loaded_path).unwrap();
@@ -655,7 +658,8 @@ fn canonical_glyph_entries_keep_intrinsic_paint_when_components_do_not_resolve()
     );
     font.default_layer_mut().insert_glyph(glyph);
     let projected = codec_glyph_path(&font, font.get_glyph("broken").unwrap());
-    let project = Project::from_source(SourceInput::from_font(font, scratch.0.join("Broken.ufo")));
+    let project = Project::from_source(SourceInput::from_font(font, scratch.0.join("Broken.ufo")))
+        .expect("valid source fixture");
 
     let entry = project
         .document_source_glyph_entry(SourceId(0), "broken")
@@ -684,7 +688,8 @@ fn canonical_glyph_entries_preserve_custom_marks_without_a_palette() {
         plist::Value::String("0.93,0.45,0.2,1".into()),
     );
     font.default_layer_mut().insert_glyph(custom);
-    let project = Project::from_source(SourceInput::from_font(font, scratch.0.join("Marks.ufo")));
+    let project = Project::from_source(SourceInput::from_font(font, scratch.0.join("Marks.ufo")))
+        .expect("valid source fixture");
 
     let entry = project
         .document_source_glyph_entry(SourceId(0), "custom")
@@ -845,7 +850,8 @@ fn canonical_contour_paths_match_legacy_conversion_and_keep_implied_quadratics()
     let mut font = Font::new();
     font.default_layer_mut().insert_glyph(glyph.clone());
     font.default_layer_mut().insert_glyph(Glyph::new("empty"));
-    let project = Project::from_source(SourceInput::from_font(font, scratch.0.join("Paths.ufo")));
+    let project = Project::from_source(SourceInput::from_font(font, scratch.0.join("Paths.ufo")))
+        .expect("valid source fixture");
     let layer_id = project
         .document_source(SourceId(0))
         .unwrap()
@@ -958,7 +964,8 @@ fn canonical_hit_testing_matches_implied_quadratic_geometry_and_identities() {
     let project = Project::from_source(SourceInput::from_font(
         font,
         scratch.0.join("QuadraticHits.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
     let layer_id = project
         .document_source(SourceId(0))
         .unwrap()
@@ -1112,7 +1119,8 @@ fn canonical_component_resolution_matches_legacy_and_reports_broken_graphs() {
     for glyph in [missing, cycle_a, cycle_b] {
         font.default_layer_mut().insert_glyph(glyph);
     }
-    let broken = Project::from_source(SourceInput::from_font(font, scratch.0.join("Broken.ufo")));
+    let broken = Project::from_source(SourceInput::from_font(font, scratch.0.join("Broken.ufo")))
+        .expect("valid source fixture");
     let broken_layer = broken.document_source(SourceId(0)).unwrap().default_layer();
     assert_eq!(
         runebender::outline::glyph_paths::ordinary_layer_to_bezpath(
@@ -1187,7 +1195,8 @@ fn canonical_measurements_do_not_close_open_contours() {
     let mut font = Font::new();
     font.default_layer_mut().insert_glyph(open);
     font.default_layer_mut().insert_glyph(closed);
-    let project = Project::from_source(SourceInput::from_font(font, scratch.0.join("Measure.ufo")));
+    let project = Project::from_source(SourceInput::from_font(font, scratch.0.join("Measure.ufo")))
+        .expect("valid source fixture");
     let layer_id = project
         .document_source(SourceId(0))
         .unwrap()
@@ -1234,7 +1243,8 @@ fn canonical_point_roles_keep_contour_closure_coherent() {
     let mut project = Project::from_source(SourceInput::from_font(
         font,
         scratch.0.join("ContourClosure.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
     let layer_id = project
         .document_source(SourceId(0))
         .unwrap()
@@ -1319,7 +1329,8 @@ fn canonical_pen_builds_closed_contours_with_stable_new_identities() {
     let scratch = Scratch::new();
     let mut font = Font::new();
     font.default_layer_mut().insert_glyph(Glyph::new("pen"));
-    let mut project = Project::from_source(SourceInput::from_font(font, scratch.0.join("Pen.ufo")));
+    let mut project = Project::from_source(SourceInput::from_font(font, scratch.0.join("Pen.ufo")))
+        .expect("valid source fixture");
     let layer_id = project
         .document_source(SourceId(0))
         .unwrap()
@@ -1550,7 +1561,8 @@ fn canonical_shape_creation_matches_existing_geometry_with_stable_identities() {
     let mut font = Font::new();
     font.default_layer_mut().insert_glyph(Glyph::new("shapes"));
     let mut project =
-        Project::from_source(SourceInput::from_font(font, scratch.0.join("Shapes.ufo")));
+        Project::from_source(SourceInput::from_font(font, scratch.0.join("Shapes.ufo")))
+            .expect("valid source fixture");
     let layer_id = project
         .document_source(SourceId(0))
         .unwrap()
@@ -1929,7 +1941,8 @@ fn canonical_point_drag_matches_legacy_handle_behavior_atomically() {
     let mut project = Project::from_source(SourceInput::from_font(
         font,
         scratch.0.join("PointDrag.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
     let layer_id = project
         .document_source(SourceId(0))
         .unwrap()
@@ -2260,8 +2273,14 @@ fn canonical_line_segments_convert_with_stable_endpoint_identity() {
         .collect();
     let snap = |point: kurbo::Point| {
         kurbo::Point::new(
-            runebender::outline::point_ops::snap_coord(point.x),
-            runebender::outline::point_ops::snap_coord(point.y),
+            runebender::outline::point_ops::snap_to_spacing(
+                point.x,
+                runebender::outline::point_ops::DEFAULT_GRID_SPACING,
+            ),
+            runebender::outline::point_ops::snap_to_spacing(
+                point.y,
+                runebender::outline::point_ops::DEFAULT_GRID_SPACING,
+            ),
         )
     };
     assert_eq!(
@@ -2360,7 +2379,8 @@ fn canonical_line_conversion_sets_quadratic_endpoints_to_cubic() {
     let mut project = Project::from_source(SourceInput::from_font(
         font,
         scratch.0.join("LineKinds.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
     let layer_id = project
         .document_source(SourceId(0))
         .unwrap()
@@ -2472,7 +2492,8 @@ fn canonical_segment_insertion_preserves_existing_control_identities() {
     let mut project = Project::from_source(SourceInput::from_font(
         font,
         scratch.0.join("InsertSegments.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
     let layer_id = project
         .document_source(SourceId(0))
         .unwrap()
@@ -2640,7 +2661,8 @@ fn canonical_implied_quadratic_insertion_materializes_stable_endpoints() {
     let mut project = Project::from_source(SourceInput::from_font(
         font,
         scratch.0.join("ImpliedInsertion.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
     let layer_id = project
         .document_source(SourceId(0))
         .unwrap()
@@ -2785,7 +2807,8 @@ fn canonical_implied_quadratic_insertion_rejects_stale_segment_identity() {
     let mut project = Project::from_source(SourceInput::from_font(
         font,
         scratch.0.join("StaleImpliedHit.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
     let layer_id = project
         .document_source(SourceId(0))
         .unwrap()
@@ -2887,7 +2910,8 @@ fn deleting_an_on_curve_point_keeps_the_neighboring_handles() {
     let mut font = Font::new();
     font.default_layer_mut().insert_glyph(glyph);
     let mut project =
-        Project::from_source(SourceInput::from_font(font, scratch.0.join("Join.ufo")));
+        Project::from_source(SourceInput::from_font(font, scratch.0.join("Join.ufo")))
+            .expect("valid source fixture");
     let layer_id = project
         .document_source(SourceId(0))
         .unwrap()
@@ -2986,7 +3010,8 @@ fn canonical_point_deletion_preserves_surviving_identities_and_metadata() {
     let mut project = Project::from_source(SourceInput::from_font(
         font,
         scratch.0.join("DeletePoints.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
     let layer_id = project
         .document_source(SourceId(0))
         .unwrap()
@@ -3127,7 +3152,8 @@ fn canonical_quadratic_control_deletion_preserves_neighbor_segments() {
     let mut project = Project::from_source(SourceInput::from_font(
         font,
         scratch.0.join("QuadraticDelete.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
     let layer_id = project
         .document_source(SourceId(0))
         .unwrap()
@@ -3233,7 +3259,8 @@ fn canonical_point_deletion_is_atomic_across_contours() {
     let mut project = Project::from_source(SourceInput::from_font(
         font,
         PathBuf::from("AtomicDelete.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
     let layer_id = project
         .document_source(SourceId(0))
         .unwrap()
@@ -3322,7 +3349,8 @@ fn canonical_contour_reversal_preserves_identities_metadata_and_storage() {
     let mut project = Project::from_source(SourceInput::from_font(
         font,
         scratch.0.join("ReverseContours.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
     let layer_id = project
         .document_source(SourceId(0))
         .unwrap()
@@ -3482,7 +3510,8 @@ fn canonical_contour_reversal_reports_symmetric_noop() {
     let mut project = Project::from_source(SourceInput::from_font(
         font,
         PathBuf::from("SymmetricReversal.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
     let layer_id = project
         .document_source(SourceId(0))
         .unwrap()
@@ -3553,7 +3582,8 @@ fn canonical_contour_start_reorders_without_replacing_points() {
     let mut project = Project::from_source(SourceInput::from_font(
         font,
         scratch.0.join("SetContourStart.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
     let layer_id = project
         .document_source(SourceId(0))
         .unwrap()
@@ -6394,7 +6424,8 @@ fn source_glyph_export_and_category_have_canonical_project_queries() {
     let project = Project::from_source(SourceInput::from_font(
         font.clone(),
         PathBuf::from("SourceGlyphMetadata.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
 
     let metadata = project
         .document_source_glyph_metadata(SourceId(0), "A")
@@ -6414,7 +6445,8 @@ fn invalid_font_info_edits_are_rejected_before_document_mutation() {
     let mut project = Project::from_source(SourceInput::from_font(
         font,
         PathBuf::from("InvalidFontInfo.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
     let source = SourceId(0);
     let before = project.document_snapshot();
     let revision = project.document_revision();
@@ -6910,7 +6942,7 @@ fn source_authoring_keeps_identity_and_round_trips_the_designspace() {
     assert_eq!(project.source_index(added), Some(4));
     project.save().unwrap();
     let reloaded = Project::load(&scratch.0.join("Font.designspace")).unwrap();
-    assert_eq!(reloaded.master_names[0].as_ref(), "Heavy");
+    assert_eq!(reloaded.master_names()[0].as_ref(), "Heavy");
     assert_glyph_content_eq(
         reloaded
             .encode_ufo_source(added)
@@ -7282,48 +7314,6 @@ fn interpolation_is_glyph_local_and_independent_of_selected_source() {
             .try_encode_interpolated_ufo_at("onlySketch", &location(0.5, 0.0))
             .is_err()
     );
-}
-
-#[test]
-fn interpolation_structure_ignores_legacy_designspace_projections() {
-    let (_scratch, mut project) = fixture();
-    let target = location(0.5, 0.5);
-    let expected_glyph = project
-        .try_encode_interpolated_ufo_at("B", &target)
-        .unwrap();
-    let expected_kerning = project.interpolated_kerning_at("A", "B", &target).unwrap();
-    let expected_sources = project
-        .glyph_sources("B")
-        .unwrap()
-        .into_iter()
-        .map(|source| (source.layer, source.location))
-        .collect::<Vec<_>>();
-
-    project.axes.clear();
-    project.master_locations.clear();
-    project.brace.clear();
-    project.instances.clear();
-
-    assert_eq!(
-        project
-            .try_encode_interpolated_ufo_at("B", &target)
-            .unwrap(),
-        expected_glyph
-    );
-    assert_eq!(
-        project.interpolated_kerning_at("A", "B", &target).unwrap(),
-        expected_kerning
-    );
-    assert_eq!(
-        project
-            .glyph_sources("B")
-            .unwrap()
-            .into_iter()
-            .map(|source| (source.layer, source.location))
-            .collect::<Vec<_>>(),
-        expected_sources
-    );
-    assert!(project.trajectory_samples("B", 4).is_some());
 }
 
 #[test]

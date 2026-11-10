@@ -395,9 +395,6 @@ fn project_owns_the_canonical_designspace_and_snapshots_it() {
     );
     assert_eq!(project.document_snapshot().designspace(), Some(canonical));
 
-    project.axes.clear();
-    project.master_locations.clear();
-    project.instances.clear();
     project.location = [("Width".into(), 0.5)].into();
     assert_eq!(project.rule_substitute("A").as_deref(), Some("A.alt"));
     project.refresh_instances_from_doc();

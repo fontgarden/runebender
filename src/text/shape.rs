@@ -366,14 +366,15 @@ pub fn log_shaping_failure(message: &str) {
 }
 
 #[cfg(test)]
+#[cfg(feature = "integration-fonts")]
 mod tests {
     use super::*;
 
-    /// Build a shaping source out of the bundled test UFO: its glyph
+    /// Build a shaping source out of the pinned integration UFO: its glyph
     /// order, advances, codepoints and features.fea, exactly as the
     /// editor would hand them over.
     fn virtua_grotesk() -> ShapingSource {
-        let ufo_dir = crate::testing::fonts::regular_ufo();
+        let ufo_dir = crate::testing::fonts::virtua_regular_ufo();
         let font = norad::Font::load(&ufo_dir).expect("test UFO loads");
         let features = std::fs::read_to_string(ufo_dir.join("features.fea"))
             .expect("test UFO has features.fea");

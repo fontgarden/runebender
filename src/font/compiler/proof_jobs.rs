@@ -590,7 +590,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             norad::Font::new(),
             "Test.ufo".into(),
-        ));
+        ))
+        .expect("valid source fixture");
         super::super::proof::capture(&project).expect("empty canonical input captures")
     }
 

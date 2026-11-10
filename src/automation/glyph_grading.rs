@@ -486,7 +486,8 @@ mod tests {
         let project = Project::from_source(crate::font::project::SourceInput::from_font(
             font,
             std::env::temp_dir().join("legacy-green-policy.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()

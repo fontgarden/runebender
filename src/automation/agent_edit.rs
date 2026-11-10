@@ -403,6 +403,7 @@ mod tests {
             font,
             PathBuf::from("staged-recipe.ufo"),
         ))
+        .expect("valid source fixture")
     }
 
     fn request(
@@ -726,7 +727,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("staged-budget.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let source = project.source_id(0).unwrap();
         let glyphs = ["A".to_owned()];
         let root = capture(&project, source, &glyphs, "root".into(), BTreeMap::new()).unwrap();

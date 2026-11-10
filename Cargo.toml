@@ -31,9 +31,15 @@ required-features = ["application"]
 name = "live_fixture"
 required-features = ["application"]
 
+[[bench]]
+name = "font_engine"
+harness = false
+
 [features]
 default = ["application"]
 macos-updater = ["application", "dep:sparkle-updater"]
+# Optional real-font integration tests; ordinary tests use repository-owned fixtures.
+integration-fonts = []
 application = [
     "dep:base64",
     "dep:neuraltype-core",

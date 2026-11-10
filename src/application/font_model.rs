@@ -97,7 +97,7 @@ impl FontModel {
     fn default_source_id(&self) -> runebender::font::variable::SourceId {
         let index = self
             .project
-            .master_locations
+            .master_locations()
             .iter()
             .position(|location| location.values().all(|value| *value == 0.0))
             .unwrap_or(0);
@@ -304,7 +304,7 @@ impl FontModel {
 
     pub(crate) fn master_names(&self) -> Vec<String> {
         self.project
-            .master_names
+            .master_names()
             .iter()
             .map(|n| n.to_string())
             .collect()
@@ -312,7 +312,7 @@ impl FontModel {
 
     pub(crate) fn master_name(&self, index: usize) -> String {
         self.project
-            .master_names
+            .master_names()
             .get(index)
             .map(|n| n.to_string())
             .unwrap_or_default()
@@ -423,7 +423,7 @@ impl FontModel {
     /// The given master's axis location in user coordinates, one per axis,
     /// mapping the engine's stored normalized location back through the axis map.
     pub(crate) fn master_axis_values(&self, index: usize) -> Vec<f64> {
-        let loc = self.project.master_locations.get(index);
+        let loc = self.project.master_locations().get(index);
         self.axes
             .iter()
             .map(|ax| match loc.and_then(|l| l.get(&ax.name)) {
@@ -921,7 +921,8 @@ mod tests {
             font.default_layer_mut().insert_glyph(glyph);
         }
         let project =
-            Project::from_source(SourceInput::from_font(font, PathBuf::from("Marks.ufo")));
+            Project::from_source(SourceInput::from_font(font, PathBuf::from("Marks.ufo")))
+                .expect("valid source fixture");
         let custom = project
             .document_source_glyph_entry(runebender::font::variable::SourceId(0), "custom")
             .expect("the source exists")
@@ -1126,10 +1127,13 @@ mod tests {
 
         let file = dir.join("not-a-directory");
         std::fs::write(&file, "fixture").expect("the ordinary file is created");
-        let invalid = FontModel::from_project(Project::from_source(SourceInput::from_font(
-            norad::Font::new(),
-            file.join("New.ufo"),
-        )));
+        let invalid = FontModel::from_project(
+            Project::from_source(SourceInput::from_font(
+                norad::Font::new(),
+                file.join("New.ufo"),
+            ))
+            .expect("valid source fixture"),
+        );
         assert!(!invalid.is_writable());
 
         std::fs::remove_dir_all(dir).expect("the fixture is removed");

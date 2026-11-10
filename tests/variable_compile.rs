@@ -521,12 +521,7 @@ fn designspace_rules_are_present_in_the_compiled_variable_shaper() {
 
     let mut doc = designspace();
     doc.rules.rules.push(weight_rule(650.0));
-    let mut project = project_from_designspace(doc);
-    project.axes.clear();
-    project.master_locations.clear();
-    project.master_names.clear();
-    project.instances.clear();
-    project.brace.clear();
+    let project = project_from_designspace(doc);
     let compiled = project.compile().unwrap();
     for (location, name) in [(0.0, "A"), (1.0, "V")] {
         let shaping = ShapingFont::from_bytes((*compiled.bytes).clone())

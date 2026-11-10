@@ -449,7 +449,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("CanonicalAlignment.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let source = SourceId(0);
         let layer = project.document_source(source).unwrap().default_layer();
         let address = GlyphLayerAddress {
@@ -499,7 +500,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("CanonicalAnchors.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()
@@ -518,7 +520,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("InvalidCanonicalAlignment.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()

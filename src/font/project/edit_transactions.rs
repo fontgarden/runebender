@@ -1078,6 +1078,7 @@ mod tests {
             font,
             PathBuf::from("transaction-fixture.ufo"),
         ))
+        .expect("valid source fixture")
     }
 
     fn address(project: &Project, glyph: &str) -> GlyphLayerAddress {
@@ -1504,7 +1505,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("many-layers.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let source = project.source_id(0).unwrap();
         let reads = (0..MAX_EDIT_LAYERS - 1)
             .map(|index| {
@@ -1683,7 +1685,8 @@ mod tests {
         let mut project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("replace-fixture.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let source = project.source_id(0).unwrap();
         let a = address(&project, "A");
         let b = address(&project, "B");

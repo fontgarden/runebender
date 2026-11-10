@@ -7,22 +7,16 @@
 //! `$RUNEBENDER_TEST_FONTS`. Each test copies the UFO into a fresh
 //! temporary directory, so nothing edits the fixture.
 
+#![cfg(feature = "integration-fonts")]
+
+#[path = "support/virtua.rs"]
+mod virtua;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn fixture() -> PathBuf {
-    let dir = match std::env::var_os("RUNEBENDER_TEST_FONTS") {
-        Some(dir) => PathBuf::from(dir),
-        None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../virtua-grotesk/sources"),
-    };
-    let ufo = dir.join("VirtuaGrotesk-Regular.ufo");
-    assert!(
-        ufo.is_dir(),
-        "fixture fonts not found at {}: clone eliheuer/virtua-grotesk next to this \
-         repository, or set RUNEBENDER_TEST_FONTS",
-        dir.display()
-    );
-    ufo
+    virtua::dir().join("VirtuaGrotesk-Regular.ufo")
 }
 
 fn copy_dir(src: &Path, dst: &Path) {

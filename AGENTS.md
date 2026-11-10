@@ -54,9 +54,13 @@ The following commands describe the full native CI suite, not a requirement for 
 ```sh
 cargo fmt --all --check
 bash .github/scripts/copyright.sh
-cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --lib --bins --locked -- -D warnings
+cargo clippy --workspace --tests --examples --benches --locked -- -D warnings
+cargo clippy --workspace --tests --examples --benches --features integration-fonts --locked -- -D warnings
+cargo clippy --lib --no-default-features --locked -- -D warnings
 cargo doc --workspace --no-deps --locked
-cargo test --workspace --locked -- --test-threads=1
+env -u RUNEBENDER_TEST_FONTS cargo test --lib --no-default-features --locked -- --test-threads=1
+cargo test --workspace --features integration-fonts --locked -- --test-threads=1
 cargo build --workspace --release --locked
 cargo deny --locked check advisories
 ```
@@ -65,7 +69,9 @@ On hosts with less than 24 GiB of physical RAM, never overlap Cargo build, check
 Wait for one Cargo command to finish before starting the next; do not overlap browser smoke checks with a Cargo build on these hosts.
 On these hosts, set `CARGO_BUILD_JOBS=2` for Cargo commands; leave higher-memory hosts at their normal Cargo defaults unless memory pressure occurs.
 
-Set `RUNEBENDER_TEST_FONTS` to a directory containing test UFOs and a designspace when the adjacent Virtua Grotesk checkout is unavailable.
+Ordinary unit tests use the repository-owned synthetic fonts in `tests/fixtures/core`.
+Full-font tests require `--features integration-fonts`; set `RUNEBENDER_TEST_FONTS` to the pinned Virtua Grotesk `sources` directory when the adjacent checkout is unavailable.
+See [the contributor guide](docs/CONTRIBUTING.md) for the fixture revision and repository hygiene checks.
 Do not count ignored model tests as passing runtime coverage.
 
 For a clean-checkout proof, clone or archive the repository into a temporary directory and run the documented commands there.

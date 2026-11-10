@@ -17,6 +17,14 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
 - Feature generation and live measurements use fewer temporary allocations without changing feature text or measurement ordering.
 - MCP installation reports use typed internal fields while retaining their JSON format.
   Headless compilation now lives beside the other font commands, preserving variable-project support and overwrite protection.
+- Canonical project import returns typed metadata errors instead of panicking on malformed UFO input.
+  Source display names and locations are read-only views maintained by source operations.
+  Snapping policy belongs to each edit context rather than process-global font-engine state.
+- Geometry regressions exercise canonical document transactions, and ordinary unit tests use repository-owned synthetic fonts.
+  Pinned full-font coverage remains available through `--features integration-fonts` and is required in CI.
+- CI separates production, auxiliary, and headless checks, audits both Cargo workspaces and browser packages weekly, and checks TOML formatting and spelling.
+  Normal browser builds validate dependency pins without rewriting tracked manifests; pin updates are explicit.
+- Added a [contributor guide](CONTRIBUTING.md), [worker contract](WORKER-CONTRACT.md), and [reproducible engine benchmarks](BENCHMARKS.md).
 
 ## 0.1.0-alpha.1 — 2026-10-28
 

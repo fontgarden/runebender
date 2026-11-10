@@ -16,6 +16,11 @@
 // Load the program's interface, platform, and command-line modules from `application/`.
 mod application;
 
+#[cfg(test)]
+#[cfg(feature = "integration-fonts")]
+#[path = "../tests/support/virtua.rs"]
+mod integration_fonts;
+
 // The browser builds this file as a library and starts through `application::browser`.
 // Only the native executable needs the CLI, window launcher, event loop, and exit code.
 #[cfg(not(target_arch = "wasm32"))]

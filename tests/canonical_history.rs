@@ -85,7 +85,8 @@ fn project_fixture() -> (Project, GlyphLayerAddress) {
     let project = Project::from_source(SourceInput::from_font(
         font,
         PathBuf::from("canonical-history-fixture.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
     let address = GlyphLayerAddress {
         glyph: "A".into(),
         layer: LayerId {
@@ -124,7 +125,8 @@ fn rename_project_fixture() -> (Project, GlyphLayerAddress) {
     let project = Project::from_source(SourceInput::from_font(
         font,
         PathBuf::from("canonical-history-rename-fixture.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
     let address = GlyphLayerAddress {
         glyph: "A".into(),
         layer: LayerId {

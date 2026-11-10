@@ -392,8 +392,11 @@ fn off_point(p: Point) -> ContourPoint {
 /// editors create or move; see `point_ops`.
 #[cfg(test)]
 fn snapped(p: Point) -> (f64, f64) {
-    use crate::outline::point_ops::snap_coord;
-    (snap_coord(p.x), snap_coord(p.y))
+    use crate::outline::point_ops::{DEFAULT_GRID_SPACING, snap_to_spacing};
+    (
+        snap_to_spacing(p.x, DEFAULT_GRID_SPACING),
+        snap_to_spacing(p.y, DEFAULT_GRID_SPACING),
+    )
 }
 
 /// Convert a line segment to a cubic with controls at 1/3 and 2/3.

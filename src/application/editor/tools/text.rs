@@ -299,7 +299,8 @@ impl TextState {
         }
         let project = runebender::font::project::Project::from_source(
             runebender::font::project::SourceInput::from_font(font, "text-test.ufo".into()),
-        );
+        )
+        .expect("valid source fixture");
         let source = project.source_id(0).unwrap();
         Self::new(&TextInputs {
             context_id: (0, 0),
@@ -571,6 +572,7 @@ pub(crate) struct PlacedSort {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "integration-fonts")]
     use masonry::kurbo::Shape;
 
     #[test]
@@ -618,7 +620,8 @@ mod tests {
         font.default_layer_mut().insert_glyph(other);
         let project = runebender::font::project::Project::from_source(
             runebender::font::project::SourceInput::from_font(font, "text-test.ufo".into()),
-        );
+        )
+        .expect("valid source fixture");
         let source = project.source_id(0).unwrap();
         let mut inputs = TextInputs {
             context_id: (0, 0),
@@ -685,19 +688,10 @@ mod tests {
         assert_eq!(state.buffer.active_sort(), Some(0));
     }
 
+    #[cfg(feature = "integration-fonts")]
     #[test]
-    #[ignore = "loads the adjacent full Virtua Grotesk designspace"]
     fn virtua_mixed_text_uses_real_arabic_forms_marks_and_bidi_layout() {
-        let source = std::env::var_os("RUNEBENDER_TEST_FONTS")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../virtua-grotesk/sources")
-            })
-            .join("VirtuaGrotesk.designspace");
-        assert!(
-            source.is_file(),
-            "clone Virtua Grotesk beside this repository or set RUNEBENDER_TEST_FONTS"
-        );
+        let source = crate::integration_fonts::dir().join("VirtuaGrotesk.designspace");
         let mut font = FontModel::open(&source).expect("Virtua Grotesk opens");
         let sample = "R لا 123 بِ";
         let mut state = TextState::new(&TextInputs::new(&font).with_text(sample));

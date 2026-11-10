@@ -135,7 +135,8 @@ fn fixture() -> (Scratch, Project, LayerId, GlyphLayerAddress) {
     for glyph in [glyph, base, other] {
         font.default_layer_mut().insert_glyph(glyph);
     }
-    let project = Project::from_source(SourceInput::from_font(font, source_path));
+    let project = Project::from_source(SourceInput::from_font(font, source_path))
+        .expect("valid source fixture");
     let layer = project
         .document_source(SourceId(0))
         .unwrap()
@@ -450,7 +451,8 @@ fn handle_fixture() -> (Scratch, Project, LayerId, GlyphLayerAddress) {
     let mut font = Font::new();
     font.default_layer_mut().insert_glyph(glyph);
     font.default_layer_mut().insert_glyph(other);
-    let project = Project::from_source(SourceInput::from_font(font, source_path));
+    let project = Project::from_source(SourceInput::from_font(font, source_path))
+        .expect("valid source fixture");
     let layer = project
         .document_source(SourceId(0))
         .unwrap()

@@ -7,6 +7,7 @@
 //! Values cross it once during import or are freshly materialized for serialization; none are
 //! retained as editable state and there is no projection-to-document reconciliation path.
 
+use super::super::project::ProjectImportError;
 use super::super::{
     LayerView, babelfont as font_babelfont, font_ops, interpolation, model,
     variable::{LayerId, SourceId, SourceMetadata, VariableData},
@@ -77,13 +78,15 @@ pub(crate) fn encode_font_metadata(
     Ok(true)
 }
 
-pub(in crate::font) fn decode_source(font: &norad::Font) -> Result<VariableData, String> {
+pub(in crate::font) fn decode_source(
+    font: &norad::Font,
+) -> Result<VariableData, ProjectImportError> {
     decode_sources([font])
 }
 
 pub(in crate::font) fn decode_sources<'a>(
     fonts: impl IntoIterator<Item = &'a norad::Font>,
-) -> Result<VariableData, String> {
+) -> Result<VariableData, ProjectImportError> {
     let mut data = VariableData::default();
     for font in fonts {
         validate_source(font)?;
@@ -93,9 +96,10 @@ pub(in crate::font) fn decode_sources<'a>(
             source,
             SourceMetadata {
                 feature_text: font.features.clone(),
-                font_metadata: decode_font_metadata(font).map_err(|error| error.to_string())?,
+                font_metadata: decode_font_metadata(font)
+                    .map_err(ProjectImportError::FontMetadata)?,
                 font_info: model::font_info::CanonicalFontInfo::from_ufo(&font.font_info)
-                    .map_err(|error| error.to_string())?,
+                    .map_err(ProjectImportError::FontInfo)?,
             },
         );
         data.source_formats.insert(
@@ -119,7 +123,10 @@ pub(in crate::font) fn decode_sources<'a>(
                     glyph.source_metadata.insert(
                         source,
                         model::glyph_metadata::canonical_glyph_metadata_from_ufo(font, name)
-                            .map_err(|error| error.to_string())?
+                            .map_err(|source| ProjectImportError::GlyphMetadata {
+                                glyph: name.to_owned(),
+                                source,
+                            })?
                             .source()
                             .clone(),
                     );
@@ -135,23 +142,27 @@ pub(in crate::font) fn decode_sources<'a>(
         data.revision = data.revision.wrapping_add(1);
     }
     if data.source_ids.is_empty() {
-        return Err("canonical import needs at least one UFO source".into());
+        return Err(ProjectImportError::MissingSource);
     }
     data.next_source = data.source_ids.len();
     Ok(data)
 }
 
-fn validate_source(font: &norad::Font) -> Result<(), String> {
-    decode_font_metadata(font).map_err(|error| error.to_string())?;
+fn validate_source(font: &norad::Font) -> Result<(), ProjectImportError> {
+    decode_font_metadata(font).map_err(ProjectImportError::FontMetadata)?;
     model::font_info::CanonicalFontInfo::from_ufo(&font.font_info)
-        .map_err(|error| error.to_string())?;
+        .map_err(ProjectImportError::FontInfo)?;
     for name in font
         .default_layer()
         .iter()
         .map(|glyph| glyph.name().as_str())
     {
-        model::glyph_metadata::canonical_glyph_metadata_from_ufo(font, name)
-            .map_err(|error| error.to_string())?;
+        model::glyph_metadata::canonical_glyph_metadata_from_ufo(font, name).map_err(|source| {
+            ProjectImportError::GlyphMetadata {
+                glyph: name.to_owned(),
+                source,
+            }
+        })?;
     }
     Ok(())
 }

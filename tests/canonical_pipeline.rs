@@ -139,7 +139,8 @@ fn compiler_snapshot_reads_canonical_source_glyph_metadata() {
             plist::Value::String("mark".into()),
         )])),
     );
-    let mut project = Project::from_source(SourceInput::from_font(font, "Metadata.ufo".into()));
+    let mut project = Project::from_source(SourceInput::from_font(font, "Metadata.ufo".into()))
+        .expect("valid source fixture");
 
     let metadata = project
         .document_source_glyph_metadata(SourceId(0), "A")
@@ -238,7 +239,8 @@ fn compiler_snapshot_drops_cleared_canonical_font_info() {
         None,
     ));
     font.default_layer_mut().insert_glyph(glyph);
-    let mut project = Project::from_source(SourceInput::from_font(font, "Clearing.ufo".into()));
+    let mut project = Project::from_source(SourceInput::from_font(font, "Clearing.ufo".into()))
+        .expect("valid source fixture");
 
     let before = project.babelfont_snapshot().unwrap();
     assert!(!before.names.copyright.is_empty());

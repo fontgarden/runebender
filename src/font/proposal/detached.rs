@@ -392,6 +392,7 @@ mod tests {
 
     fn project(font: norad::Font) -> Project {
         Project::from_source(SourceInput::from_font(font, "Detached.ufo".into()))
+            .expect("valid source fixture")
     }
 
     fn with_proposal(mut source: norad::Font, glyphs: Vec<norad::Glyph>) -> Project {

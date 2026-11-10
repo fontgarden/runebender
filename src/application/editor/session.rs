@@ -117,6 +117,8 @@ pub(crate) fn semantic_mark(label: Option<&str>) -> (Option<&str>, Option<MarkCo
 #[derive(Clone)]
 pub(crate) struct Session {
     pub glyph_name: String,
+    /// Snapping policy owned by this editing context, not the font document.
+    pub grid_spacing: f64,
     pub metaballs: metaballs::MetaballSelection,
     /// The label tool's active letter and polygon in progress.
     pub label: label::LabelState,
@@ -218,6 +220,7 @@ impl Session {
     fn inactive_with_metrics(metrics: Metrics) -> Self {
         Self {
             glyph_name: String::new(),
+            grid_spacing: crate::application::platform::config::grid_spacing(),
             metaball_preview: BezPath::new(),
             components: BezPath::new(),
             component_cache: Vec::new(),
@@ -258,7 +261,8 @@ impl Session {
                 font.clone(),
                 std::path::PathBuf::from("memory.ufo"),
             ),
-        );
+        )
+        .expect("valid source fixture");
         Self::new_from_project(&project, name, Metrics::of(font))
     }
 
@@ -279,6 +283,7 @@ impl Session {
         let canonical_base = project.begin_document_layer_transaction(&address).ok();
         let mut session = Self {
             glyph_name: name.to_string(),
+            grid_spacing: crate::application::platform::config::grid_spacing(),
             metaball_preview: BezPath::new(),
             components,
             component_cache,
@@ -639,6 +644,7 @@ impl Session {
         let Some(mut transaction) = self.canonical_base.clone() else {
             return false;
         };
+        transaction.draft_mut().set_grid_spacing(self.grid_spacing);
         if edit(transaction.draft_mut()) != Ok(true) {
             return false;
         }
@@ -655,6 +661,7 @@ impl Session {
         let Some(mut transaction) = self.canonical_base.clone() else {
             return Ok(false);
         };
+        transaction.draft_mut().set_grid_spacing(self.grid_spacing);
         if !edit(transaction.draft_mut())? {
             return Ok(false);
         }
@@ -1053,9 +1060,10 @@ impl Session {
     }
 
     pub(crate) fn begin_point_drag(&mut self) {
-        let Some(transaction) = self.canonical_base.clone() else {
+        let Some(mut transaction) = self.canonical_base.clone() else {
             return;
         };
+        transaction.draft_mut().set_grid_spacing(self.grid_spacing);
         let selected: Vec<_> = self.selection.iter().copied().collect();
         let Ok(origins) = transaction
             .draft()
@@ -1350,9 +1358,12 @@ impl Session {
                             point: {
                                 // Snapped like the inserted point, so a preview
                                 // shows where the click lands.
-                                use runebender::outline::point_ops::snap_coord;
+                                use runebender::outline::point_ops::snap_to_spacing;
                                 let at = segment.seg.eval(hit.t);
-                                Point::new(snap_coord(at.x), snap_coord(at.y))
+                                Point::new(
+                                    snap_to_spacing(at.x, self.grid_spacing),
+                                    snap_to_spacing(at.y, self.grid_spacing),
+                                )
                             },
                             curve: !matches!(segment.seg, kurbo::PathSeg::Line(_)),
                         },
@@ -2990,7 +3001,7 @@ impl Workspace {
 
     /// True when the sliders sit exactly on the active master's location.
     pub(crate) fn on_active_master(&self) -> bool {
-        match self.font.project.master_locations.get(self.font.active()) {
+        match self.font.project.master_locations().get(self.font.active()) {
             Some(m) => self.font.axes.iter().enumerate().all(|(i, a)| {
                 // Axis values are user coordinates; the engine stores normalized locations.
                 let cur =
@@ -3472,7 +3483,8 @@ mod tests {
         let mut project = runebender::font::project::Project::from_source(SourceInput::from_font(
             font,
             std::path::PathBuf::new(),
-        ));
+        ))
+        .expect("valid source fixture");
         let source = project.document_sources().next().unwrap();
         let address = runebender::font::variable::GlyphLayerAddress {
             glyph: "composite".into(),

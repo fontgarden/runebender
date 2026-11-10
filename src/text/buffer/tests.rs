@@ -1075,10 +1075,11 @@ fn click_places_the_caret_on_the_clicked_line() {
     assert_eq!(buffer.line_number_for_sort(cursor), 1);
 }
 
-/// A buffer wired to the bundled font's inventory and features, the
+/// A buffer wired to the pinned integration font's inventory and features, the
 /// way the editor sets one up.
+#[cfg(feature = "integration-fonts")]
 fn buffer_with_shaping_font() -> TextBuffer {
-    let ufo_dir = crate::testing::fonts::regular_ufo();
+    let ufo_dir = crate::testing::fonts::virtua_regular_ufo();
     let font = norad::Font::load(&ufo_dir).expect("test UFO loads");
     let features = std::fs::read_to_string(ufo_dir.join("features.fea")).expect("features.fea");
 
@@ -1103,6 +1104,7 @@ fn buffer_with_shaping_font() -> TextBuffer {
     buffer
 }
 
+#[cfg(feature = "integration-fonts")]
 fn type_chars(buffer: &mut TextBuffer, text: &str) {
     for char in text.chars() {
         let name = buffer
@@ -1121,6 +1123,7 @@ fn type_chars(buffer: &mut TextBuffer, text: &str) {
     }
 }
 
+#[cfg(feature = "integration-fonts")]
 #[test]
 fn latin_keeps_one_glyph_per_character_when_shaped_by_the_font() {
     let mut buffer = buffer_with_shaping_font();
@@ -1138,6 +1141,7 @@ fn latin_keeps_one_glyph_per_character_when_shaped_by_the_font() {
     assert_eq!(buffer.sort_glyph_name(0), Some("R"));
 }
 
+#[cfg(feature = "integration-fonts")]
 #[test]
 fn arabic_in_a_latin_line_still_ligates() {
     // A line whose first strong character is Latin still reads LTR,
@@ -1185,6 +1189,7 @@ fn a_glyph_opens_at_the_cursor_when_nothing_is_active() {
     assert_eq!(buffer.sort_glyph_name(1), Some("C"));
 }
 
+#[cfg(feature = "integration-fonts")]
 #[test]
 fn lam_alef_renders_as_one_ligature_glyph() {
     let mut buffer = buffer_with_shaping_font();
@@ -1203,6 +1208,7 @@ fn lam_alef_renders_as_one_ligature_glyph() {
     assert_eq!(layout.items[0].index, 0);
 }
 
+#[cfg(feature = "integration-fonts")]
 #[test]
 fn deleting_the_lam_brings_the_alef_back() {
     let mut buffer = buffer_with_shaping_font();
@@ -1219,6 +1225,7 @@ fn deleting_the_lam_brings_the_alef_back() {
     assert_eq!(buffer.layout(1000.0).items.len(), 1);
 }
 
+#[cfg(feature = "integration-fonts")]
 #[test]
 fn shaping_falls_back_when_the_feature_file_is_broken() {
     let mut buffer = buffer_with_shaping_font();

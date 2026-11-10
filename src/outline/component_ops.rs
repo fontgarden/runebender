@@ -324,7 +324,8 @@ mod canonical_tests {
         font.default_layer_mut().insert_glyph(blob);
         font.default_layer_mut().insert_glyph(user);
         let project =
-            Project::from_source(SourceInput::from_font(font, "MetaballComponent.ufo".into()));
+            Project::from_source(SourceInput::from_font(font, "MetaballComponent.ufo".into()))
+                .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()

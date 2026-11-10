@@ -99,7 +99,8 @@ mod tests {
         let mut font = norad::Font::new();
         font.default_layer_mut()
             .insert_glyph(rect("I", 96.0, 700.0));
-        let project = Project::from_source(SourceInput::from_font(font, PathBuf::from("Test.ufo")));
+        let project = Project::from_source(SourceInput::from_font(font, PathBuf::from("Test.ufo")))
+            .expect("valid source fixture");
         assert_eq!(
             stem_and_bar_project(&project, SourceId(0), "I"),
             (Some(96), Some(700))
@@ -117,7 +118,8 @@ mod tests {
         font.default_layer_mut()
             .insert_glyph(norad::Glyph::new("space"));
         let project =
-            Project::from_source(SourceInput::from_font(font, PathBuf::from("Empty.ufo")));
+            Project::from_source(SourceInput::from_font(font, PathBuf::from("Empty.ufo")))
+                .expect("valid source fixture");
         assert_eq!(
             stem_and_bar_project(&project, SourceId(0), "space"),
             (None, None)

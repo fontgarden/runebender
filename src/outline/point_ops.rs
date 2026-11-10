@@ -13,7 +13,7 @@
 //!    opposite handle is mirrored through the smooth point (its length
 //!    is preserved), and when the opposite side is an on-curve point
 //!    the dragged handle is projected onto that tangent line instead.
-//! 3. Every moved point lands on the 2-unit design grid.
+//! 3. Every moved point lands on the grid explicitly supplied by its edit context.
 //!
 //! Alt/Option editing passes `independent`, which turns rule 1 off:
 //! the selected points move alone.
@@ -43,30 +43,6 @@ pub const DOT_GRID_SPACING: f64 = 8.0;
 /// The default design grid: whole font units.
 pub const DEFAULT_GRID_SPACING: f64 = 1.0;
 
-/// The grid every moved point snaps to, in font units, as `f64` bits. Zero turns snapping off.
-///
-/// One setting for the whole process, read by every edit that snaps; an application sets it
-/// once from its configuration.
-static GRID_SPACING: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(DEFAULT_GRID_SPACING.to_bits());
-
-/// The design grid every moved point snaps to, in font units; zero means no snapping.
-pub fn grid_spacing() -> f64 {
-    f64::from_bits(GRID_SPACING.load(std::sync::atomic::Ordering::Relaxed))
-}
-
-/// Set the design grid. A negative or nonfinite spacing is ignored.
-pub fn set_grid_spacing(spacing: f64) {
-    if spacing.is_finite() && spacing >= 0.0 {
-        GRID_SPACING.store(spacing.to_bits(), std::sync::atomic::Ordering::Relaxed);
-    }
-}
-
-/// Snap one coordinate to the design grid, or leave it when snapping is off.
-pub fn snap_coord(value: f64) -> f64 {
-    snap_to_spacing(value, grid_spacing())
-}
-
 /// Snap one coordinate to the nearest multiple of `spacing`, or leave it when `spacing` is not
 /// positive.
 pub fn snap_to_spacing(value: f64, spacing: f64) -> f64 {
@@ -76,8 +52,8 @@ pub fn snap_to_spacing(value: f64, spacing: f64) -> f64 {
     (value / spacing).round() * spacing
 }
 
-fn snap_pt(p: kurbo::Point) -> kurbo::Point {
-    kurbo::Point::new(snap_coord(p.x), snap_coord(p.y))
+fn snap_pt(p: kurbo::Point, spacing: f64) -> kurbo::Point {
+    kurbo::Point::new(snap_to_spacing(p.x, spacing), snap_to_spacing(p.y, spacing))
 }
 
 #[cfg(test)]
@@ -114,12 +90,6 @@ pub(crate) fn step_index(index: usize, len: usize, closed: bool, d: isize) -> Op
     }
 }
 
-/// `step_index` on a contour known to be closed and non-empty.
-#[cfg(test)]
-pub(crate) fn wrap_index(index: usize, len: usize, d: isize) -> usize {
-    step_index(index, len, true, d).unwrap_or(0)
-}
-
 /// A closed contour is one that does not open with a `move` point.
 #[cfg(test)]
 fn contour_is_closed(points: &[ContourPoint]) -> bool {
@@ -134,6 +104,7 @@ fn mirrored_smooth_handle(
     moved: kurbo::Point,
     anchor: kurbo::Point,
     opposite: kurbo::Point,
+    spacing: f64,
 ) -> Option<kurbo::Point> {
     let v = moved - anchor;
     let len = v.hypot();
@@ -144,7 +115,7 @@ fn mirrored_smooth_handle(
     if opposite_len < 1e-9 {
         return None;
     }
-    Some(snap_pt(anchor - (v / len) * opposite_len))
+    Some(snap_pt(anchor - (v / len) * opposite_len, spacing))
 }
 
 /// The dragged handle projected onto the tangent through an
@@ -157,6 +128,7 @@ fn projected_smooth_handle(
     moved: kurbo::Point,
     anchor: kurbo::Point,
     line_point: kurbo::Point,
+    spacing: f64,
 ) -> Option<kurbo::Point> {
     let tangent = anchor - line_point;
     let tangent_len = tangent.hypot();
@@ -168,7 +140,7 @@ fn projected_smooth_handle(
     let distance = (d.x * unit.x + d.y * unit.y).abs();
     let projected = anchor + unit * distance;
     if tangent.x.abs() < 1e-9 || tangent.y.abs() < 1e-9 {
-        Some(snap_pt(projected))
+        Some(snap_pt(projected, spacing))
     } else {
         Some(projected)
     }
@@ -205,6 +177,7 @@ fn smooth_handle_updates(
                 pos(&points[index]),
                 pos(&points[on_index]),
                 pos(&points[opposite]),
+                DEFAULT_GRID_SPACING,
             ) {
                 updates.push((opposite, p));
             }
@@ -212,6 +185,7 @@ fn smooth_handle_updates(
             pos(&points[index]),
             pos(&points[on_index]),
             pos(&points[opposite]),
+            DEFAULT_GRID_SPACING,
         ) {
             updates.push((index, p));
         }
@@ -297,6 +271,7 @@ pub(crate) fn translated_positions(
     delta: (f64, f64),
     closed: bool,
     independent: bool,
+    spacing: f64,
 ) -> Vec<(usize, kurbo::Point)> {
     let mut result = points.to_vec();
     let moved = moved_indices(points, selected, closed, independent);
@@ -305,7 +280,7 @@ pub(crate) fn translated_positions(
             .get(&index)
             .copied()
             .unwrap_or(points[index].position);
-        result[index].position = snap_pt(base + kurbo::Vec2::new(delta.0, delta.1));
+        result[index].position = snap_pt(base + kurbo::Vec2::new(delta.0, delta.1), spacing);
     }
     let mut smooth_updates = Vec::new();
     for &index in &moved {
@@ -338,6 +313,7 @@ pub(crate) fn translated_positions(
                     result[index].position,
                     result[anchor_index].position,
                     opposite_position,
+                    spacing,
                 )
                 .map(|position| (opposite, position))
             } else {
@@ -345,6 +321,7 @@ pub(crate) fn translated_positions(
                     result[index].position,
                     result[anchor_index].position,
                     result[opposite].position,
+                    spacing,
                 )
                 .map(|position| (index, position))
             };
@@ -490,6 +467,7 @@ pub fn translate_points(
             delta,
             contour_is_closed(&contour.points),
             independent,
+            DEFAULT_GRID_SPACING,
         ) {
             let point = &mut contour.points[index];
             if point.x != p.x || point.y != p.y {
@@ -527,7 +505,7 @@ pub fn snap_selected_offcurves(glyph: &mut Glyph, selected: &HashSet<PointId>) -
             if !is_off(&contour.points[index]) {
                 continue;
             }
-            let p = snap_pt(pos(&contour.points[index]));
+            let p = snap_pt(pos(&contour.points[index]), DEFAULT_GRID_SPACING);
             let point = &mut contour.points[index];
             if point.x != p.x || point.y != p.y {
                 point.x = p.x;

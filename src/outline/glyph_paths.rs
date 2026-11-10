@@ -1098,7 +1098,8 @@ mod canonical_render_tests {
         ));
         let expected = glyph_to_bezpath(&user, &font);
         font.default_layer_mut().insert_glyph(user);
-        let project = Project::from_source(SourceInput::from_font(font, "Hyper.ufo".into()));
+        let project = Project::from_source(SourceInput::from_font(font, "Hyper.ufo".into()))
+            .expect("valid source fixture");
         let id = project
             .document_source(SourceId(0))
             .expect("default source")
@@ -1147,7 +1148,8 @@ mod canonical_render_tests {
             font.default_layer_mut().insert_glyph(glyph);
         }
         let expected = glyph_to_bezpath(font.get_glyph("top").unwrap(), &font);
-        let project = Project::from_source(SourceInput::from_font(font, "Affine.ufo".into()));
+        let project = Project::from_source(SourceInput::from_font(font, "Affine.ufo".into()))
+            .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()
@@ -1184,7 +1186,8 @@ mod canonical_render_tests {
         ));
         proposal.insert_glyph(top.clone());
         let expected = glyph_to_bezpath(&top, &font);
-        let project = Project::from_source(SourceInput::from_font(font, "Overlay.ufo".into()));
+        let project = Project::from_source(SourceInput::from_font(font, "Overlay.ufo".into()))
+            .expect("valid source fixture");
         let selected = LayerId {
             source: SourceId(0),
             name: "com.runebender.proposal.test".into(),
@@ -1217,7 +1220,8 @@ mod canonical_render_tests {
         font.default_layer_mut()
             .insert_glyph(rectangle("base", 80.0, 50.0));
         font.default_layer_mut().insert_glyph(top);
-        let project = Project::from_source(SourceInput::from_font(font, "NonFinite.ufo".into()));
+        let project = Project::from_source(SourceInput::from_font(font, "NonFinite.ufo".into()))
+            .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()
@@ -1287,7 +1291,8 @@ mod canonical_render_tests {
         }
         let direct_expected = glyph_to_bezpath(font.get_glyph("blob").unwrap(), &font);
         let nested_expected = glyph_to_bezpath(font.get_glyph("top").unwrap(), &font);
-        let project = Project::from_source(SourceInput::from_font(font, "Metaballs.ufo".into()));
+        let project = Project::from_source(SourceInput::from_font(font, "Metaballs.ufo".into()))
+            .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()
@@ -1344,7 +1349,8 @@ mod canonical_render_tests {
             .unwrap()
             .insert_glyph(wide);
         let expected = glyph_to_bezpath(&user, &font);
-        let project = Project::from_source(SourceInput::from_font(font, "SmartOne.ufo".into()));
+        let project = Project::from_source(SourceInput::from_font(font, "SmartOne.ufo".into()))
+            .expect("valid source fixture");
         let layer = LayerId {
             source: SourceId(0),
             name: "proposal.smart".into(),
@@ -1391,7 +1397,8 @@ mod canonical_render_tests {
         );
         font.default_layer_mut().insert_glyph(user);
         let expected = glyph_to_bezpath(font.get_glyph("boxdemo").unwrap(), &font);
-        let project = Project::from_source(SourceInput::from_font(font, "SmartTwo.ufo".into()));
+        let project = Project::from_source(SourceInput::from_font(font, "SmartTwo.ufo".into()))
+            .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()
@@ -1431,7 +1438,8 @@ mod canonical_render_tests {
             }
             font.default_layer_mut().insert_glyph(glyph);
         }
-        let project = Project::from_source(SourceInput::from_font(font, "SmartDepth.ufo".into()));
+        let project = Project::from_source(SourceInput::from_font(font, "SmartDepth.ufo".into()))
+            .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()
@@ -1455,7 +1463,8 @@ mod canonical_render_tests {
             .push(component("top", AffineTransform::default()));
         let mut font = Font::default();
         font.default_layer_mut().insert_glyph(top);
-        let project = Project::from_source(SourceInput::from_font(font, "Cycle.ufo".into()));
+        let project = Project::from_source(SourceInput::from_font(font, "Cycle.ufo".into()))
+            .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()

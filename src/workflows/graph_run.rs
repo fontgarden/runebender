@@ -2508,7 +2508,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             norad::Font::new(),
             PathBuf::from("Regular.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         assert_eq!(
             single_source_id(&project, Path::new("Regular.ufo")).unwrap(),
             SourceId(0)
@@ -2548,14 +2549,16 @@ mod tests {
             .unwrap()
             .insert_glyph(comparison_glyph("n", 50.0));
         let source =
-            Project::from_source(SourceInput::from_font(source, PathBuf::from("Regular.ufo")));
+            Project::from_source(SourceInput::from_font(source, PathBuf::from("Regular.ufo")))
+                .expect("valid source fixture");
 
         let mut target = norad::Font::new();
         target
             .default_layer_mut()
             .insert_glyph(comparison_glyph("n", 100.0));
         let target =
-            Project::from_source(SourceInput::from_font(target, PathBuf::from("Bold.ufo")));
+            Project::from_source(SourceInput::from_font(target, PathBuf::from("Bold.ufo")))
+                .expect("valid source fixture");
 
         let rows = compare_project_layer(
             &source,
@@ -2612,7 +2615,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("CanonicalProof.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let selected = LayerId {
             source: SourceId(0),
             name: "preview".into(),

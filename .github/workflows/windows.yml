@@ -1,3 +1,5 @@
+# Diagnostic current-stable coverage; Linux/macOS on pinned Rust are primary.
+# Do not hide failures with continue-on-error or imply native parity.
 name: Windows basics
 
 on:
@@ -5,6 +7,17 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_BUILD_JOBS: 2
+  CARGO_TERM_COLOR: always
 
 jobs:
   windows:
@@ -21,8 +34,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+      # The explicit toolchain prevents rust-toolchain.toml selecting minimum Rust.
+      - name: Check reusable engine without application features
+        run: cargo +stable check --lib --no-default-features --locked
+      - name: Check production targets
+        run: cargo +stable check --workspace --lib --bins --locked
+      - name: Check auxiliary targets
+        run: cargo +stable check --workspace --tests --examples --benches --features integration-fonts --locked
       - name: Build the Windows application
-        run: cargo build --locked --bin runebender
+        run: cargo +stable build --locked --bin runebender
       - name: Exercise CLI, rendering, and native startup
         shell: pwsh
         run: ./.github/scripts/windows-smoke.ps1

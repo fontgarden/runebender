@@ -1227,7 +1227,8 @@ mod tests {
         for glyph in proposed {
             layer.insert_glyph(glyph);
         }
-        let external = Project::from_source(SourceInput::from_font(external, "Review.ufo".into()));
+        let external = Project::from_source(SourceInput::from_font(external, "Review.ufo".into()))
+            .expect("valid source fixture");
         let candidate = capture.stage(&app.font.project, &external, source).unwrap();
         app.ai.pending.insert(
             (source, "review-batch".into()),
@@ -1905,9 +1906,15 @@ print(json.dumps({'ok': True, 'input_width': width, 'capture_source': str(source
         let mut font = norad::Font::new();
         font.default_layer_mut()
             .insert_glyph(norad::Glyph::new("A"));
-        let mut model = FontModel::from_project(runebender::font::project::Project::from_source(
-            runebender::font::project::SourceInput::from_font(font, PathBuf::from("Revision.ufo")),
-        ));
+        let mut model = FontModel::from_project(
+            runebender::font::project::Project::from_source(
+                runebender::font::project::SourceInput::from_font(
+                    font,
+                    PathBuf::from("Revision.ufo"),
+                ),
+            )
+            .expect("valid source fixture"),
+        );
         let expected = foreground_revisions(&model, &[]).expect("the layer can be revised");
 
         assert!(model.add_glyph("B", 500.0, None));

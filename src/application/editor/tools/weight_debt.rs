@@ -543,6 +543,7 @@ mod tests {
         assert!(!scores.contains_key(&Script::Other));
     }
 
+    #[cfg(feature = "integration-fonts")]
     fn copy_tree(source: &Path, destination: &Path) {
         std::fs::create_dir_all(destination).expect("the destination directory is created");
         for entry in std::fs::read_dir(source).expect("the source directory is readable") {
@@ -556,16 +557,10 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "integration-fonts")]
     /// A disposable copy of the Virtua sources, open on the Bold master.
     fn virtua_on_bold() -> Workspace {
-        let source = match std::env::var_os("RUNEBENDER_TEST_FONTS") {
-            Some(dir) => PathBuf::from(dir),
-            None => Path::new(env!("CARGO_MANIFEST_DIR")).join("../virtua-grotesk/sources"),
-        };
-        assert!(
-            source.join("VirtuaGrotesk.designspace").is_file(),
-            "clone Virtua Grotesk beside this repository, or set RUNEBENDER_TEST_FONTS"
-        );
+        let source = crate::integration_fonts::dir();
         let root = std::env::temp_dir().join(format!(
             "runebender-xilem-weight-debt-{}-{}",
             std::process::id(),
@@ -587,6 +582,7 @@ mod tests {
         workspace
     }
 
+    #[cfg(feature = "integration-fonts")]
     #[test]
     fn the_lightest_master_shows_no_debt_and_the_heavier_one_does() {
         let mut workspace = virtua_on_bold();
@@ -600,6 +596,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "integration-fonts")]
     #[test]
     fn an_offset_batch_becomes_a_proposal_that_installs_on_the_machine_grid() {
         let mut workspace = virtua_on_bold();

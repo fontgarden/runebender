@@ -558,6 +558,7 @@ pub struct PastedContours {
 pub struct LayerEditDraft {
     layer: Layer,
     preserved: LayerPreservation,
+    grid_spacing: f64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

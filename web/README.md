@@ -39,12 +39,11 @@ The browser host refreshes Masonry's keyboard-focus fallback after rebuilding, s
 
 ## Build
 
-Install the Rust `wasm32-unknown-unknown` target and wasm-bindgen-cli 0.2.127,
-then run `./web/build.sh` from the repository root. `RUNEBENDER_WASM_BINDGEN`
-can select a matching executable without replacing the system installation.
-Serve `web/` over HTTP and open `index.html`. Deploy only `index.html`,
-`app.js`, `pkg/`, `licenses/`, `manifest.webmanifest`, and `icons/`;
-build caches and source font JSON are not separate runtime requests.
+Install Python 3.11 or later, the Rust `wasm32-unknown-unknown` target, and wasm-bindgen-cli 0.2.127, then run `./web/build.sh` from the repository root.
+`RUNEBENDER_WASM_BINDGEN` can select a matching executable without replacing the system installation.
+Normal preparation and builds validate the browser's Xilem pins and never rewrite tracked Cargo manifests.
+Serve `web/` over HTTP and open `index.html`.
+Deploy only `index.html`, `app.js`, `pkg/`, `licenses/`, `manifest.webmanifest`, and `icons/`; build caches and source font JSON are not separate runtime requests.
 
 ## Installable web app
 
@@ -67,14 +66,25 @@ own manifest in the website repository and wraps this page in an iframe.
 ## Framework compatibility
 
 Native builds continue to use the pinned Xilem revision unchanged.
-`prepare.py` reads that pin from the root lockfile, copies the same revision's
-`xilem_masonry` adapter into the ignored browser build directory, and pins
-`web/Cargo.toml` and `web/compat/Cargo.toml` to it. Its Rust source is unchanged.
-The generated manifest removes its unconditional Tokio `rt-multi-thread` feature,
-which cannot compile for WASM. After the desktop pin moves, run
-`python3 web/prepare.py && cargo check --manifest-path web/Cargo.toml --target wasm32-unknown-unknown`
-once to refresh `web/Cargo.lock`; `./web/build.sh` always passes `--locked`. This host uses a current-thread context and does not start desktop
-async task pumps. `compat/` supplies the re-exports used by the desktop source.
+`prepare.py` uses locked Cargo metadata to locate the desktop pin and copies that exact revision's `xilem_masonry` adapter into the ignored `web/target/xilem_masonry` directory.
+Its Rust source is unchanged.
+The generated manifest removes its unconditional Tokio `rt-multi-thread` feature, which cannot compile for WASM.
+Preparation validates that both `web/Cargo.toml` and `web/compat/Cargo.toml` already match the desktop Git URL and revision.
+A mismatch stops preparation before generating the adapter and reports the expected pins without changing either tracked manifest.
+
+After intentionally moving the desktop pin, explicitly synchronize the browser manifests and refresh the browser lockfile:
+
+```sh
+python3 web/prepare.py --update-pins
+cargo check --manifest-path web/Cargo.toml --target wasm32-unknown-unknown
+```
+
+Review both manifest diffs and `web/Cargo.lock` together.
+Only `--update-pins` permits preparation to rewrite tracked manifests; `./web/build.sh` never passes that option and always builds with `--locked`.
+The updater preserves unrelated manifest text and rejects unfamiliar dependency layouts with instructions for a manual pin update.
+Run `python3 -m unittest discover -s web -p 'test_prepare.py'` for temporary-fixture coverage of matching pins, mismatches, and explicit updates without invoking Cargo.
+This host uses a current-thread context and does not start desktop async task pumps.
+`compat/` supplies the re-exports used by the desktop source.
 
 The browser is a separate Cargo workspace and lockfile so this manifest
 adaptation and browser dependencies cannot change native dependency selection.

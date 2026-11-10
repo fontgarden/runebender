@@ -25,7 +25,8 @@ impl Project {
         path: PathBuf,
         font: &norad::Font,
     ) -> Result<Self, String> {
-        let variable = super::super::persistence::ufo_codec::decode_source(font)?;
+        let variable = super::super::persistence::ufo_codec::decode_source(font)
+            .map_err(|error| error.to_string())?;
         Self::from_canonical_single_source(variable, path, false)
     }
 
@@ -34,7 +35,8 @@ impl Project {
         path: PathBuf,
         font: &norad::Font,
     ) -> Result<Self, String> {
-        let variable = super::super::persistence::ufo_codec::decode_source(font)?;
+        let variable = super::super::persistence::ufo_codec::decode_source(font)
+            .map_err(|error| error.to_string())?;
         Self::from_canonical_single_source(variable, path, true)
     }
 
@@ -74,7 +76,8 @@ impl Project {
             filenames
                 .iter()
                 .map(|filename| &source_map.get(filename).expect("checked source").0),
-        )?;
+        )
+        .map_err(|error| error.to_string())?;
         let mut inputs = BTreeMap::new();
         for filename in filenames {
             let (font, path) = source_map.remove(&filename).expect("checked source");

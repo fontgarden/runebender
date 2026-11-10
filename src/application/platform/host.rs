@@ -819,6 +819,7 @@ mod tests {
         assert!(!path.with_extension("ufo").exists());
     }
 
+    #[cfg(feature = "integration-fonts")]
     fn copy_tree(source: &std::path::Path, destination: &std::path::Path) {
         std::fs::create_dir_all(destination).expect("the destination directory is created");
         for entry in std::fs::read_dir(source).expect("the source directory is readable") {
@@ -1037,18 +1038,10 @@ mod tests {
         std::fs::remove_dir_all(path).expect("the fixture is removed");
     }
 
+    #[cfg(feature = "integration-fonts")]
     #[test]
-    #[ignore = "copies and edits the adjacent 13 MB Virtua Grotesk sources"]
     fn disposable_virtua_edit_undo_save_reopen_preserves_unrelated_data() {
-        let source = std::env::var_os("RUNEBENDER_TEST_FONTS")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../virtua-grotesk/sources")
-            });
-        assert!(
-            source.is_dir(),
-            "clone Virtua Grotesk beside this repository or set RUNEBENDER_TEST_FONTS"
-        );
+        let source = crate::integration_fonts::dir();
         let root = std::env::temp_dir().join(format!(
             "runebender-xilem-virtua-trial-{}-{}",
             std::process::id(),
@@ -1123,18 +1116,6 @@ mod tests {
             workspace.font.master_name(workspace.font.active()),
             "Regular"
         );
-        let original_fonts: Vec<norad::Font> = workspace
-            .font
-            .project
-            .document_sources()
-            .map(|source| {
-                workspace
-                    .font
-                    .project
-                    .encode_ufo_source(source.id())
-                    .unwrap()
-            })
-            .collect();
 
         let index = workspace.font.index_of("R").expect("Virtua contains R");
         workspace.open_glyph(index);
@@ -1180,6 +1161,21 @@ mod tests {
             original_anchor_count + 1
         );
 
+        // Anchor edits can realign dependent composites.
+        // Save/reopen must preserve the complete post-edit document, including those changes.
+        let expected_fonts: Vec<norad::Font> = workspace
+            .font
+            .project
+            .document_sources()
+            .map(|source| {
+                workspace
+                    .font
+                    .project
+                    .encode_ufo_source(source.id())
+                    .unwrap()
+            })
+            .collect();
+
         assert!(workspace.save());
         assert!(!workspace.modified);
         assert_eq!(
@@ -1195,19 +1191,12 @@ mod tests {
         assert_eq!(reopened_r.width, original_width + 4.0);
         assert_eq!(reopened_r.anchors.len(), original_anchor_count + 1);
 
-        for (master_index, original) in original_fonts.into_iter().enumerate() {
+        for (master_index, expected) in expected_fonts.into_iter().enumerate() {
             let source = reopened.font.project.source_id(master_index).unwrap();
-            let mut normalized = reopened.font.project.encode_ufo_source(source).unwrap();
-            if master_index == 0 {
-                let original_r = original
-                    .get_glyph("R")
-                    .expect("the original Regular R exists")
-                    .clone();
-                normalized.default_layer_mut().insert_glyph(original_r);
-            }
+            let actual = reopened.font.project.encode_ufo_source(source).unwrap();
             assert_eq!(
-                normalized, original,
-                "only the edited Regular R may differ after the round trip"
+                actual, expected,
+                "save/reopen preserves every edited and unrelated glyph"
             );
         }
 
@@ -2425,7 +2414,8 @@ mod tests {
                 norad::Font::new(),
                 "/dev/null/runebender-test.ufo".into(),
             ),
-        );
+        )
+        .expect("valid source fixture");
         let mut workspace = Workspace::from_model(FontModel::from_project(project))
             .expect("the in-memory fixture opens");
         workspace.modified = true;

@@ -971,7 +971,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("CompositionProposal.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         (project, SourceId(0))
     }
 
@@ -998,7 +999,8 @@ mod tests {
                 .unwrap()
                 .insert_glyph(candidate);
             let mut project =
-                Project::from_source(SourceInput::from_font(font, "ReviewEligibility.ufo".into()));
+                Project::from_source(SourceInput::from_font(font, "ReviewEligibility.ufo".into()))
+                    .expect("valid source fixture");
             let source = SourceId(0);
             let revision = project.document_revision();
             let eligibility = validate_project_glyph_install(&project, source, "review", "a", true);
@@ -1046,7 +1048,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font(),
             PathBuf::from("PointMoves.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let mut project = project;
         let source = SourceId(0);
         let moves = [PointMoves {
