@@ -545,6 +545,11 @@ fn read_contours(path: &Value) -> Vec<(Vec<ContourPoint>, bool)> {
         else {
             continue;
         };
+        // The file names the end point; it cannot pass the points that exist.
+        let end = end.min(types.len().saturating_sub(1));
+        if end < start {
+            continue;
+        }
         let points = (start..=end)
             .filter_map(|index| {
                 let kind = match types.get(index)? & 0x07 {

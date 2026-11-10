@@ -38,6 +38,7 @@ pub(crate) fn run(
         // RUNEBENDER_PROOF_SAMPLE=1 proposes a wider open glyph through the
         // live tools, so a headless render of the proof view has a proposal
         // to compare.
+        #[cfg(unix)]
         if std::env::var("RUNEBENDER_PROOF_SAMPLE").as_deref() == Ok("1") {
             proof_sample(workspace);
         }
@@ -65,7 +66,6 @@ pub(crate) fn run(
     {
         let mut sess = (*workspace.session).clone();
         sess.select_all();
-        workspace.selected_points = sess.selection_bounds().map(|_| 999).unwrap_or(0);
         workspace.selected_points = sess.point_count();
         workspace.session = Arc::new(sess);
         workspace.refresh_coord_bufs();
@@ -175,11 +175,6 @@ pub(crate) fn run(
                 workspace.sync_live_graph_presentation();
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
-            eprintln!(
-                "DEBUG graph wait: images={} note={}",
-                workspace.graph.proof_images.len(),
-                workspace.note
-            );
             if std::env::var_os("RUNEBENDER_GRAPH_EXPANDED").is_some() {
                 workspace.graph.expanded = workspace.live_graph.as_ref().and_then(|state| {
                     let graph = state.session.snapshot().graph;
@@ -405,6 +400,7 @@ impl<D: AppDriver> AppDriver for WindowAppearanceDriver<D> {
 
 /// Propose the open glyph 64 units wider through the live tools, as a
 /// model would, so the proof view has something to compare.
+#[cfg(unix)]
 fn proof_sample(app: &mut crate::application::workspace::Workspace) {
     use runebender::automation::agent::ToolCall;
     let Some(source) = app.font.project.source_id(app.font.active()) else {

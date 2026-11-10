@@ -423,8 +423,10 @@ fn declared_layers(files: &HashMap<&str, &[u8]>) -> Result<Vec<(String, String)>
     else {
         return Err("layercontents.plist: no layer uses the glyphs directory".into());
     };
+    // Only the default layer moves; the other layers keep their order.
     let mut ordered = entries;
-    ordered.rotate_left(default);
+    let default = ordered.remove(default);
+    ordered.insert(0, default);
     Ok(ordered)
 }
 

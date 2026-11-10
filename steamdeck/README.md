@@ -25,7 +25,7 @@ It shows up in Gaming Mode with the other games, with its own library art.
 ## Build it
 
 SteamOS has no compiler and its root file system is read-only.
-The build runs in an Arch container, and the binary runs on the host.
+The build runs in a distrobox container, and the binary runs on the host.
 
 ```sh
 rsync -az --exclude target --exclude .git ./ deck@<address>:~/Games/runebender/
@@ -36,7 +36,7 @@ cd ~/Games/runebender && steamdeck/build.sh
 
 The first build installs packages, the Rust 1.96 toolchain, and every crate.
 It takes a long time on the Deck.
-Later builds reuse the container and the `target/` folder.
+Later builds reuse the container and the `target-rb/` folder.
 
 ## Add it to Steam
 

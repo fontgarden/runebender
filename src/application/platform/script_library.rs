@@ -132,7 +132,11 @@ impl ScriptLibrary {
             }
             match self.load(&name) {
                 Ok(document) => scripts.push(document.metadata),
-                Err(ScriptLibraryError::NotFound | ScriptLibraryError::InvalidUtf8) => {}
+                Err(
+                    ScriptLibraryError::NotFound
+                    | ScriptLibraryError::InvalidUtf8
+                    | ScriptLibraryError::TooLarge,
+                ) => {}
                 Err(error) => return Err(error),
             }
         }
@@ -329,6 +333,9 @@ fn validate_name(name: &str) -> Result<(), ScriptLibraryError> {
 fn sync_directory(path: &Path) -> Result<(), ScriptLibraryError> {
     #[cfg(unix)]
     File::open(path)?.sync_all()?;
+    // Windows cannot open a directory as a file to flush it.
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 

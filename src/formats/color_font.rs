@@ -180,7 +180,8 @@ pub fn parse_hex_color(text: &str) -> Option<[f64; 4]> {
         return None;
     }
     let byte = |i: usize| {
-        u8::from_str_radix(&hex[i..i + 2], 16)
+        // `get` rather than slicing: a non-ASCII character can span the boundary.
+        u8::from_str_radix(hex.get(i..i + 2)?, 16)
             .ok()
             .map(|v| v as f64 / 255.0)
     };
@@ -195,6 +196,16 @@ pub fn parse_hex_color(text: &str) -> Option<[f64; 4]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn non_ascii_hex_is_rejected_without_a_panic() {
+        assert_eq!(parse_hex_color("#aé€"), None);
+        assert_eq!(parse_hex_color("éééééé"), None);
+        assert_eq!(
+            parse_hex_color("#ff000080"),
+            Some([1.0, 0.0, 0.0, 128.0 / 255.0])
+        );
+    }
 
     #[test]
     fn color_lib_keys_roundtrip() {

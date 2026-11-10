@@ -490,6 +490,7 @@ fn stage_generated_files(root: &Path, result: ConversionResult) -> Result<PathBu
         ([], [ufo]) => Ok(ufo.clone()),
         ([], []) => Err("conversion produced no UFO".into()),
         ([], _) => Err("conversion produced multiple UFOs without a Designspace".into()),
+        ([_], []) => Err("conversion produced a Designspace without a UFO".into()),
         (_, _) => Err("conversion produced multiple Designspace files".into()),
     }
 }

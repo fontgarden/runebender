@@ -50,6 +50,18 @@ pub(in crate::application::cli) fn bolden(
             "no reference glyph is drawn and compatible in both masters",
         );
     };
+    if check {
+        return bolden_check(
+            &light,
+            &heavy,
+            &light_layer,
+            &heavy_layer,
+            offset,
+            glyphs,
+            limit,
+            json,
+        );
+    }
     // What is left to do: glyphs whose heavier master still matches
     // the lighter one point for point.
     let todo: Vec<String> = match glyphs {
@@ -74,18 +86,6 @@ pub(in crate::application::cli) fn bolden(
             .map(str::to_owned)
             .collect(),
     };
-    if check {
-        return bolden_check(
-            &light,
-            &heavy,
-            &light_layer,
-            &heavy_layer,
-            offset,
-            glyphs,
-            limit,
-            json,
-        );
-    }
     let mut rows = Vec::new();
     for name in todo.iter().take(limit) {
         let Some(glyph) = light.document_layer(name, &light_layer) else {

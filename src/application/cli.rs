@@ -20,8 +20,8 @@ mod theme;
 
 use agent_commands::agent_call;
 use font_commands::{
-    bolden, collapse_metaballs, compose_cmd, features_cmd, info, proof, proposal_discard,
-    proposal_install, proposal_list, propose,
+    bolden, collapse_metaballs, compile_cmd, compose_cmd, features_cmd, info, proof,
+    proposal_discard, proposal_install, proposal_list, propose,
 };
 use graph_commands::{graph_check, graph_run, graph_types};
 use mcp::mcp_serve;
@@ -58,16 +58,12 @@ fn mcp_install_cmd(clients: &[McpClient], dry_run: bool, json: bool) -> i32 {
                 );
             } else {
                 for report in &reports {
-                    let verb = match (report["written"] == true, report["changed"] == true) {
+                    let verb = match (report.written, report.changed) {
                         (true, _) => "wrote",
                         (false, true) => "would write",
                         (false, false) => "already set in",
                     };
-                    println!(
-                        "{}: {verb} {}",
-                        report["client"].as_str().unwrap_or_default(),
-                        report["path"].as_str().unwrap_or_default()
-                    );
+                    println!("{}: {verb} {}", report.client, report.path);
                 }
                 println!("server: {} mcp --live", binary.display());
             }
@@ -406,7 +402,7 @@ enum GraphAction {
         #[arg(long)]
         tool: Option<PathBuf>,
         /// Where models live. Defaults to `$RUNEBENDER_MODELS`, then
-        /// `~/.runebender/models`.
+        /// `~/Runebender/models`.
         #[arg(long)]
         models: Option<PathBuf>,
         /// Run every node, cached or not.
@@ -510,32 +506,7 @@ pub(crate) fn run() -> Startup {
     };
     let code = match &command {
         Command::Theme { action } => theme_command(action, json),
-        Command::Compile { source, out } => {
-            let result = (|| -> Result<usize, String> {
-                use std::io::Write as _;
-                let project = Project::load(source)?;
-                let compiled = project.compile()?;
-                let mut file = std::fs::OpenOptions::new()
-                    .create_new(true)
-                    .write(true)
-                    .open(out)
-                    .map_err(|error| error.to_string())?;
-                file.write_all(&compiled.bytes)
-                    .map_err(|error| error.to_string())?;
-                Ok(compiled.bytes.len())
-            })();
-            match result {
-                Ok(bytes) => {
-                    if json {
-                        println!("{}", json!({"ok":true,"output":out,"bytes":bytes}));
-                    } else {
-                        println!("Compiled {} ({bytes} bytes)", out.display());
-                    }
-                    0
-                }
-                Err(error) => fail(json, exit::USAGE, &error),
-            }
-        }
+        Command::Compile { source, out } => compile_cmd(source, out, json),
         Command::Info { source, glyphs } => info(source, *glyphs, json),
         Command::Proof {
             source,
@@ -671,7 +642,11 @@ pub(crate) fn run() -> Startup {
                 "{}",
                 json!({"ok": false, "error": "live sockets require Unix"})
             );
-            exit::OK
+            #[cfg(unix)]
+            let code = exit::OK;
+            #[cfg(not(unix))]
+            let code = exit::FAILED;
+            code
         }
         Command::Mcp {
             install: Some(clients),

@@ -110,10 +110,14 @@ pub(super) fn reading_view(app: &Workspace) -> impl WidgetView<Workspace> + use<
                 ),
                 page::action(
                     pal,
-                    format!(
-                        "Discard proposal ({} glyphs)",
-                        comparison.proposal_glyph_count
-                    ),
+                    if comparison.proposal_glyph_count > 1 {
+                        format!(
+                            "Discard proposal ({} glyphs)",
+                            comparison.proposal_glyph_count
+                        )
+                    } else {
+                        "Discard proposal".into()
+                    },
                     false,
                     false,
                     move |app| {

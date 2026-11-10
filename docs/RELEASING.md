@@ -90,7 +90,7 @@ python3 scripts/release.py publish OUT --website ../runebender-dot-org
 ```
 
 `prepare` uses Sparkle's official `generate_appcast` tool and the Keychain key to sign the final DMG's update metadata.
-It retains the existing archive bytes, embeds the curated notes from `docs/releases/0.1.0-alpha.1.md`, and creates `release.json` and `appcast.xml`.
+It retains the existing archive bytes, embeds the curated notes from `docs/releases/<version>.md`, and creates `release.json` and `appcast.xml`.
 For isolated testing, `prepare OUT --local-test` accepts an ad-hoc candidate and marks its metadata unavailable for publication.
 That test metadata is refused by `draft` and `publish`.
 `draft` requires a clean, notarized receipt, installation-test confirmation, and passing supported-platform CI for that exact commit.

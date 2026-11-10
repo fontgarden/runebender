@@ -81,6 +81,16 @@ fn server_entry(binary: &Path) -> Value {
     })
 }
 
+/// The outcome for one client, also serialized by the CLI.
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct InstallReport {
+    pub(crate) client: &'static str,
+    pub(crate) path: String,
+    pub(crate) existed: bool,
+    pub(crate) changed: bool,
+    pub(crate) written: bool,
+}
+
 /// Writes the entry into each client's file. Returns one report per
 /// client, in order, and the first error.
 pub(crate) fn install(
@@ -88,7 +98,7 @@ pub(crate) fn install(
     dry_run: bool,
     home: &Path,
     binary: &Path,
-) -> Result<Vec<Value>, String> {
+) -> Result<Vec<InstallReport>, String> {
     let clients = if clients.is_empty() {
         &McpClient::ALL[..]
     } else {
@@ -119,13 +129,13 @@ pub(crate) fn install(
             std::fs::write(&path, &after)
                 .map_err(|error| format!("write {}: {error}", path.display()))?;
         }
-        reports.push(json!({
-            "client": client.name(),
-            "path": path.to_string_lossy(),
-            "existed": existed,
-            "changed": changed,
-            "written": changed && !dry_run,
-        }));
+        reports.push(InstallReport {
+            client: client.name(),
+            path: path.to_string_lossy().into_owned(),
+            existed,
+            changed,
+            written: changed && !dry_run,
+        });
     }
     Ok(reports)
 }
@@ -241,14 +251,14 @@ mod tests {
         std::fs::create_dir_all(&home).unwrap();
         let binary = Path::new("/opt/rb");
         let dry = install(&[McpClient::Cursor], true, &home, binary).unwrap();
-        assert_eq!(dry[0]["changed"], true);
-        assert_eq!(dry[0]["written"], false);
+        assert!(dry[0].changed);
+        assert!(!dry[0].written);
         assert!(!home.join(".cursor").exists());
         let first = install(&[], false, &home, binary).unwrap();
         assert_eq!(first.len(), 4);
-        assert!(first.iter().all(|report| report["written"] == true));
+        assert!(first.iter().all(|report| report.written));
         let second = install(&[], false, &home, binary).unwrap();
-        assert!(second.iter().all(|report| report["changed"] == false));
+        assert!(second.iter().all(|report| !report.changed));
         let codex = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap();
         assert!(codex.contains("command = \"/opt/rb\""));
         let _ = std::fs::remove_dir_all(&home);

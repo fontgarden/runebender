@@ -15,6 +15,22 @@ name = "runebender"
 path = "src/main.rs"
 required-features = ["application"]
 
+[[example]]
+name = "macos_vibrancy"
+required-features = ["application"]
+
+[[test]]
+name = "cli"
+required-features = ["application"]
+
+[[test]]
+name = "live_agent"
+required-features = ["application"]
+
+[[test]]
+name = "live_fixture"
+required-features = ["application"]
+
 [features]
 default = ["application"]
 macos-updater = ["application", "dep:sparkle-updater"]
@@ -120,6 +136,8 @@ members = ["crates/nufo"]
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
+# LINEBENDER LINT SET - Cargo.toml - v8
+# See https://linebender.org/wiki/canonical-lints/
 keyword_idents_2024 = "forbid"
 non_ascii_idents = "forbid"
 non_local_definitions = "forbid"
@@ -164,3 +182,4 @@ cargo_common_metadata = "warn"
 negative_feature_names = "warn"
 redundant_feature_names = "warn"
 wildcard_dependencies = "warn"
+# END LINEBENDER LINT SET

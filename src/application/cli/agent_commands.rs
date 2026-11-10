@@ -394,6 +394,8 @@ fn agent_call_source(
             {
                 result["svg_content"] = json!(svg);
             }
+            // The page travels in the result; the scratch file has no other reader.
+            let _ = std::fs::remove_file(&out);
             result
         }
         "propose_edits" => {
@@ -492,7 +494,6 @@ fn agent_call_source(
             ]),
             None => json!({ "ok": false, "error": "task is required" }),
         },
-        "docs" => docs_search(&text("query").unwrap_or_default()),
         other => json!({ "ok": false, "error": format!("no tool named {other}") }),
     }
 }

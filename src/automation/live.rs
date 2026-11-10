@@ -864,7 +864,7 @@ fn handle(project: &mut Project, name: &str, args: &Value) -> Result<Value, Stri
                 .get("reason")
                 .and_then(Value::as_str)
                 .map(str::trim)
-                .filter(|reason| (3..=400).contains(&reason.len()))
+                .filter(|reason| (3..=400).contains(&reason.chars().count()))
                 .ok_or("reason is required, 3 to 400 characters")?;
             if reason.chars().any(|c| c.is_control()) {
                 return Err("reason must be one line without control characters".into());

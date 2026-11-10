@@ -17,6 +17,34 @@ pub(super) use proposals::{
     find_font_ml, proposal_discard, proposal_install, proposal_list, propose,
 };
 
+/// Compile a single-source or variable project without overwriting an existing output.
+pub(super) fn compile_cmd(source: &Path, out: &Path, json: bool) -> i32 {
+    let result = (|| -> Result<usize, String> {
+        use std::io::Write as _;
+        let project = Project::load(source)?;
+        let compiled = project.compile()?;
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(out)
+            .map_err(|error| error.to_string())?;
+        file.write_all(&compiled.bytes)
+            .map_err(|error| error.to_string())?;
+        Ok(compiled.bytes.len())
+    })();
+    match result {
+        Ok(bytes) => {
+            if json {
+                println!("{}", json!({"ok":true,"output":out,"bytes":bytes}));
+            } else {
+                println!("Compiled {} ({bytes} bytes)", out.display());
+            }
+            exit::OK
+        }
+        Err(error) => fail(json, exit::USAGE, &error),
+    }
+}
+
 /// Load one canonical source for a headless command.
 fn open_project(path: &Path, json: bool) -> Result<Project, i32> {
     let project = Project::load(path)

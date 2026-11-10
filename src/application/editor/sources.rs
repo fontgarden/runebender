@@ -3,14 +3,9 @@
 
 //! Source/layer authoring commands and refresh of source-dependent editor state.
 
-use std::sync::Arc;
-
 use runebender::font::variable::LayerId;
 
-use crate::application::{
-    view::canvas::grid::cells_of,
-    workspace::{Mode, Workspace},
-};
+use crate::application::workspace::{Mode, Workspace};
 
 impl Workspace {
     pub(crate) fn change_sources(&mut self, action: &str) {
@@ -111,7 +106,6 @@ impl Workspace {
             .collect();
         self.font.rebuild_cache();
         self.refresh_source_views();
-        self.cells = Arc::new(cells_of(&self.font, &self.palette));
         self.modified = true;
         self.note = match action {
             "add" => "Added an interpolated source; Save writes its new UFO",

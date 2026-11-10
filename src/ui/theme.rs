@@ -599,7 +599,7 @@ const MARK_LABELS: [&str; 7] = ["red", "orange", "yellow", "green", "blue", "pur
 
 fn parse_color(value: &str) -> Option<ColorRgba> {
     if let Some(hex) = value.strip_prefix('#') {
-        let byte = |start| u8::from_str_radix(&hex[start..start + 2], 16).ok();
+        let byte = |start| u8::from_str_radix(hex.get(start..start + 2)?, 16).ok();
         return match hex.len() {
             6 => Some(ColorRgba::rgb(byte(0)?, byte(2)?, byte(4)?)),
             8 => Some(ColorRgba::rgba(byte(0)?, byte(2)?, byte(4)?, byte(6)?)),

@@ -109,36 +109,43 @@ if (output) fs.mkdirSync(output, { recursive: true });
       const beforeZoom = (await markers()).height;
       await page.mouse.move(720, 320); await page.mouse.wheel(0, -40); await settle();
       assert.ok((await markers()).height > beforeZoom * 1.05, 'wheel zoom changes painted outline size');
-      await page.mouse.move(245, 350); await settle();
+      // The gap between the glyph panel and the canvas, at 1280 x 800 in the Gray theme.
+      const splitter = 257;
+      await page.mouse.move(splitter, 350); await settle();
       assert.equal(await page.locator('canvas').count(), process.env.RUNEBENDER_IFRAME ? 0 : 1);
       await page.mouse.down(); await settle();
       assert.equal(await frame.locator('canvas').evaluate(c => c.style.cursor), 'ew-resize', 'active splitter forwards the native resize cursor');
-      await page.mouse.move(305, 350, { steps: 12 }); await page.mouse.up(); await settle();
+      await page.mouse.move(splitter + 60, 350, { steps: 12 }); await page.mouse.up(); await settle();
       const divider = x => frame.evaluate(x => {
         const s = devicePixelRatio, c = document.querySelector('canvas');
         const data = c.getContext('2d').getImageData(Math.floor(x * s), Math.round(140 * s), 1, Math.round(360 * s)).data;
         let dark = 0; for (let i = 0; i < data.length; i += 4) if (data[i] < 150) dark++;
         return dark / (data.length / 4);
       }, x);
-      assert.ok(await divider(305) > .95, 'drag moves the painted divider by 60 logical pixels');
+      assert.ok(await divider(splitter + 60) > .95, 'drag moves the painted divider by 60 logical pixels');
       await shot('resized-editor');
-      await page.mouse.move(305, 350); await page.mouse.down();
-      await page.mouse.move(245, 350, { steps: 12 }); await page.mouse.up(); await settle();
-      assert.ok(await divider(245) > .95, 'drag restores the original panel width');
+      await page.mouse.move(splitter + 60, 350); await page.mouse.down();
+      await page.mouse.move(splitter, 350, { steps: 12 }); await page.mouse.up(); await settle();
+      assert.ok(await divider(splitter) > .95, 'drag restores the original panel width');
+      let previousSurface;
       for (const theme of ['light', 'light-gray', 'dark', 'dark-gray', 'strawberry', 'campfire', 'gray']) {
         await setTheme(theme); await settle();
         assert.ok((await markers()).count > 30, `${theme}: outline survives theme changes`);
         const surface = await frame.evaluate(() => document.querySelector('canvas').getContext('2d')
           .getImageData(Math.round(2 * devicePixelRatio), Math.round(35 * devicePixelRatio), 1, 1).data[0]);
+        // Gray's window background sits with the dark themes since the floating panels,
+        // so it is checked only against the theme before it.
         assert.ok(['light', 'light-gray', 'strawberry'].includes(theme) ? surface > 200
-          : ['dark', 'dark-gray', 'campfire'].includes(theme) ? surface < 80 : surface > 100 && surface < 200,
+          : ['dark', 'dark-gray', 'campfire'].includes(theme) ? surface < 80 : surface !== previousSurface,
           `${theme}: actual painted surface changes with the menu selection`);
+        previousSurface = surface;
         await page.mouse.click(112, 15); await settle();
         const menuSurfaces = await frame.evaluate(() => {
           const canvas = document.querySelector('canvas'), scale = devicePixelRatio;
           const pixel = (x, y) => [...canvas.getContext('2d').getImageData(
             Math.round(x * scale), Math.round(y * scale), 1, 1).data.slice(0, 3)];
-          return { header: pixel(800, 10), popup: pixel(100, 32) };
+          // The left margin of the second row: the first row opens highlighted.
+          return { header: pixel(800, 10), popup: pixel(100, 73) };
         });
         assert.deepEqual(menuSurfaces.popup, menuSurfaces.header,
           `${theme}: dropdown uses the header surface`);
@@ -174,7 +181,7 @@ if (output) fs.mkdirSync(output, { recursive: true });
       assert.equal((await state()).mode, 'overview', 'Escape from the canvas opens Font overview');
       // Paste and IME events are dispatched into the DOM input bridge, never the model.
       for (const [kind, text] of [['paste', 'ampersand'], ['composition', 'exclam']]) {
-        await page.mouse.click(70, 86); await settle(); await page.keyboard.press('Control+a');
+        await page.mouse.click(70, 102); await settle(); await page.keyboard.press('Control+a');
         assert.equal(await frame.evaluate(() => document.activeElement.id), 'text-input', 'text field owns browser input focus');
         if (kind === 'paste') assert.equal(await frame.evaluate(() => {
           const event = new KeyboardEvent('keydown', { key: 'v', code: 'KeyV', ctrlKey: true, bubbles: true, cancelable: true });

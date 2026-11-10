@@ -210,10 +210,6 @@ pub(in crate::application::cli) struct ProofContent {
 }
 
 /// Return an actual MCP image alongside proof metadata, without external resources.
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "Raster dimensions are rounded and bounded to 2048 pixels"
-)]
 pub(in crate::application::cli) fn proof_content(mut value: serde_json::Value) -> ProofContent {
     use base64::Engine as _;
     let mut content = Vec::new();

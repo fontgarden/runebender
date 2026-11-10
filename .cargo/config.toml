@@ -1,4 +1,4 @@
-# Supply-chain cooldown (mirrors the .npmrc minimum-release-age policy):
+# Supply-chain cooldown:
 # refuse dependency versions published within the last 7 days, so a freshly
 # compromised release is not pulled in before it is caught and yanked.
 #

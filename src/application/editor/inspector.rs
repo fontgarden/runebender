@@ -832,6 +832,7 @@ impl Workspace {
                 });
                 self.overview_redo.clear();
                 self.modified = true;
+                self.refresh_glyph_entry(i);
             }
         }
     }

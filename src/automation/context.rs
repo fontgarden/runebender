@@ -125,6 +125,9 @@ pub fn personal_dirs() -> Vec<PathBuf> {
 /// repository, the font's folder and its parent only, so a loose font in
 /// a home folder never scans the whole home.
 pub fn font_dirs(font: &Path) -> Vec<PathBuf> {
+    // A bare relative name has an empty parent, which cannot be listed.
+    let absolute = std::path::absolute(font).unwrap_or_else(|_| font.to_path_buf());
+    let font = absolute.as_path();
     let start = if font.is_dir() && font.extension().is_none_or(|e| e != "ufo") {
         font.to_path_buf()
     } else {
@@ -173,7 +176,19 @@ fn read_dir(dir: &Path, layer: Layer) -> Vec<ContextFile> {
                     meta.len(),
                     MAX_FILE_BYTES
                 ),
-                _ => std::fs::read_to_string(&path).ok()?,
+                // A pipe or device reports no length, so only regular files are read,
+                // and never past the limit.
+                Ok(meta) if !meta.is_file() => return None,
+                _ => {
+                    use std::io::Read as _;
+                    let mut text = String::new();
+                    std::fs::File::open(&path)
+                        .ok()?
+                        .take(MAX_FILE_BYTES)
+                        .read_to_string(&mut text)
+                        .ok()?;
+                    text
+                }
             };
             Some(ContextFile {
                 layer,

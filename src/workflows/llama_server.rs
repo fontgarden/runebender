@@ -364,6 +364,7 @@ impl LlamaServer {
                 Ok(None) => {}
                 Err(error) => {
                     let _ = child.kill();
+                    let _ = child.wait();
                     return Err(format!("llama-server status: {error}"));
                 }
             }
@@ -642,6 +643,7 @@ mod tests {
         assert!(error.contains("expected a JSON object"), "{error}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn early_exit_and_silence_are_errors_with_the_log_named() {
         let dir = scratch("fail");

@@ -3,8 +3,7 @@
 
 //! Everything that reads a font to answer a question.
 //!
-//! Measurement, curvature, Unicode categories, and the glyph search
-//! language.
+//! Measurement, curvature, and Unicode categories.
 //! Nothing here changes a font.
 
 pub mod category;
@@ -13,6 +12,5 @@ pub mod dimensions;
 pub mod glyph;
 pub mod measure;
 pub mod report;
-pub mod search;
 pub mod thickness;
 pub mod weight_debt;

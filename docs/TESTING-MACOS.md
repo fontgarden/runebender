@@ -77,7 +77,7 @@ Test update installation with two distinct build numbers and the same bundle ide
 Use disposable app copies and font sources; keep test feeds and test builds out of the public alpha feed.
 
 1. Launch the installed candidate and confirm that Runebender > Check for Updates… is enabled.
-   With the published empty alpha feed, a manual check should report that no update is available.
+   With the published alpha feed and no newer build, a manual check should report that no update is available.
 2. Repeat the manual check with networking unavailable and confirm that an understandable error leaves the editor usable.
 3. Configure an isolated older test app to read a private test feed containing the exact newer candidate DMG and its generated EdDSA signature.
    Confirm that startup offers the newer build and that the menu can request the same update.

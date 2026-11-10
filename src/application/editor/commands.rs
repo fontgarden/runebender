@@ -487,6 +487,14 @@ impl Workspace {
             self.note = "Joining: no positional forms to check".into();
             return;
         }
+        if bands.is_empty() {
+            // Every positional form is empty, so there is no band to compare against.
+            let count = broken.len();
+            self.multi_selected = Arc::new(broken.into_iter().collect());
+            self.selected = None;
+            self.note = format!("Joining: {count} form(s) have no joining stroke (selected)");
+            return;
+        }
         let median = |mut values: Vec<f64>| {
             values.sort_by(f64::total_cmp);
             values[values.len() / 2]

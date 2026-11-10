@@ -632,7 +632,9 @@ impl Project {
                     .expect("finished result");
                 if let Some(font) = cache.queued.take() {
                     cache.pending = Some(PreviewJob::start(font));
-                } else {
+                } else if cache.wanted.is_none() {
+                    // A pending debounce means the key changed after this job started,
+                    // so its result belongs to an older revision.
                     cache.result = Some(result);
                 }
             }

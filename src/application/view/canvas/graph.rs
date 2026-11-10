@@ -1675,6 +1675,8 @@ impl<F: Fn(&mut Workspace, GraphEvent) + 'static> View<Workspace, (), ViewCtx> f
                 let (editors, area_ids, _) = content_children(&self.content, self.palette.text);
                 element.widget.code_editors = editors;
                 element.widget.code_area_ids = area_ids;
+                // New editors start at the unscaled size; the next layout sets the zoomed one.
+                element.widget.code_font_size = 0.0;
                 for (&node, &area_id) in &element.widget.code_area_ids {
                     ctx.with_id(ViewId::new(u64::from(node)), |ctx| {
                         ctx.record_action_source(area_id);

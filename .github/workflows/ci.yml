@@ -29,6 +29,8 @@ jobs:
           components: rustfmt
       - name: cargo fmt
         run: cargo fmt --all --check
+      - name: Browser adapter formatting
+        run: rustfmt --check --edition 2024 web/compat/src/lib.rs
       - name: Release publication gates
         run: |
           python3 scripts/test_release.py
@@ -72,6 +74,10 @@ jobs:
         with:
           python-version: "3.14"
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            web -> target
       - name: clippy
         run: cargo clippy --workspace --all-targets --locked
       - name: Check native macOS updater
@@ -85,7 +91,9 @@ jobs:
       - name: Browser clippy
         if: runner.os == 'Linux'
         env:
-          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS: -C target-feature=+simd128
+          # RUSTFLAGS replaces target-specific flags, so the SIMD feature that web/build.sh
+          # ships must be repeated here beside the job's warning policy.
+          RUSTFLAGS: -D warnings -C target-feature=+simd128
         run: >-
           cargo clippy --manifest-path web/Cargo.toml --locked
           --target wasm32-unknown-unknown --no-deps -- -D warnings
@@ -108,6 +116,62 @@ jobs:
           fi
       - name: build
         run: cargo build --workspace --release --locked
+
+  browser:
+    name: browser editor
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: eliheuer/virtua-grotesk
+          ref: 018488ed9499b7f2c18a249f5406797fc6a20e1d
+          path: test-fonts
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_STABLE_VER }}
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: web -> target
+      # web/build.sh refuses any other wasm-bindgen version.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.127
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build the browser editor
+        run: ./web/build.sh
+      - name: Install pinned Playwright and Chromium
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Browser checks
+        env:
+          RUNEBENDER_TEST_FONTS: ${{ github.workspace }}/test-fonts/sources
+          RUNEBENDER_PROOFS: ${{ github.workspace }}/browser-proofs
+        run: |
+          python3 -m http.server 4326 --bind 127.0.0.1 --directory web > /dev/null 2>&1 &
+          for attempt in $(seq 1 30); do
+            curl --silent --fail --output /dev/null http://127.0.0.1:4326/ && break
+            sleep 1
+          done
+          node web/quality.cjs
+          node web/folder.cjs
+          node web/hoi-editing.cjs
+          node web/hoi-preservation.cjs
+          node web/menu-appearance.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-proofs
+          path: browser-proofs/
+          if-no-files-found: ignore
 
   advisories:
     name: security advisories

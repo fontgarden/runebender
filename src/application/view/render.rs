@@ -341,11 +341,6 @@ pub(crate) fn app_logic(app: &mut Workspace) -> impl WidgetView<Workspace> + use
     }
     let pal = &app.palette;
 
-    // Left column: category sidebar in overview only. In the editor the
-    // tools live in the header, so the left column collapses.
-    let _editing_mode = matches!(app.mode, Mode::Editor(_));
-    let _ = &app.multi_selected;
-
     // The header shares the window ground. Each workspace column is an inset
     // panel with its own content and footer.
     let body = match app.mode {

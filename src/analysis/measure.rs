@@ -304,14 +304,17 @@ fn emit_scan(
     out: &mut Vec<Measurement>,
 ) {
     coords.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let mut kept: Vec<(f64, bool)> = Vec::with_capacity(coords.len());
-    for &(c, curved) in coords.iter() {
-        match kept.last_mut() {
-            Some(last) if c - last.0 < 2.0 => last.1 = last.1 || curved,
-            _ => kept.push((c, curved)),
+    let mut kept = 0;
+    for index in 0..coords.len() {
+        let (coordinate, curved) = coords[index];
+        if kept > 0 && coordinate - coords[kept - 1].0 < 2.0 {
+            coords[kept - 1].1 |= curved;
+        } else {
+            coords[kept] = (coordinate, curved);
+            kept += 1;
         }
     }
-    for w in kept.windows(2) {
+    for w in coords[..kept].windows(2) {
         let gap = w[1].0 - w[0].0;
         if gap < MIN_LEN || !(w[0].1 || w[1].1) {
             continue;
@@ -434,7 +437,13 @@ pub fn colored_strokes(paths: &[Path]) -> Vec<ColoredStroke> {
         if on.len() < 2 {
             continue;
         }
-        for k in 0..on.len() {
+        // An open contour has no segment from its last point back to its first.
+        let segments = if path.is_closed() {
+            on.len()
+        } else {
+            on.len() - 1
+        };
+        for k in 0..segments {
             let a = on[k];
             let b = on[(k + 1) % on.len()];
             // Off-curve points strictly between the two on-curve anchors.
@@ -517,31 +526,29 @@ pub fn side_bearings(paths: &[Path], advance: f64) -> Option<SideBearings> {
     for p in paths {
         p.append_to_bezpath(&mut bez);
     }
-    let points: Vec<_> = paths
+    let points = paths
         .iter()
         .flat_map(|path| path.points().as_slice())
         .filter(|point| point.is_on_curve())
-        .map(|point| point.point)
-        .collect();
-    side_bearings_from_points(&bez, &points, advance)
+        .map(|point| point.point);
+    side_bearings_from_points(&bez, points, advance)
 }
 
 /// Compute side bearings directly from one canonical ordinary layer.
 pub fn ordinary_layer_side_bearings(layer: LayerView<'_>) -> Option<SideBearings> {
-    let points: Vec<_> = layer
+    let points = layer
         .contours()
         .map(canonical_measurement_points)
         .flat_map(|contour| contour.points)
         .filter(|point| point.on_curve)
-        .map(|point| point.point)
-        .collect();
+        .map(|point| point.point);
     let bez = glyph_paths::ordinary_layer_contours_to_bezpath(layer);
-    side_bearings_from_points(&bez, &points, layer.width())
+    side_bearings_from_points(&bez, points, layer.width())
 }
 
 fn side_bearings_from_points(
     bez: &BezPath,
-    points: &[Point],
+    points: impl IntoIterator<Item = Point>,
     advance: f64,
 ) -> Option<SideBearings> {
     if bez.elements().is_empty() {
@@ -673,6 +680,66 @@ pub fn joining_band(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scan_merging_preserves_representatives_and_curved_flags() {
+        let mut crossings = [
+            (12.0, false),
+            (1.5, true),
+            (0.0, false),
+            (3.0, false),
+            (14.0, true),
+            (24.0, false),
+        ];
+        let mut measurements = Vec::new();
+        emit_scan(
+            &mut crossings,
+            50.0,
+            MeasureKind::Horizontal,
+            &mut measurements,
+        );
+        // 1.5 merges into 0, but 3 does not: merging is not transitive.
+        // 14 remains separate from 12 at the strict two-unit boundary.
+        // The straight-only gap from 3 to 12 is not a curved span.
+        assert_eq!(measurements.len(), 1);
+        assert_eq!(measurements[0].a, Point::new(14.0, 50.0));
+        assert_eq!(measurements[0].b, Point::new(24.0, 50.0));
+        assert_eq!(measurements[0].length, 10);
+
+        let mut crossings = [(0.0, false), (1.0, true), (10.0, false)];
+        measurements.clear();
+        emit_scan(
+            &mut crossings,
+            50.0,
+            MeasureKind::Vertical,
+            &mut measurements,
+        );
+        assert_eq!(measurements.len(), 1);
+        assert_eq!(measurements[0].a, Point::new(50.0, 0.0));
+        assert_eq!(measurements[0].b, Point::new(50.0, 10.0));
+    }
+
+    #[test]
+    fn side_bearing_endpoints_keep_the_first_equally_close_point() {
+        let mut outline = BezPath::new();
+        outline.move_to((0.0, 0.0));
+        outline.line_to((100.0, 0.0));
+        outline.line_to((100.0, 100.0));
+        outline.line_to((0.0, 100.0));
+        outline.close_path();
+        let points = [
+            Point::new(0.0, 100.0),
+            Point::new(0.0, 0.0),
+            Point::new(100.0, 0.0),
+            Point::new(100.0, 100.0),
+        ];
+        let bearings = side_bearings_from_points(&outline, points, 150.0).unwrap();
+        assert_eq!(bearings.y_left, 100.0);
+        assert_eq!(bearings.y_right, 0.0);
+        assert_eq!(bearings.lsb, 0);
+        assert_eq!(bearings.rsb, 50);
+        assert!(side_bearings_from_points(&BezPath::new(), points, 150.0).is_none());
+    }
 
     #[test]
     fn labels_and_popcount() {

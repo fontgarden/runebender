@@ -399,7 +399,12 @@ impl VariableData {
         &self,
         snapshot: &CanonicalSourceStructureSnapshot,
     ) -> bool {
-        self.source_structure_snapshot() == *snapshot
+        self.font.glyphs == snapshot.glyph_geometry
+            && self.glyphs == snapshot.glyphs
+            && self.source_formats == snapshot.source_formats
+            && self.source_metadata == snapshot.source_metadata
+            && self.source_ids == snapshot.source_ids
+            && self.designspace == snapshot.designspace
     }
 
     pub(super) fn restore_source_structure_if_current(

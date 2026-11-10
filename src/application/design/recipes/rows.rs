@@ -551,6 +551,18 @@ fn details(
     details_view(app, key, rows)
 }
 
+/// The collapse key of a section's details: one leaked string per distinct
+/// section key, interned so a rebuild does not allocate it again.
+fn details_key(section: &'static str) -> &'static str {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, PoisonError};
+    static KEYS: Mutex<Option<HashMap<&'static str, &'static str>>> = Mutex::new(None);
+    let mut keys = KEYS.lock().unwrap_or_else(PoisonError::into_inner);
+    keys.get_or_insert_with(HashMap::new)
+        .entry(section)
+        .or_insert_with(|| Box::leak(format!("{section} details").into_boxed_str()))
+}
+
 /// The disclosure and its rows. The collapse key is the section's with
 /// a suffix, so a section and its details fold independently.
 fn details_view(
@@ -559,9 +571,8 @@ fn details_view(
     rows: Vec<Row>,
 ) -> impl WidgetView<Workspace> + use<> {
     let pal = &app.palette;
-    // Details start closed, so the key's presence means open. One leak
-    // per distinct section key, a fixed set.
-    let key: &'static str = Box::leak(format!("{key} details").into_boxed_str());
+    // Details start closed, so the key's presence means open.
+    let key = details_key(key);
     let open = app.collapsed.contains(key);
     let disclosure = ControlStyle::new(pal, ControlKind::Disclosure);
     let inner: Vec<Box<AnyWidgetView<Workspace>>> = if open {

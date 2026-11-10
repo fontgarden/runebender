@@ -127,12 +127,12 @@ pub(in crate::font) fn layer_from_ufo(
         .iter()
         .map(|component| component.id)
         .collect::<Vec<_>>();
-    let smart_component_axes = SmartComponentAxes::take_from_lib(&mut lib)
-        .expect("UFO smart-component axes must satisfy the canonical metadata contract");
+    // File data that does not fit the typed model stays in the lib and round-trips unchanged.
+    let smart_component_axes = SmartComponentAxes::take_from_lib(&mut lib).ok().flatten();
     let smart_component_values = SmartComponentValues::take_from_lib(&mut lib, &component_order)
-        .expect("UFO smart-component values must satisfy the canonical metadata contract");
-    let smart_component_pole = SmartComponentPole::take_from_lib(&mut lib)
-        .expect("UFO smart-component poles must satisfy the canonical metadata contract");
+        .ok()
+        .flatten();
+    let smart_component_pole = SmartComponentPole::take_from_lib(&mut lib).ok().flatten();
     let hoi_intermediates = HoiIntermediates::take_from_lib(&mut lib);
     (
         layer,

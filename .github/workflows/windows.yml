@@ -15,6 +15,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: eliheuer/virtua-grotesk
+          ref: 018488ed9499b7f2c18a249f5406797fc6a20e1d
           path: test-fonts
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2

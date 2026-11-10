@@ -34,7 +34,7 @@ See [supported formats and preservation limits](https://runebender.org/docs/open
 
 ![Runebender outline editing](https://runebender.org/images/runebender-xilem-outline.png)
 
-![Runebender Nodes workflow](https://runebender.org/images/runebender-xilem-nodes.png)
+![Runebender Graph workflow](https://runebender.org/images/runebender-xilem-nodes.png)
 
 ![Runebender Arabic calligraphy editing with a glyph browser](https://runebender.org/images/runebender-xilem-nufo-glyphs.png)
 
@@ -167,7 +167,7 @@ A model's assessment is feedback, not design approval.
 
 ## External workflow worker contract
 
-`runebender nodes types --tool /path/to/font-ml --json` exposes the discovered task ports and execution policy.
+`runebender graph types --tool /path/to/font-ml --json` exposes the discovered task ports and execution policy.
 External tasks can advertise this optional block in each task returned by `tasks --json`:
 
 ```json
@@ -200,4 +200,19 @@ This initial adapter accepts ordinary contour point moves, existing anchor moves
 Changed topology, components, hyperbeziers, unsupported metadata, stale results, or out-of-scope glyphs are rejected.
 At most 16 candidates are retained, keyed by source and task, for this document session.
 An existing saved proposal for the same task must be reviewed or discarded before another model run.
-Live DAG model nodes and migration of the older disk-oriented Nodes action remain unfinished; the latter still uses its save-first path.
+Live DAG model nodes and migration of the older disk-oriented Graph action remain unfinished; the latter still uses its save-first path.
+
+## Minimum supported Rust version (MSRV)
+
+This version of Runebender compiles with Rust 1.96 and later.
+`rust-toolchain.toml` pins that version for local builds and CI.
+
+## License
+
+Runebender uses a dual license.
+You can use it under one of these licenses:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
+
+The embedded Virtua Grotesk font uses the SIL Open Font License 1.1 in [assets/fonts/VirtuaGrotesk-OFL.txt](assets/fonts/VirtuaGrotesk-OFL.txt).

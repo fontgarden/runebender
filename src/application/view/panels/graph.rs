@@ -30,7 +30,6 @@ use masonry::properties::Dimensions;
 use masonry::properties::LineBreaking;
 use masonry::properties::types::CrossAxisAlignment;
 use runebender::font::variable::SourceId;
-use runebender::formats::specimen_script::ScriptLanguage;
 use runebender::ui::graph::{
     ContentState, ImageAction, ImageContent, ImmutablePng, NodeContent, NodeContentMap,
     ScriptContent,
@@ -46,6 +45,8 @@ use xilem::view::{FlexSpacer, flex_col, portal, sized_box};
 
 #[cfg(unix)]
 use crate::application::editor::tools::graph::execution::LiveGraphPhase;
+#[cfg(unix)]
+use runebender::formats::specimen_script::ScriptLanguage;
 #[cfg(unix)]
 use runebender::workflows::graph_session::{GraphRunHandle, GraphRunStatus};
 

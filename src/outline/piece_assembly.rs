@@ -182,8 +182,9 @@ fn best_piece<'a>(
     pieces
         .iter()
         .filter(|piece| {
+            // A piece without letters would match everywhere and never advance.
             let run = &characters[at..characters.len().min(at + piece.letters.len())];
-            run == piece.letters.as_slice()
+            !piece.letters.is_empty() && run == piece.letters.as_slice()
         })
         .max_by_key(|piece| {
             let end = at + piece.letters.len();

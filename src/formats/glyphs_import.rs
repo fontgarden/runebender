@@ -572,7 +572,13 @@ fn xml_escape(s: &str) -> String {
 }
 
 fn fmt_f32(v: f32) -> String {
-    fmt_f64(v as f64)
+    if v.fract() == 0.0 {
+        fmt_f64(f64::from(v))
+    } else {
+        // The shortest text that reads back as the same f32. Widening first would print
+        // digits that the Designspace reader rejects as not round-tripping.
+        format!("{v}")
+    }
 }
 
 fn fmt_f64(v: f64) -> String {

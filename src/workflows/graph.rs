@@ -69,26 +69,6 @@ pub enum Kind {
     Path,
 }
 
-impl Kind {
-    /// Whether a value of this kind can be typed into a node, as
-    /// opposed to only arriving over a link.
-    pub fn takes_value(self) -> bool {
-        matches!(
-            self,
-            Self::Glyph
-                | Self::Glyphs
-                | Self::Number
-                | Self::Flag
-                | Self::Text
-                | Self::Parameters
-                | Self::Layer
-                | Self::Model
-                | Self::Adapter
-                | Self::Source
-        )
-    }
-}
-
 impl fmt::Display for Kind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = serde_json::to_value(self)
@@ -332,7 +312,7 @@ pub fn core_types() -> Vec<NodeType> {
         NodeType {
             name: "core.model".into(),
             title: "Model".into(),
-            help: "A model directory from ~/.runebender/models.".into(),
+            help: "A model directory from ~/Runebender/models.".into(),
             implemented: true,
             execution: NodeExecution::new(
                 NodeCachePolicy::InputFingerprint,
@@ -864,7 +844,11 @@ impl NodeGraph {
 
     /// An id no node has.
     pub fn next_id(&self) -> u32 {
-        self.nodes.iter().map(|n| n.id).max().map_or(1, |m| m + 1)
+        self.nodes
+            .iter()
+            .map(|n| n.id)
+            .max()
+            .map_or(1, |m| m.saturating_add(1))
     }
 
     /// Adds a node and returns its id.
@@ -1077,7 +1061,11 @@ impl NodeGraph {
             let id = ready.pop().unwrap_or_default();
             order.push(id);
             for &next in out.get(&id).map(Vec::as_slice).unwrap_or_default() {
+                // A duplicated node id reaches a count of zero more than once.
                 let d = indegree.entry(next).or_default();
+                if *d == 0 {
+                    continue;
+                }
                 *d -= 1;
                 if *d == 0 {
                     ready.push(next);

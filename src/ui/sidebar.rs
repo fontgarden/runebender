@@ -9,7 +9,6 @@
 //! port of runebender-web's glyphSidebarData.ts and the matching
 //! functions in Runebender.vue.
 
-use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use serde::Deserialize;
@@ -590,31 +589,6 @@ pub fn builtin_filters() -> &'static [BuiltinFilter] {
         }
         filters
     })
-}
-
-/// The targets a filter still misses in a font: no glyph carries the
-/// target's name or codepoint. Only target-bearing filters can
-/// report missing glyphs. This is the web's
-/// `missingTargetsForCharacterFilter`.
-pub fn missing_targets<'f>(
-    glyphs: &[(String, Vec<u32>)],
-    filter: &'f CharacterFilter,
-) -> Vec<&'f GlyphTarget> {
-    if filter.targets.is_empty() {
-        return Vec::new();
-    }
-    let names: HashSet<&str> = glyphs.iter().map(|(name, _)| name.as_str()).collect();
-    let codepoints: HashSet<u32> = glyphs
-        .iter()
-        .flat_map(|(_, cps)| cps.iter().copied())
-        .collect();
-    filter
-        .targets
-        .iter()
-        .filter(|target| {
-            !names.contains(target.name.as_str()) && !codepoints.contains(&target.unicode)
-        })
-        .collect()
 }
 
 /// Report whether a glyph, by name or codepoint, belongs to a

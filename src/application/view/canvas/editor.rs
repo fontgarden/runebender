@@ -3742,10 +3742,12 @@ impl Widget for EditorWidget {
                         ctx.request_render();
                     }
                     Drag::LeftLine { last_x } => {
-                        let dx_screen = at.x - *last_x;
-                        *last_x = at.x;
-                        let dx = (dx_screen / self.session.viewport.zoom).round();
+                        // Only the whole units applied are consumed, so a slow drag
+                        // keeps its remainder for the next event.
+                        let zoom = self.session.viewport.zoom;
+                        let dx = ((at.x - *last_x) / zoom).round();
                         if dx != 0.0 {
+                            *last_x += dx * zoom;
                             self.session.shift_glyph(dx);
                             ctx.request_render();
                         }
@@ -3928,6 +3930,11 @@ impl Widget for EditorWidget {
                         }
                         self.drag = Drag::None;
                         self.emit(ctx, !cancelled);
+                    }
+                    // A cancelled marquee leaves the selection as it was.
+                    Drag::Marquee { .. } if cancelled => {
+                        self.drag = Drag::None;
+                        self.emit(ctx, false);
                     }
                     Drag::Marquee {
                         start,
@@ -4619,11 +4626,11 @@ impl Widget for EditorWidget {
         Role::Canvas
     }
 
-    fn get_cursor(&self, _ctx: &QueryCtx<'_>, _pos: Point) -> CursorIcon {
+    fn get_cursor(&self, ctx: &QueryCtx<'_>, pos: Point) -> CursorIcon {
         if self.tool == Tool::Interpolation {
             return if self.hoi_drag.is_some() {
                 CursorIcon::Grabbing
-            } else if self.interpolation_hit(_pos).is_some() {
+            } else if self.interpolation_hit(ctx.to_local(pos)).is_some() {
                 CursorIcon::Pointer
             } else {
                 CursorIcon::Default

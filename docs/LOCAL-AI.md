@@ -231,7 +231,7 @@ Source: `src/workflows/graph.rs`, `src/workflows/graph_run.rs`,
 
 - File graphs are `<name>.graph.json`. Each task in `font-ml tasks --json` is a
   node `font-ml.<task>`. Unchanged runs are cached by input hash.
-- Live graphs use `live.font`, `live.fork`, `live.python`, `live.proof` and `live.apply`.
+- Live graphs use `live.font`, `live.fork`, `live.python`, `live.specimen_script`, `live.proof` and `live.apply`.
 - `graph_trace` with `local_sketch` runs the local sketch model and puts the
   result in a `live.python` recipe node.
 - Graph runs from MCP on saved files are always proposal-only.

@@ -212,7 +212,8 @@ where
         }
         if self.children.len() != prev.children.len() {
             // A changed tab set is rare; replace every child under a new generation.
-            self.teardown(state, ctx, element.reborrow_mut());
+            // The previous view owns the old children, whatever the new count is.
+            prev.teardown(state, ctx, element.reborrow_mut());
             state.generation = state.generation.wrapping_add(1);
             let (children, states) = self.build_children(ctx, app, state.generation);
             element.widget.children = children;

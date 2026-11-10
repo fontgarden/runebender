@@ -71,8 +71,9 @@ Native builds continue to use the pinned Xilem revision unchanged.
 `xilem_masonry` adapter into the ignored browser build directory, and pins
 `web/Cargo.toml` and `web/compat/Cargo.toml` to it. Its Rust source is unchanged.
 The generated manifest removes its unconditional Tokio `rt-multi-thread` feature,
-which cannot compile for WASM. After the desktop pin moves, run `./web/build.sh`
-without `--locked` once to refresh `web/Cargo.lock`. This host uses a current-thread context and does not start desktop
+which cannot compile for WASM. After the desktop pin moves, run
+`python3 web/prepare.py && cargo check --manifest-path web/Cargo.toml --target wasm32-unknown-unknown`
+once to refresh `web/Cargo.lock`; `./web/build.sh` always passes `--locked`. This host uses a current-thread context and does not start desktop
 async task pumps. `compat/` supplies the re-exports used by the desktop source.
 
 The browser is a separate Cargo workspace and lockfile so this manifest
@@ -94,7 +95,20 @@ cargo clippy --manifest-path web/Cargo.toml --locked \
   --target wasm32-unknown-unknown --no-deps -- -D warnings
 ```
 
-With Playwright installed, run `node web/quality.cjs`. The default matrix covers
+`web/package.json` pins Playwright, and CI runs every check below on each push and pull request (the `browser editor` job).
+To run them locally, install the pinned version once:
+
+```sh
+(cd web && npm ci && npx playwright install chromium)
+python3 -m http.server 4326 --bind 127.0.0.1 --directory web &
+node web/quality.cjs
+```
+
+`folder.cjs` also needs `RUNEBENDER_TEST_FONTS`.
+The checks click at fixed coordinates in the Gray theme at 1280 × 800, so a layout change can move a target.
+When a check fails on a coordinate, measure the new position before you change the assertion.
+
+The default matrix of `quality.cjs` covers
 1×, 2×, and 1.25× displays; 1000–1440px windows; density changes without reload;
 actual outline dragging and undo/redo; painted zoom; splitter cursors; themes;
 keyboard focus; paste; composition events; and the Graph canvas. It also checks

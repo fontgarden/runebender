@@ -9,6 +9,7 @@ Commands in these guides run from the repository root unless stated otherwise.
 - [Release plan and runbook](RELEASING.md): choosing a commit, packaging, signing, notarization, publishing, website downloads, and future distribution channels.
 - [Testing a macOS DMG](TESTING-MACOS.md): the everyday build, install, upgrade, and validation workflow.
 - [Changelog](CHANGELOG.md): changes being prepared and notes for published versions.
+- [0.1.0-alpha.1 release notes](releases/0.1.0-alpha.1.md): the curated notes for the GitHub release and the update feed.
 
 ## Interface and local models
 

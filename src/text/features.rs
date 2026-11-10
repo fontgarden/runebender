@@ -29,6 +29,7 @@
 //! `mkmk` wins, and nothing is added.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 #[cfg(test)]
@@ -242,18 +243,23 @@ fn generate_from_anchors(mut glyphs: Vec<FeatureGlyph>) -> Generated {
         }
         classes.push(class.clone());
         for (mark, (x, y)) in marks {
-            mark_lines.push_str(&format!("markClass {mark} <anchor {x} {y}> @MC_{class};\n"));
+            writeln!(mark_lines, "markClass {mark} <anchor {x} {y}> @MC_{class};")
+                .expect("writing to a String cannot fail");
             marks_seen.insert(mark.clone());
         }
         if let Some(bases_here) = base_side {
-            base_lookups.push_str(&format!("    lookup mark2base_{class} {{\n"));
+            writeln!(base_lookups, "    lookup mark2base_{class} {{")
+                .expect("writing to a String cannot fail");
             for (base, (x, y)) in bases_here {
-                base_lookups.push_str(&format!(
-                    "        pos base {base} <anchor {x} {y}> mark @MC_{class};\n"
-                ));
+                writeln!(
+                    base_lookups,
+                    "        pos base {base} <anchor {x} {y}> mark @MC_{class};"
+                )
+                .expect("writing to a String cannot fail");
                 bases += 1;
             }
-            base_lookups.push_str(&format!("    }} mark2base_{class};\n"));
+            writeln!(base_lookups, "    }} mark2base_{class};")
+                .expect("writing to a String cannot fail");
         }
         if let Some(marks_here) = mark_side {
             // The filtering set is every mark in play for this class:
@@ -262,21 +268,29 @@ fn generate_from_anchors(mut glyphs: Vec<FeatureGlyph>) -> Generated {
             let mut set: BTreeSet<&str> = marks.keys().map(String::as_str).collect();
             set.extend(marks_here.keys().map(String::as_str));
             let names: Vec<&str> = set.into_iter().collect();
-            filter_sets.push_str(&format!(
-                "@MFS_mark2mark_{class} = [{}];\n",
+            writeln!(
+                filter_sets,
+                "@MFS_mark2mark_{class} = [{}];",
                 names.join(" ")
-            ));
-            mark_lookups.push_str(&format!("    lookup mark2mark_{class} {{\n"));
-            mark_lookups.push_str(&format!(
-                "        lookupflag UseMarkFilteringSet @MFS_mark2mark_{class};\n"
-            ));
+            )
+            .expect("writing to a String cannot fail");
+            writeln!(mark_lookups, "    lookup mark2mark_{class} {{")
+                .expect("writing to a String cannot fail");
+            writeln!(
+                mark_lookups,
+                "        lookupflag UseMarkFilteringSet @MFS_mark2mark_{class};"
+            )
+            .expect("writing to a String cannot fail");
             for (mark, (x, y)) in marks_here {
-                mark_lookups.push_str(&format!(
-                    "        pos mark {mark} <anchor {x} {y}> mark @MC_{class};\n"
-                ));
+                writeln!(
+                    mark_lookups,
+                    "        pos mark {mark} <anchor {x} {y}> mark @MC_{class};"
+                )
+                .expect("writing to a String cannot fail");
                 stacked += 1;
             }
-            mark_lookups.push_str(&format!("    }} mark2mark_{class};\n"));
+            writeln!(mark_lookups, "    }} mark2mark_{class};")
+                .expect("writing to a String cannot fail");
         }
     }
 
@@ -391,7 +405,12 @@ pub fn write(ufo: &Path, generated: &Generated, include: bool) -> Result<(PathBu
     let path = ufo.join(GENERATED_FILE);
     std::fs::write(&path, &generated.fea).map_err(|e| format!("{}: {e}", path.display()))?;
     let fea_path = ufo.join("features.fea");
-    let existing = std::fs::read_to_string(&fea_path).unwrap_or_default();
+    // Only a missing file is empty: an unreadable one must not be overwritten.
+    let existing = match std::fs::read_to_string(&fea_path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(format!("{}: {error}", fea_path.display())),
+    };
     let present = existing.lines().any(|l| l.trim() == INCLUDE_LINE);
     if present {
         return Ok((path, true));

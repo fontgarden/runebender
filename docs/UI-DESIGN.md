@@ -48,7 +48,6 @@ Captions and titles are title case, never all caps. Nothing in the view uppercas
 | `KeyValue` | Name left, value right | Facts: steps, loss, folder |
 | `Details` | Disclosure, closed by default | Rows nobody needs every day |
 | `Slider` | Caption and a slider | A value on a range |
-| `Legacy` | A view from an older module | Only while that module moves to the vocabulary |
 
 If a feature needs a row that is not here, add it to `Row` once, with a reason in its doc comment.
 
