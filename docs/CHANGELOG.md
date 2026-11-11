@@ -15,6 +15,9 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
 ### Changed
 
 - Feature generation and live measurements use fewer temporary allocations without changing feature text or measurement ordering.
+- Decomposing components and replacing proposal geometry discard smart values belonging to removed components before projection or saving.
+  Proposal installation retains foreground values for surviving component identities, including reordered components.
+  Undo restores the original components and values together; source axes, pole selections, and unrelated glyph metadata remain intact.
 - Save As detaches Glyphs and Fontra write-back only after successfully publishing the new UFO/Designspace document.
   Later saves cannot overwrite the original foreign input.
 - Glyphs and Fontra saves preserve glyphs skipped during import while retaining intentional deletions.

@@ -422,7 +422,8 @@ impl LayerEditDraft {
     ///
     /// Existing contours and anchors retain their identities and exact metadata. Decomposed
     /// contours preserve source names and libraries while receiving fresh document and UFO
-    /// identities. Returns whether components were replaced.
+    /// identities. Smart values bound to removed components are discarded.
+    /// Returns whether components were replaced.
     pub fn decompose_components(
         &mut self,
         resolved: &[CopiedContour],
@@ -435,6 +436,7 @@ impl LayerEditDraft {
             .shapes
             .retain(|shape| matches!(shape, Shape::Path(_)));
         self.preserved.components.clear();
+        self.preserved.smart_component_values = None;
         Ok(true)
     }
 
@@ -820,5 +822,301 @@ impl LayerEditDraft {
         self.layer.shapes = shapes;
         self.preserved.contours = preserved;
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use crate::font::history::HistoryDirection;
+    use crate::font::model::smart_components::{
+        SMART_COMPONENT_AXES_KEY, SMART_COMPONENT_POLE_KEY, SMART_COMPONENT_VALUES_KEY,
+    };
+    use crate::font::project::{DocumentEditOutcome, Project};
+    use crate::font::source::SourceInput;
+    use crate::font::variable::GlyphLayerAddress;
+    use crate::outline::component_ops::resolved_document_component_contours;
+
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            static NEXT: AtomicUsize = AtomicUsize::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "runebender-smart-decomposition-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn smart_component_font() -> norad::Font {
+        let axes = plist::Value::Array(vec![plist::Value::Dictionary(
+            [
+                ("name".to_owned(), plist::Value::String("Width".into())),
+                (
+                    "bottomValue".to_owned(),
+                    plist::Value::Integer(0_i64.into()),
+                ),
+                ("topValue".to_owned(), plist::Value::Real(100.0)),
+            ]
+            .into_iter()
+            .collect(),
+        )]);
+        let mut base = norad::Glyph::new("part");
+        base.contours.push(norad::Contour::new(
+            [(0.0, 0.0), (100.0, 0.0), (100.0, 50.0), (0.0, 50.0)]
+                .into_iter()
+                .map(|(x, y)| {
+                    norad::ContourPoint::new(x, y, norad::PointType::Line, false, None, None)
+                })
+                .collect(),
+            None,
+        ));
+        base.lib
+            .insert(SMART_COMPONENT_AXES_KEY.into(), axes.clone());
+        let mut target = norad::Glyph::new("target");
+        target.width = 600.5;
+        target.note = Some("preserve glyph metadata".into());
+        target.codepoints.insert('A');
+        target.anchors.push(norad::Anchor::new(
+            200.0,
+            700.0,
+            Some(norad::Name::new("top").unwrap()),
+            None,
+            None,
+        ));
+        for x_offset in [20.0, 220.0] {
+            target.components.push(norad::Component::new(
+                norad::Name::new("part").unwrap(),
+                norad::AffineTransform {
+                    x_scale: 1.5,
+                    y_scale: 2.0,
+                    x_offset,
+                    y_offset: 10.0,
+                    ..norad::AffineTransform::default()
+                },
+                None,
+            ));
+        }
+        target.lib.insert(SMART_COMPONENT_AXES_KEY.into(), axes);
+        target.lib.insert(
+            SMART_COMPONENT_POLE_KEY.into(),
+            plist::Value::Dictionary(
+                [("Width".to_owned(), plist::Value::Integer(2_i64.into()))]
+                    .into_iter()
+                    .collect(),
+            ),
+        );
+        target.lib.insert(
+            SMART_COMPONENT_VALUES_KEY.into(),
+            plist::Value::Array(
+                [
+                    plist::Value::Integer(25_i64.into()),
+                    plist::Value::Real(75.0),
+                ]
+                .into_iter()
+                .map(|value| {
+                    plist::Value::Dictionary([("Width".to_owned(), value)].into_iter().collect())
+                })
+                .collect(),
+            ),
+        );
+        target.lib.insert(
+            "org.runebender.test.unrelated".into(),
+            plist::Value::String("retained".into()),
+        );
+        let mut font = norad::Font::default();
+        font.default_layer_mut().insert_glyph(base);
+        font.default_layer_mut().insert_glyph(target);
+        font
+    }
+
+    #[test]
+    fn smart_component_decomposition_preserves_geometry_metadata_and_history() {
+        let scratch = Scratch::new();
+        let path = scratch.0.join("SmartDecomposition.ufo");
+        let mut project =
+            Project::from_source(SourceInput::from_font(smart_component_font(), path.clone()))
+                .unwrap();
+        let source = project.source_id(0).unwrap();
+        let layer_id = project.document_source(source).unwrap().default_layer();
+        let address = GlyphLayerAddress {
+            glyph: "target".into(),
+            layer: layer_id.clone(),
+        };
+        let original = project.encode_ufo_layer("target", &layer_id).unwrap();
+        let original_base = project.encode_ufo_layer("part", &layer_id).unwrap();
+        let layer = project.document_layer("target", &layer_id).unwrap();
+        let component_ids: Vec<_> = layer.components().map(|component| component.id()).collect();
+        assert_eq!(
+            layer.smart_component_value(component_ids[0], "Width"),
+            Some(25.0)
+        );
+        assert_eq!(
+            layer.smart_component_value(component_ids[1], "Width"),
+            Some(75.0)
+        );
+        let resolved = resolved_document_component_contours(layer, |name| {
+            project.document_layer(name, &layer_id)
+        })
+        .unwrap();
+        assert_eq!(resolved.len(), 2);
+        let mut transaction = project.begin_document_layer_transaction(&address).unwrap();
+        assert!(
+            transaction
+                .draft_mut()
+                .decompose_components(&resolved)
+                .unwrap()
+        );
+        assert!(matches!(
+            project
+                .commit_document_layer_transaction(transaction)
+                .unwrap(),
+            DocumentEditOutcome::Changed { .. }
+        ));
+        let decomposed = project.encode_ufo_layer("target", &layer_id).unwrap();
+        assert!(decomposed.components.is_empty());
+        assert_eq!(decomposed.contours.len(), 2);
+        for (contour, x) in decomposed.contours.iter().zip([20.0, 220.0]) {
+            assert_eq!(
+                contour
+                    .points
+                    .iter()
+                    .map(|point| (point.x, point.y))
+                    .collect::<Vec<_>>(),
+                [(x, 10.0), (x + 150.0, 10.0), (x + 150.0, 110.0), (x, 110.0)]
+            );
+        }
+        let mut expected_lib = original.lib.clone();
+        expected_lib.remove(SMART_COMPONENT_VALUES_KEY);
+        assert_eq!(decomposed.lib, expected_lib);
+        assert_eq!(decomposed.width, original.width);
+        assert_eq!(decomposed.note, original.note);
+        assert_eq!(decomposed.codepoints, original.codepoints);
+        assert_eq!(decomposed.anchors, original.anchors);
+        assert_eq!(
+            project.encode_ufo_layer("part", &layer_id).unwrap(),
+            original_base
+        );
+        let layer = project.document_layer("target", &layer_id).unwrap();
+        for id in &component_ids {
+            assert_eq!(layer.smart_component_value(*id, "Width"), None);
+        }
+
+        let revision = project.document_revision();
+        let mut transaction = project.begin_document_layer_transaction(&address).unwrap();
+        assert!(
+            !transaction
+                .draft_mut()
+                .decompose_components(&resolved)
+                .unwrap()
+        );
+        assert_eq!(
+            project
+                .commit_document_layer_transaction(transaction)
+                .unwrap(),
+            DocumentEditOutcome::Unchanged { revision }
+        );
+        assert_eq!(
+            project.document_layer_history_depth(&address, HistoryDirection::Undo),
+            1
+        );
+        project.save().unwrap();
+        let reopened = Project::load(&path).unwrap();
+        let reopened_layer = reopened
+            .document_source(reopened.source_id(0).unwrap())
+            .unwrap()
+            .default_layer();
+        assert_eq!(
+            reopened
+                .encode_ufo_layer("target", &reopened_layer)
+                .unwrap(),
+            decomposed
+        );
+        assert_eq!(
+            reopened.encode_ufo_layer("part", &reopened_layer).unwrap(),
+            original_base
+        );
+
+        project
+            .replay_document_layer_history(&address, HistoryDirection::Undo)
+            .unwrap();
+        assert_eq!(
+            project.encode_ufo_layer("target", &layer_id).unwrap(),
+            original
+        );
+        let restored = project.document_layer("target", &layer_id).unwrap();
+        assert_eq!(
+            restored
+                .components()
+                .map(|component| component.id())
+                .collect::<Vec<_>>(),
+            component_ids
+        );
+        assert_eq!(
+            restored.smart_component_value(component_ids[0], "Width"),
+            Some(25.0)
+        );
+        assert_eq!(
+            restored.smart_component_value(component_ids[1], "Width"),
+            Some(75.0)
+        );
+        project
+            .replay_document_layer_history(&address, HistoryDirection::Redo)
+            .unwrap();
+        assert_eq!(
+            project.encode_ufo_layer("target", &layer_id).unwrap(),
+            decomposed
+        );
+    }
+
+    #[test]
+    fn smart_component_decomposition_without_components_is_unchanged() {
+        let mut font = smart_component_font();
+        let target = font.default_layer_mut().get_glyph_mut("target").unwrap();
+        target.components.clear();
+        target.lib.insert(
+            SMART_COMPONENT_VALUES_KEY.into(),
+            plist::Value::Array(Vec::new()),
+        );
+        let mut project =
+            Project::from_source(SourceInput::from_font(font, "Unused.ufo".into())).unwrap();
+        let layer_id = project
+            .document_source(project.source_id(0).unwrap())
+            .unwrap()
+            .default_layer();
+        let address = GlyphLayerAddress {
+            glyph: "target".into(),
+            layer: layer_id.clone(),
+        };
+        let original = project.encode_ufo_layer("target", &layer_id).unwrap();
+        let revision = project.document_revision();
+        let mut transaction = project.begin_document_layer_transaction(&address).unwrap();
+        assert!(!transaction.draft_mut().decompose_components(&[]).unwrap());
+        assert_eq!(
+            project
+                .commit_document_layer_transaction(transaction)
+                .unwrap(),
+            DocumentEditOutcome::Unchanged { revision }
+        );
+        assert_eq!(
+            project.encode_ufo_layer("target", &layer_id).unwrap(),
+            original
+        );
+        assert_eq!(
+            project.document_layer_history_depth(&address, HistoryDirection::Undo),
+            0
+        );
     }
 }

@@ -151,8 +151,9 @@ pub(in crate::font) fn clone_layer(
 /// Build one empty proposal layer from canonical foreground metadata.
 ///
 /// The editable geometry payload is cleared without constructing a UFO glyph.
-/// Unicode values and all non-proposal metadata remain available for previews, while installation
-/// still copies only contours, components, anchors and advance width.
+/// Unicode values and glyph-level metadata remain available for previews, but smart values bound
+/// to discarded components are cleared. Installation copies only contours, components, anchors
+/// and advance width.
 pub(in crate::font) fn composition_proposal_layer(
     foreground: LayerView<'_>,
     id: &LayerId,
@@ -186,6 +187,7 @@ pub(in crate::font) fn composition_proposal_layer(
     layer.anchors.clear();
     preserved.contours.clear();
     preserved.components.clear();
+    preserved.smart_component_values = None;
     preserved.anchors.clear();
     let mut draft = LayerEditDraft::new(layer, preserved);
     draft.set_width(width).map_err(|error| error.to_string())?;
@@ -402,6 +404,8 @@ pub(in crate::font) fn proposal_payload_eq(left: LayerView<'_>, right: LayerView
 /// Foreground glyph metadata remains authoritative. Stable object identities are retained by
 /// contour and point position when structure permits, by component reference, and by anchor name.
 /// New or structurally replaced objects keep their already unique proposal identities.
+/// Foreground smart values follow retained component identities.
+/// Values bound to removed identities are discarded.
 pub(in crate::font) fn install_proposal_payload(
     foreground: LayerEditDraft,
     proposed: LayerView<'_>,
@@ -462,6 +466,16 @@ pub(in crate::font) fn install_proposal_payload(
         &mut component_shapes,
         &mut components,
     );
+    if let Some(values) = &mut preserved.smart_component_values {
+        for old_component in &old_preserved.components {
+            if !components
+                .iter()
+                .any(|component| component.id == old_component.id)
+            {
+                values.remove_component(old_component.id);
+            }
+        }
+    }
 
     let mut anchors = proposed.layer.anchors.clone();
     let mut anchor_metadata = proposed.preserved.anchors.clone();
@@ -689,6 +703,9 @@ mod tests {
 
     use super::*;
     use crate::font::babelfont::{LayerView, layer_from_ufo, project_layer};
+    use crate::font::model::smart_components::{
+        SMART_COMPONENT_AXES_KEY, SMART_COMPONENT_POLE_KEY, SMART_COMPONENT_VALUES_KEY,
+    };
     use crate::font::variable::SourceId;
 
     fn layer_id() -> LayerId {
@@ -696,6 +713,271 @@ mod tests {
             source: SourceId(7),
             name: "public.default".into(),
         }
+    }
+
+    fn smart_values(values: &[i64]) -> plist::Value {
+        plist::Value::Array(
+            values
+                .iter()
+                .map(|value| {
+                    plist::Value::Dictionary(
+                        [("Width".to_owned(), plist::Value::Integer((*value).into()))]
+                            .into_iter()
+                            .collect(),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    fn smart_component_glyph() -> Glyph {
+        let mut glyph = Glyph::new("A");
+        glyph.note = Some("foreground note".into());
+        glyph.codepoints.insert('A');
+        for name in ["replaced", "survivor", "deleted"] {
+            glyph.components.push(Component::new(
+                Name::new(name).unwrap(),
+                AffineTransform::default(),
+                None,
+            ));
+        }
+        glyph.lib.insert(
+            SMART_COMPONENT_VALUES_KEY.into(),
+            smart_values(&[25, 75, 90]),
+        );
+        glyph.lib.insert(
+            SMART_COMPONENT_AXES_KEY.into(),
+            plist::Value::Array(vec![plist::Value::Dictionary(
+                [
+                    ("name".to_owned(), plist::Value::String("Width".into())),
+                    ("bottomValue".to_owned(), plist::Value::Integer(0.into())),
+                    ("topValue".to_owned(), plist::Value::Integer(100.into())),
+                ]
+                .into_iter()
+                .collect(),
+            )]),
+        );
+        glyph.lib.insert(
+            SMART_COMPONENT_POLE_KEY.into(),
+            plist::Value::Dictionary(
+                [("Width".to_owned(), plist::Value::Integer(2.into()))]
+                    .into_iter()
+                    .collect(),
+            ),
+        );
+        glyph
+            .lib
+            .insert("future.key".into(), plist::Value::String("exact".into()));
+        glyph
+    }
+
+    fn assert_foreground_metadata(projected: &Glyph, foreground: &Glyph) {
+        assert_eq!(projected.note, foreground.note);
+        assert_eq!(projected.codepoints, foreground.codepoints);
+        for key in [
+            SMART_COMPONENT_AXES_KEY,
+            SMART_COMPONENT_POLE_KEY,
+            "future.key",
+        ] {
+            assert_eq!(projected.lib[key], foreground.lib[key]);
+        }
+    }
+
+    #[test]
+    fn composition_proposal_clears_values_and_install_preserves_only_survivors() {
+        let glyph = smart_component_glyph();
+        let id = layer_id();
+        let proposal_id = LayerId {
+            source: id.source,
+            name: "com.runebender.proposal.smart".into(),
+        };
+        for references in [vec!["new", "survivor"], vec!["new"], vec![]] {
+            let (layer, preserved) = layer_from_ufo(&glyph, &id, true);
+            let foreground = LayerView::new(&layer, &preserved);
+            let old_ids = foreground
+                .components()
+                .map(|component| component.id())
+                .collect::<Vec<_>>();
+            let components = references
+                .iter()
+                .map(|name| ((*name).to_owned(), 10.0, 20.0))
+                .collect::<Vec<_>>();
+            let proposal = composition_proposal_layer(
+                foreground,
+                &proposal_id,
+                600.0,
+                &components,
+                &[],
+                "revision",
+                "replace components",
+            )
+            .unwrap();
+            let proposed = proposal.view();
+            for component in proposed.components() {
+                assert!(!old_ids.contains(&component.id()));
+                assert_eq!(
+                    proposed.smart_component_value(component.id(), "Width"),
+                    None
+                );
+            }
+            let preview = project_layer(proposed.layer, proposed.preserved);
+            assert!(!preview.lib.contains_key(SMART_COMPONENT_VALUES_KEY));
+            assert_foreground_metadata(&preview, &glyph);
+            let (copied_layer, copied_preserved) =
+                duplicate_layer(proposed.layer, proposed.preserved, &id, "A.copy");
+            assert!(
+                !project_layer(&copied_layer, &copied_preserved)
+                    .lib
+                    .contains_key(SMART_COMPONENT_VALUES_KEY)
+            );
+
+            let installed =
+                install_proposal_payload(LayerEditDraft::new(layer, preserved), proposed);
+            let view = installed.view();
+            for component in view.components() {
+                if component.reference() == "survivor" {
+                    assert_eq!(component.id(), old_ids[1]);
+                    assert_eq!(
+                        view.smart_component_value(component.id(), "Width"),
+                        Some(75.0)
+                    );
+                } else {
+                    assert!(!old_ids.contains(&component.id()));
+                    assert_eq!(view.smart_component_value(component.id(), "Width"), None);
+                }
+            }
+            for removed in [old_ids[0], old_ids[2]] {
+                assert_eq!(view.smart_component_value(removed, "Width"), None);
+            }
+            let expected = if references.contains(&"survivor") {
+                plist::Value::Array(vec![
+                    plist::Value::Dictionary(plist::Dictionary::new()),
+                    smart_values(&[75]).as_array().unwrap()[0].clone(),
+                ])
+            } else {
+                plist::Value::Array(Vec::new())
+            };
+            let projected = project_layer(view.layer, view.preserved);
+            assert_eq!(projected.lib[SMART_COMPONENT_VALUES_KEY], expected);
+            assert_foreground_metadata(&projected, &glyph);
+            let (copied_layer, copied_preserved) =
+                duplicate_layer(view.layer, view.preserved, &id, "A.copy");
+            let copied = project_layer(&copied_layer, &copied_preserved);
+            assert_eq!(copied.lib[SMART_COMPONENT_VALUES_KEY], expected);
+            let (reopened_layer, reopened_preserved) = layer_from_ufo(&projected, &id, true);
+            assert_eq!(
+                project_layer(&reopened_layer, &reopened_preserved).lib[SMART_COMPONENT_VALUES_KEY],
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn smart_component_proposal_install_history_and_project_save() {
+        use crate::font::history::HistoryDirection;
+        use crate::font::project::{Project, SourceInput};
+        use crate::font::proposal;
+
+        let path = std::env::temp_dir().join(format!(
+            "runebender-smart-proposal-{}-{}.ufo",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let glyph = smart_component_glyph();
+        let mut font = norad::Font::new();
+        for name in ["replaced", "survivor", "deleted", "new"] {
+            font.default_layer_mut().insert_glyph(Glyph::new(name));
+        }
+        font.default_layer_mut().insert_glyph(glyph.clone());
+        let mut project = Project::from_source(SourceInput::from_font(font, path.clone())).unwrap();
+        let source = project.source_id(0).unwrap();
+        let foreground = project.document_source(source).unwrap().default_layer();
+        let target = LayerId {
+            source,
+            name: proposal::layer_name("smart"),
+        };
+        let current = project.document_layer("A", &foreground).unwrap();
+        let before_ids = current
+            .components()
+            .map(|component| component.id())
+            .collect::<Vec<_>>();
+        let revision = crate::font::edit_batch::canonical_glyph_revision(current).unwrap();
+        let draft = composition_proposal_layer(
+            current,
+            &target,
+            600.0,
+            &[("new".into(), 0.0, 0.0), ("survivor".into(), 10.0, 20.0)],
+            &[],
+            &revision,
+            "replace components",
+        )
+        .unwrap();
+        let transaction = project
+            .begin_proposal_transaction(source, &foreground, &target, vec![("A".into(), draft)])
+            .unwrap();
+        project.commit_proposal_transaction(transaction).unwrap();
+        let result = proposal::install_project(&mut project, source, "smart", None, false).unwrap();
+        assert_eq!(result.installed.installed, ["A"]);
+        let installed = project.encode_ufo_source(source).unwrap();
+        let installed = installed.get_glyph("A").unwrap().clone();
+        assert_foreground_metadata(&installed, &glyph);
+        let after_ids = project
+            .document_layer("A", &foreground)
+            .unwrap()
+            .components()
+            .map(|component| component.id())
+            .collect::<Vec<_>>();
+        assert_eq!(after_ids[1], before_ids[1]);
+        assert!(!before_ids.contains(&after_ids[0]));
+        let address = GlyphLayerAddress {
+            glyph: "A".into(),
+            layer: foreground.clone(),
+        };
+        for (direction, expected, expected_ids) in [
+            (HistoryDirection::Undo, &glyph, &before_ids),
+            (HistoryDirection::Redo, &installed, &after_ids),
+        ] {
+            project
+                .replay_document_layer_history(&address, direction)
+                .unwrap();
+            let view = project.document_layer("A", &foreground).unwrap();
+            assert_eq!(
+                view.components()
+                    .map(|component| component.id())
+                    .collect::<Vec<_>>(),
+                *expected_ids
+            );
+            let projected = project.encode_ufo_source(source).unwrap();
+            let projected = projected.get_glyph("A").unwrap();
+            assert_eq!(
+                projected.lib[SMART_COMPONENT_VALUES_KEY],
+                expected.lib[SMART_COMPONENT_VALUES_KEY]
+            );
+            assert_foreground_metadata(projected, &glyph);
+        }
+        project.save().unwrap();
+        let reopened = Project::load(&path).unwrap();
+        let exported = reopened
+            .encode_ufo_source(reopened.source_id(0).unwrap())
+            .unwrap();
+        let saved = exported.get_glyph("A").unwrap();
+        assert_eq!(
+            saved.lib[SMART_COMPONENT_VALUES_KEY],
+            installed.lib[SMART_COMPONENT_VALUES_KEY]
+        );
+        assert_foreground_metadata(saved, &glyph);
+        assert_eq!(
+            saved
+                .components
+                .iter()
+                .map(|component| component.base.as_str())
+                .collect::<Vec<_>>(),
+            ["new", "survivor"]
+        );
+        std::fs::remove_dir_all(path).unwrap();
     }
 
     #[test]
@@ -828,6 +1110,9 @@ mod tests {
                 Some(identifier(value)),
             ));
         }
+        glyph
+            .lib
+            .insert(SMART_COMPONENT_VALUES_KEY.into(), smart_values(&[25, 75]));
         let foreground_id = layer_id();
         let proposal_id = LayerId {
             source: foreground_id.source,
@@ -852,6 +1137,9 @@ mod tests {
         reordered.contours.reverse();
         reordered.components.reverse();
         reordered.anchors.reverse();
+        reordered
+            .lib
+            .insert(SMART_COMPONENT_VALUES_KEY.into(), smart_values(&[9, 8]));
         let (proposal_layer, proposal_preserved) = layer_from_ufo(&reordered, &proposal_id, false);
         let installed = install_proposal_payload(
             LayerEditDraft::new(foreground_layer, foreground_preserved),
@@ -880,6 +1168,19 @@ mod tests {
                 .map(|anchor| anchor.id())
                 .collect::<Vec<_>>(),
             [anchor_ids[1], anchor_ids[0]]
+        );
+        let view = installed.view();
+        assert_eq!(
+            view.smart_component_value(component_ids[0], "Width"),
+            Some(25.0)
+        );
+        assert_eq!(
+            view.smart_component_value(component_ids[1], "Width"),
+            Some(75.0)
+        );
+        assert_eq!(
+            project_layer(view.layer, view.preserved).lib[SMART_COMPONENT_VALUES_KEY],
+            smart_values(&[75, 25])
         );
     }
 }
