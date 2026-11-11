@@ -7,6 +7,20 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      collect_crash_dump:
+        description: 'Collect a WER minidump (unsanitized memory; public fixture only; retained 1 day)'
+        type: boolean
+        default: true
+      install_debugging_tools:
+        description: 'If CDB is missing, install only Debugging Tools from the signed Microsoft SDK installer'
+        type: boolean
+        default: true
+      native_observation_seconds:
+        description: 'Observe the real native window before requesting close (crashes still fail)'
+        type: choice
+        options: ['0', '5', '15']
+        default: '0'
 
 permissions:
   contents: read
@@ -45,9 +59,39 @@ jobs:
         run: cargo +stable build --locked --bin runebender
       - name: Exercise CLI, rendering, and native startup
         shell: pwsh
-        run: ./.github/scripts/windows-smoke.ps1
+        env:
+          COLLECT_CRASH_DUMP: ${{ github.event_name == 'workflow_dispatch' && inputs.collect_crash_dump }}
+          INSTALL_DEBUGGING_TOOLS: ${{ github.event_name == 'workflow_dispatch' && inputs.install_debugging_tools }}
+          NATIVE_OBSERVATION_SECONDS: ${{ inputs.native_observation_seconds || '0' }}
+        run: |
+          $collect = $env:COLLECT_CRASH_DUMP -eq 'true'
+          $install = $env:INSTALL_DEBUGGING_TOOLS -eq 'true'
+          ./.github/scripts/windows-smoke.ps1 -CollectCrashDump:$collect -InstallDebuggingTools:$install -NativeObservationSeconds ([int]$env:NATIVE_OBSERVATION_SECONDS)
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: windows-smoke
-          path: windows-smoke/
+          # Explicit filenames exclude private scratch files and arbitrary future outputs.
+          path: |
+            windows-smoke/info.json
+            windows-smoke/proof.svg
+            windows-smoke/editor.png
+            windows-smoke/native-window.txt
+            windows-smoke/window.stdout.txt
+            windows-smoke/window.stderr.txt
+            windows-smoke/masonry-dense.log
+            windows-smoke/native-events.json
+            windows-smoke/diagnostic-status.json
+            windows-smoke/debugger-install.log
+            windows-smoke/native-debugger.log
+            windows-smoke/native-debugger.stderr.txt
+          retention-days: 1
+      # Never collect dumps automatically on PRs/pushes. Binary process memory cannot be redacted.
+      # The script scopes/restores LocalDumps, allows one minidump <=64 MiB, and keeps the native gate.
+      - uses: actions/upload-artifact@v4
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.collect_crash_dump
+        with:
+          name: windows-native-minidump
+          path: windows-smoke-dumps/runebender.dmp
+          if-no-files-found: warn
+          retention-days: 1
