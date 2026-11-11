@@ -15,6 +15,10 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
 ### Changed
 
 - Feature generation and live measurements use fewer temporary allocations without changing feature text or measurement ordering.
+- Glyph rename and removal update every source's glyph order and production-name mapping, Designspace substitutions, and supported HOI trajectory references in the same guarded transaction.
+  Renaming retains production-name values, rule identities, and unrelated metadata; removal retains empty rules and their conditions.
+  Saves persist the changed Designspace as well as its UFO sources.
+  Malformed reference metadata, unsupported HOI payloads, and conflicting destination entries reject the edit without changing the document.
 - Decomposing components and replacing proposal geometry discard smart values belonging to removed components before projection or saving.
   Proposal installation retains foreground values for surviving component identities, including reordered components.
   Undo restores the original components and values together; source axes, pole selections, and unrelated glyph metadata remain intact.

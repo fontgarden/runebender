@@ -768,6 +768,67 @@ impl CanonicalDesignspace {
         super::hoi_trajectories::write_trajectories(&mut self.lib, records)
     }
 
+    /// Rename rule and supported HOI references in a structural edit draft.
+    ///
+    /// Opaque or malformed HOI blocks a rename because its references cannot be
+    /// determined safely. Check and write HOI before making infallible rule edits.
+    pub(in crate::font) fn rename_glyph_references(
+        &mut self,
+        old: &str,
+        new: &str,
+    ) -> Result<bool, String> {
+        if old == new {
+            return Ok(false);
+        }
+        let mut trajectories = self.hoi_trajectories()?;
+        let mut changed = false;
+        for trajectory in &mut trajectories {
+            if trajectory.glyph == old {
+                trajectory.glyph.clear();
+                trajectory.glyph.push_str(new);
+                changed = true;
+            }
+        }
+        if changed {
+            self.set_hoi_trajectories(&trajectories)?;
+        }
+        for rule in &mut self.rules {
+            for substitution in &mut rule.substitutions {
+                for reference in [&mut substitution.name, &mut substitution.replacement] {
+                    if reference.as_str() == old {
+                        reference.clear();
+                        reference.push_str(new);
+                        changed = true;
+                    }
+                }
+            }
+        }
+        Ok(changed)
+    }
+
+    /// Remove rule substitutions and supported HOI records referencing one glyph.
+    ///
+    /// Empty rules retain their identities, names, conditions and order: they are
+    /// valid Designspace metadata and compile to no substitutions. Opaque or
+    /// malformed HOI rejects the edit without changing any metadata.
+    pub(in crate::font) fn remove_glyph_references(&mut self, name: &str) -> Result<bool, String> {
+        let mut trajectories = self.hoi_trajectories()?;
+        let previous_len = trajectories.len();
+        trajectories.retain(|trajectory| trajectory.glyph != name);
+        let mut changed = trajectories.len() != previous_len;
+        if changed {
+            self.set_hoi_trajectories(&trajectories)?;
+        }
+        for rule in &mut self.rules {
+            let previous_len = rule.substitutions.len();
+            rule.substitutions.retain(|substitution| {
+                substitution.name != name && substitution.replacement != name
+            });
+            changed |= rule.substitutions.len() != previous_len;
+        }
+        Ok(changed)
+    }
+
     /// Ordered canonical axes.
     pub fn axes(&self) -> &[CanonicalAxis] {
         &self.axes
@@ -1361,4 +1422,252 @@ fn checked_f32(context: &str, value: f64) -> Result<f32, String> {
         ));
     }
     Ok(stored)
+}
+
+#[cfg(test)]
+mod glyph_reference_tests {
+    use super::*;
+    use crate::font::model::hoi_trajectories::{
+        HOI_TRAJECTORIES_KEY, HoiAxis, HoiEasing, HoiEndpoint, HoiTrajectory,
+    };
+
+    fn designspace() -> CanonicalDesignspace {
+        let axis = AxisId::from_index(0);
+        let source = SourceId(0);
+        let substitutions = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(name, replacement)| CanonicalSubstitution {
+                    name: (*name).into(),
+                    replacement: (*replacement).into(),
+                })
+                .collect()
+        };
+        CanonicalDesignspace {
+            format: 5.0,
+            axes: vec![CanonicalAxis {
+                id: axis,
+                coordinates: Axis {
+                    name: "Weight".into(),
+                    tag: "wght".into(),
+                    min: 0.0,
+                    default: 0.0,
+                    max: 1.0,
+                    map: Vec::new(),
+                },
+                hidden: false,
+                labels: Vec::new(),
+                minimum_was_explicit: true,
+                maximum_was_explicit: true,
+                map_was_present: false,
+            }],
+            sources: vec![
+                SourceDescriptor::new(
+                    source,
+                    "Regular.ufo".into(),
+                    CanonicalLocation::default(),
+                    LayerId {
+                        source,
+                        name: DEFAULT_LAYER_NAME.into(),
+                    },
+                )
+                .unwrap(),
+            ],
+            sparse_sources: Vec::new(),
+            source_order: vec![SourceOrderEntry::Full(source)],
+            instances: Vec::new(),
+            rule_processing: RuleProcessing::Last,
+            rules: vec![
+                CanonicalRule {
+                    id: RuleId::from_index(0),
+                    name: Some("mixed references".into()),
+                    condition_sets: vec![CanonicalConditionSet {
+                        conditions: vec![CanonicalCondition {
+                            axis,
+                            minimum: Some(0.5),
+                            maximum: Some(1.0),
+                        }],
+                    }],
+                    substitutions: substitutions(&[
+                        ("a", "a.alt"),
+                        ("b", "a"),
+                        ("keep", "keep.alt"),
+                        ("a", "a"),
+                    ]),
+                },
+                CanonicalRule {
+                    id: RuleId::from_index(1),
+                    name: Some("becomes empty".into()),
+                    condition_sets: Vec::new(),
+                    substitutions: substitutions(&[("c", "a")]),
+                },
+            ],
+            lib: plist::Dictionary::from_iter([(
+                "vendor.opaque",
+                plist::Value::Data(vec![0, 1, 255]),
+            )]),
+            preserved_empty_axis_mappings: false,
+        }
+    }
+
+    fn trajectory(glyph: &str, point: usize) -> HoiTrajectory {
+        let endpoint = |source: &str, location| HoiEndpoint {
+            source: source.into(),
+            layer: DEFAULT_LAYER_NAME.into(),
+            location,
+            contour: 0,
+            point,
+            contour_identifier: Some("contour".into()),
+            point_identifier: Some(format!("point{point}")),
+            outline_sha256: "a".repeat(64),
+        };
+        HoiTrajectory {
+            glyph: glyph.into(),
+            axis: HoiAxis {
+                name: "Weight".into(),
+                tag: "wght".into(),
+                minimum: 0.0,
+                default: 0.0,
+                maximum: 1.0,
+                mapping: Vec::new(),
+            },
+            lower: endpoint("Regular.ufo", 0.0),
+            upper: endpoint("Bold.ufo", 1.0),
+            controls: [[12.5, 30.0], [-80.0, 125.0]],
+            easing: HoiEasing::EaseInOut,
+        }
+    }
+
+    #[test]
+    fn rename_updates_both_rule_sides_and_only_hoi_glyph_names() {
+        let mut designspace = designspace();
+        let mut records = vec![
+            trajectory("a", 0),
+            trajectory("keep", 0),
+            trajectory("a", 1),
+        ];
+        designspace.set_hoi_trajectories(&records).unwrap();
+        let mut expected = designspace.clone();
+        for rule in &mut expected.rules {
+            for substitution in &mut rule.substitutions {
+                if substitution.name == "a" {
+                    substitution.name = "renamed".into();
+                }
+                if substitution.replacement == "a" {
+                    substitution.replacement = "renamed".into();
+                }
+            }
+        }
+        records[0].glyph = "renamed".into();
+        records[2].glyph = "renamed".into();
+        expected.set_hoi_trajectories(&records).unwrap();
+
+        assert!(designspace.rename_glyph_references("a", "renamed").unwrap());
+        assert_eq!(designspace, expected);
+        assert_eq!(designspace.hoi_trajectories().unwrap(), records);
+        let reopened = CanonicalDesignspace::from_norad(&designspace.to_norad().unwrap()).unwrap();
+        assert_eq!(reopened, expected);
+    }
+
+    #[test]
+    fn remove_retains_empty_rules_and_unrelated_metadata() {
+        let mut designspace = designspace();
+        let keep = trajectory("keep", 0);
+        designspace
+            .set_hoi_trajectories(&[trajectory("a", 0), keep.clone(), trajectory("a", 1)])
+            .unwrap();
+        let mut expected = designspace.clone();
+        expected.rules[0].substitutions = vec![expected.rules[0].substitutions[2].clone()];
+        expected.rules[1].substitutions.clear();
+        expected
+            .set_hoi_trajectories(std::slice::from_ref(&keep))
+            .unwrap();
+
+        assert!(designspace.remove_glyph_references("a").unwrap());
+        assert_eq!(designspace, expected);
+        let reopened = CanonicalDesignspace::from_norad(&designspace.to_norad().unwrap()).unwrap();
+        assert_eq!(reopened, expected);
+        assert!(designspace.remove_glyph_references("keep").unwrap());
+        assert!(!designspace.lib.contains_key(HOI_TRAJECTORIES_KEY));
+        assert_eq!(
+            designspace.lib.get("vendor.opaque"),
+            expected.lib.get("vendor.opaque")
+        );
+    }
+
+    #[test]
+    fn missing_references_and_same_name_are_exact_no_ops() {
+        let mut designspace = designspace();
+        designspace
+            .set_hoi_trajectories(&[trajectory("a", 0)])
+            .unwrap();
+        let before = designspace.clone();
+        assert!(
+            !designspace
+                .rename_glyph_references("absent", "new")
+                .unwrap()
+        );
+        assert!(!designspace.remove_glyph_references("absent").unwrap());
+        assert!(!designspace.rename_glyph_references("a", "a").unwrap());
+        assert_eq!(designspace, before);
+    }
+
+    #[test]
+    fn unsupported_or_malformed_hoi_rejects_before_changing_rules() {
+        let mut supported = designspace();
+        supported
+            .set_hoi_trajectories(&[trajectory("a", 0)])
+            .unwrap();
+        let mut unknown_field = supported.lib[HOI_TRAJECTORIES_KEY].clone();
+        unknown_field
+            .as_dictionary_mut()
+            .unwrap()
+            .insert("future".into(), plist::Value::Boolean(true));
+        let mut duplicate = supported.lib[HOI_TRAJECTORIES_KEY].clone();
+        let records = duplicate
+            .as_dictionary_mut()
+            .unwrap()
+            .get_mut("trajectories")
+            .unwrap()
+            .as_array_mut()
+            .unwrap();
+        records.push(records[0].clone());
+        let payloads = [
+            plist::Value::String("opaque".into()),
+            plist::Value::Dictionary(plist::Dictionary::from_iter([
+                ("version", plist::Value::Integer(2.into())),
+                ("trajectories", plist::Value::Array(Vec::new())),
+            ])),
+            plist::Value::Dictionary(plist::Dictionary::from_iter([
+                ("version", plist::Value::Integer(1.into())),
+                ("trajectories", plist::Value::String("malformed".into())),
+            ])),
+            unknown_field,
+            duplicate,
+        ];
+        for payload in payloads {
+            let mut designspace = designspace();
+            designspace.lib.insert(HOI_TRAJECTORIES_KEY.into(), payload);
+            let before = designspace.clone();
+            for name in ["a", "absent"] {
+                assert!(designspace.rename_glyph_references(name, "new").is_err());
+                assert_eq!(designspace, before);
+                assert!(designspace.remove_glyph_references(name).is_err());
+                assert_eq!(designspace, before);
+            }
+            assert!(!designspace.rename_glyph_references("a", "a").unwrap());
+            assert_eq!(designspace, before);
+        }
+    }
+
+    #[test]
+    fn rename_rejects_hoi_scope_collision_without_changing_metadata() {
+        let mut designspace = designspace();
+        designspace
+            .set_hoi_trajectories(&[trajectory("a", 0), trajectory("new", 0)])
+            .unwrap();
+        let before = designspace.clone();
+        assert!(designspace.rename_glyph_references("a", "new").is_err());
+        assert_eq!(designspace, before);
+    }
 }

@@ -202,6 +202,12 @@ impl CanonicalSourceStructureSnapshot {
     pub fn source_ids(&self) -> &[SourceId] {
         &self.source_ids
     }
+
+    pub(in crate::font) fn designspace(
+        &self,
+    ) -> Option<&super::model::designspace::CanonicalDesignspace> {
+        self.designspace.as_ref()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

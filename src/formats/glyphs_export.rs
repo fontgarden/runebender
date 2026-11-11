@@ -204,7 +204,7 @@ fn merge(font: &mut Glyphs3, sources: &[WorkingSource]) -> Result<Changes, Strin
         let listed: Vec<&str> = working
             .font
             .lib
-            .get("public.glyphOrder")
+            .get(super::metadata::lib_keys::GLYPH_ORDER_KEY)
             .and_then(plist::Value::as_array)
             .into_iter()
             .flatten()

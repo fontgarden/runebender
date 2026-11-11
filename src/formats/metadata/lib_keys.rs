@@ -1,7 +1,7 @@
 // Copyright 2026 the Runebender Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Runebender's own `com.runebender.*` lib keys, and `public.postscriptNames`.
+//! Runebender's own `com.runebender.*` lib keys and public glyph metadata.
 //!
 //! Masks, saved sidebar filters, annotations, and HOI intermediates.
 //! Each key has one reader and one writer here, so the on-disk format
@@ -214,6 +214,9 @@ pub fn bake_masks(glyph: &mut norad::Glyph) -> bool {
 /// language. Glyphs calls these smart filters.
 pub const SAVED_FILTERS_KEY: &str = "com.runebender.savedFilters";
 
+/// UFO-standard ordered glyph names.
+pub const GLYPH_ORDER_KEY: &str = "public.glyphOrder";
+
 /// UFO-standard glyph name -> production name mapping.
 ///
 /// ufo2ft and fontc consume it at compile time.
@@ -263,6 +266,96 @@ pub fn write_production_name(font: &mut norad::Font, glyph: &str, text: &str) ->
     } else {
         false
     }
+}
+
+/// Rename references without rebuilding lib values or changing production names.
+///
+/// Malformed containers and affected production values reject the operation, as do
+/// occupied destination entries. Unrelated opaque values, including non-string
+/// glyph-order entries, are retained verbatim.
+pub(crate) fn rename_glyph_lib_references(
+    lib: &mut norad::Plist,
+    old: &str,
+    new: &str,
+) -> Result<bool, String> {
+    if old == new {
+        return Ok(false);
+    }
+    update_glyph_lib_references(lib, old, Some(new))
+}
+
+/// Remove only the named glyph's order entries and production-name mapping.
+pub(crate) fn remove_glyph_lib_references(
+    lib: &mut norad::Plist,
+    name: &str,
+) -> Result<bool, String> {
+    update_glyph_lib_references(lib, name, None)
+}
+
+fn update_glyph_lib_references(
+    lib: &mut norad::Plist,
+    old: &str,
+    new: Option<&str>,
+) -> Result<bool, String> {
+    // Validate both keys before changing either: even direct codec callers get
+    // an unchanged lib on error.
+    let has_order_entry = match lib.get(GLYPH_ORDER_KEY) {
+        None => false,
+        Some(plist::Value::Array(order)) => {
+            let present = order.iter().any(|value| value.as_string() == Some(old));
+            if present
+                && new.is_some_and(|new| order.iter().any(|value| value.as_string() == Some(new)))
+            {
+                return Err(format!(
+                    "{GLYPH_ORDER_KEY} already contains the destination glyph"
+                ));
+            }
+            present
+        }
+        Some(_) => return Err(format!("{GLYPH_ORDER_KEY} must be an array")),
+    };
+    let has_production_name = match lib.get(PSNAMES_KEY) {
+        None => false,
+        Some(plist::Value::Dictionary(names)) => {
+            if let Some(value) = names.get(old) {
+                if value.as_string().is_none() {
+                    return Err(format!("{PSNAMES_KEY} entry for {old:?} must be a string"));
+                }
+                if new.is_some_and(|new| names.contains_key(new)) {
+                    return Err(format!(
+                        "{PSNAMES_KEY} already contains the destination glyph"
+                    ));
+                }
+                true
+            } else {
+                false
+            }
+        }
+        Some(_) => return Err(format!("{PSNAMES_KEY} must be a dictionary")),
+    };
+
+    if has_order_entry && let Some(plist::Value::Array(order)) = lib.get_mut(GLYPH_ORDER_KEY) {
+        if let Some(new) = new {
+            for value in order {
+                if value.as_string() == Some(old) {
+                    *value = plist::Value::String(new.to_owned());
+                }
+            }
+        } else {
+            order.retain(|value| value.as_string() != Some(old));
+        }
+    }
+    if has_production_name && let Some(plist::Value::Dictionary(names)) = lib.get_mut(PSNAMES_KEY) {
+        if let Some(value) = names.remove(old)
+            && let Some(new) = new
+        {
+            names.insert(new.to_owned(), value);
+        }
+        if names.is_empty() {
+            lib.remove(PSNAMES_KEY);
+        }
+    }
+    Ok(has_order_entry || has_production_name)
 }
 
 /// Reads the saved sidebar filters from the font lib as `(name, query)` pairs. Malformed rows are skipped.

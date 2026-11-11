@@ -57,6 +57,20 @@ impl SourceFormatData {
         font
     }
 
+    /// Update supported font-lib references without changing opaque source data.
+    pub(in crate::font) fn rename_glyph_references(
+        &mut self,
+        old: &str,
+        new: &str,
+    ) -> Result<bool, String> {
+        crate::formats::metadata::lib_keys::rename_glyph_lib_references(&mut self.lib, old, new)
+    }
+
+    /// Remove supported font-lib references to one glyph.
+    pub(in crate::font) fn remove_glyph_references(&mut self, name: &str) -> Result<bool, String> {
+        crate::formats::metadata::lib_keys::remove_glyph_lib_references(&mut self.lib, name)
+    }
+
     pub(in crate::font) fn default_layer_name(&self) -> &str {
         self.layers.default_layer().name().as_str()
     }
@@ -127,6 +141,162 @@ mod tests {
     use norad::{Color, Font, Glyph};
 
     use super::SourceFormatData;
+    use crate::formats::metadata::lib_keys::{GLYPH_ORDER_KEY, PSNAMES_KEY};
+
+    fn format_with_references() -> SourceFormatData {
+        let mut format = SourceFormatData::default();
+        format.lib.insert(
+            GLYPH_ORDER_KEY.into(),
+            plist::Value::Array(vec![
+                "B".into(),
+                "A".into(),
+                7.into(),
+                "A".into(),
+                "C".into(),
+            ]),
+        );
+        let mut names = plist::Dictionary::new();
+        names.insert("A".into(), "uni0041".into());
+        names.insert("B".into(), "B.production".into());
+        names.insert("opaque".into(), plist::Value::Array(vec![true.into()]));
+        format
+            .lib
+            .insert(PSNAMES_KEY.into(), plist::Value::Dictionary(names));
+        format.lib.insert(
+            "com.example.opaque".into(),
+            plist::Value::Data(vec![1, 2, 3]),
+        );
+        format
+    }
+
+    #[test]
+    fn rename_preserves_order_production_value_and_opaque_metadata() {
+        let mut format = format_with_references();
+        let mut expected = format.clone();
+        expected.lib.insert(
+            GLYPH_ORDER_KEY.into(),
+            plist::Value::Array(vec![
+                "B".into(),
+                "A.alt".into(),
+                7.into(),
+                "A.alt".into(),
+                "C".into(),
+            ]),
+        );
+        let names = expected
+            .lib
+            .get_mut(PSNAMES_KEY)
+            .unwrap()
+            .as_dictionary_mut()
+            .unwrap();
+        let production = names.remove("A").unwrap();
+        names.insert("A.alt".into(), production);
+
+        assert!(format.rename_glyph_references("A", "A.alt").unwrap());
+        assert_eq!(format, expected);
+        assert!(!format.rename_glyph_references("A", "A.alt").unwrap());
+        assert!(!format.rename_glyph_references("A.alt", "A.alt").unwrap());
+    }
+
+    #[test]
+    fn remove_deletes_only_affected_entries() {
+        let mut format = format_with_references();
+        let mut expected = format.clone();
+        expected.lib.insert(
+            GLYPH_ORDER_KEY.into(),
+            plist::Value::Array(vec!["B".into(), 7.into(), "C".into()]),
+        );
+        expected
+            .lib
+            .get_mut(PSNAMES_KEY)
+            .unwrap()
+            .as_dictionary_mut()
+            .unwrap()
+            .remove("A");
+
+        assert!(format.remove_glyph_references("A").unwrap());
+        assert_eq!(format, expected);
+        assert!(!format.remove_glyph_references("A").unwrap());
+    }
+
+    #[test]
+    fn absent_and_last_entries_follow_lib_conventions() {
+        let mut format = SourceFormatData::default();
+        let original = format.clone();
+        assert!(!format.rename_glyph_references("A", "B").unwrap());
+        assert!(!format.remove_glyph_references("A").unwrap());
+        assert_eq!(format, original);
+
+        format.lib.insert(
+            GLYPH_ORDER_KEY.into(),
+            plist::Value::Array(vec!["A".into()]),
+        );
+        let mut names = plist::Dictionary::new();
+        names.insert("A".into(), "uni0041".into());
+        format
+            .lib
+            .insert(PSNAMES_KEY.into(), plist::Value::Dictionary(names));
+        assert!(format.remove_glyph_references("A").unwrap());
+        assert_eq!(
+            format
+                .lib
+                .get(GLYPH_ORDER_KEY)
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert!(!format.lib.contains_key(PSNAMES_KEY));
+    }
+
+    #[test]
+    fn rename_collisions_reject_without_changing_either_key() {
+        let original = format_with_references();
+        // C exists only in glyphOrder; B exists in both supported keys.
+        for destination in ["B", "C", "opaque"] {
+            let mut format = original.clone();
+            assert!(format.rename_glyph_references("A", destination).is_err());
+            assert_eq!(format, original);
+        }
+        let mut format = original.clone();
+        let names = format
+            .lib
+            .get_mut(PSNAMES_KEY)
+            .unwrap()
+            .as_dictionary_mut()
+            .unwrap();
+        names.insert("A.alt".into(), "another.production".into());
+        let original = format.clone();
+        assert!(format.rename_glyph_references("A", "A.alt").is_err());
+        assert_eq!(format, original);
+    }
+
+    #[test]
+    fn malformed_keys_and_affected_values_reject_without_mutation() {
+        for key in [GLYPH_ORDER_KEY, PSNAMES_KEY] {
+            let mut format = format_with_references();
+            format.lib.insert(key.into(), "malformed".into());
+            let original = format.clone();
+            assert!(format.rename_glyph_references("A", "A.alt").is_err());
+            assert_eq!(format, original);
+            assert!(format.remove_glyph_references("A").is_err());
+            assert_eq!(format, original);
+        }
+        let mut format = format_with_references();
+        format
+            .lib
+            .get_mut(PSNAMES_KEY)
+            .unwrap()
+            .as_dictionary_mut()
+            .unwrap()
+            .insert("A".into(), 42.into());
+        let original = format.clone();
+        assert!(format.rename_glyph_references("A", "A.alt").is_err());
+        assert_eq!(format, original);
+        assert!(format.remove_glyph_references("A").is_err());
+        assert_eq!(format, original);
+    }
 
     #[test]
     fn record_is_glyph_free_and_preserves_exact_format_structure() {

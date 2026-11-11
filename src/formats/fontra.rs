@@ -1093,7 +1093,7 @@ pub fn to_ufo_files(folder: &Path) -> Result<ConversionResult, String> {
                 order.iter().copied(),
             );
             ufo.lib.insert(
-                "public.glyphOrder".into(),
+                super::metadata::lib_keys::GLYPH_ORDER_KEY.into(),
                 plist::Value::Array(order.iter().map(|&name| name.into()).collect()),
             );
             if let Some(kern) = kern {
@@ -1362,7 +1362,7 @@ pub fn write_back(original: &Path, sources: &[WorkingSource], stage: &Path) -> R
         let listed: Vec<&str> = working
             .font
             .lib
-            .get("public.glyphOrder")
+            .get(super::metadata::lib_keys::GLYPH_ORDER_KEY)
             .and_then(plist::Value::as_array)
             .into_iter()
             .flatten()

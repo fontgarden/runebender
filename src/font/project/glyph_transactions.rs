@@ -162,7 +162,7 @@ impl Project {
         Ok((added, transaction))
     }
 
-    /// Prepare removal of one glyph and its direct group and kerning references.
+    /// Prepare removal of one glyph and its group, kerning, font-lib, rule and HOI references.
     pub fn begin_remove_glyph(
         &self,
         name: &str,
@@ -180,7 +180,7 @@ impl Project {
         })
     }
 
-    /// Prepare a glyph rename with component, metrics, group and kerning references updated.
+    /// Prepare a glyph rename with component, metrics, group, kerning, font-lib, rule and HOI references updated.
     pub fn begin_rename_glyph(
         &self,
         old: &str,
@@ -208,6 +208,8 @@ impl Project {
         &mut self,
         transaction: CanonicalGlyphTransaction,
     ) -> Result<DocumentEditOutcome, GlyphTransactionError> {
+        let designspace_changed =
+            transaction.base.designspace() != transaction.replacement.designspace();
         let source_metadata = transaction
             .base
             .source_ids()
@@ -216,6 +218,8 @@ impl Project {
             .filter(|source| {
                 transaction.base.font_metadata(*source)
                     != transaction.replacement.font_metadata(*source)
+                    || transaction.base.source_formats.get(source)
+                        != transaction.replacement.source_formats.get(source)
             })
             .collect::<Vec<_>>();
         let dependency_names = match &transaction.history {
@@ -252,6 +256,7 @@ impl Project {
                 debug_assert!(moved, "validated rename cannot collide with layer history");
             }
         }
+        self.ds_dirty |= designspace_changed;
         self.record_glyph_changes(&transaction.history, &transaction.affected_layers);
         Ok(DocumentEditOutcome::Changed {
             revision: self.variable.revision,
@@ -378,6 +383,174 @@ mod tests {
         project.variable = variable;
         project.compute_compat();
         project
+    }
+
+    fn metadata_project() -> Project {
+        use crate::font::model::hoi_trajectories::{
+            HoiAxis, HoiEasing, HoiEndpoint, HoiTrajectory, write_trajectories,
+        };
+        use crate::formats::metadata::lib_keys::{GLYPH_ORDER_KEY, PSNAMES_KEY};
+
+        let original = project();
+        let mut document = norad::designspace::DesignSpaceDocument::load(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/core/Core.designspace"),
+        )
+        .unwrap();
+        document.rules.rules.push(norad::designspace::Rule {
+            name: Some("lifecycle".into()),
+            condition_sets: vec![norad::designspace::ConditionSet {
+                conditions: vec![norad::designspace::Condition {
+                    name: "Weight".into(),
+                    minimum: Some(500.0),
+                    maximum: None,
+                }],
+            }],
+            substitutions: [("A", "Aacute"), ("Aacute", "A"), ("Aacute", "Aacute")]
+                .map(|(name, with)| norad::designspace::Substitution {
+                    name: norad::Name::new(name).unwrap(),
+                    with: norad::Name::new(with).unwrap(),
+                })
+                .into(),
+        });
+        let endpoint = |source: &str, location| HoiEndpoint {
+            source: source.into(),
+            layer: "public.default".into(),
+            location,
+            contour: 0,
+            point: 0,
+            contour_identifier: None,
+            point_identifier: None,
+            outline_sha256: "0".repeat(64),
+        };
+        let trajectory = HoiTrajectory {
+            glyph: "A".into(),
+            axis: HoiAxis {
+                tag: "wght".into(),
+                name: "Weight".into(),
+                minimum: 400.0,
+                default: 400.0,
+                maximum: 700.0,
+                mapping: Vec::new(),
+            },
+            lower: endpoint("Core-Regular.ufo", 400.0),
+            upper: endpoint("Core-Bold.ufo", 700.0),
+            controls: [[10.0, 20.0], [30.0, 40.0]],
+            easing: HoiEasing::EaseIn,
+        };
+        write_trajectories(&mut document.lib, &[trajectory]).unwrap();
+        let mut project = Project::from_designspace(document, |filename| {
+            let source = if filename == "Core-Regular.ufo" {
+                SourceId(0)
+            } else {
+                SourceId(1)
+            };
+            let mut font = original.encode_ufo_source(source).unwrap();
+            font.lib.insert(
+                GLYPH_ORDER_KEY.into(),
+                plist::Value::Array(vec!["Aacute".into(), "A".into()]),
+            );
+            font.lib.insert(
+                PSNAMES_KEY.into(),
+                plist::Value::Dictionary(
+                    [
+                        ("A", plist::Value::from("uni0041")),
+                        ("Aacute", plist::Value::from("Aacute")),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            );
+            Ok(SourceInput::from_font(font, PathBuf::from(filename)))
+        })
+        .unwrap();
+        project.export_source = Some(PathBuf::from("Core.designspace"));
+        project
+    }
+
+    #[test]
+    fn lifecycle_metadata_survives_save_and_reopen() {
+        use crate::formats::metadata::lib_keys::{GLYPH_ORDER_KEY, PSNAMES_KEY};
+
+        let mut project = metadata_project();
+        let path = std::env::temp_dir().join(format!(
+            "runebender-glyph-metadata-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        project.save_as(&path).unwrap();
+        let destination = project.export_source.clone().unwrap();
+        let id = project.document_glyph("A").unwrap().id();
+        let change = project.rename_document_glyph("A", "A.alt").unwrap();
+        assert_eq!(project.document_glyph("A.alt").unwrap().id(), id);
+        let DocumentEditOutcome::Changed { change, .. } = change else {
+            panic!("rename must change the document");
+        };
+        assert_eq!(
+            change.source_metadata,
+            project
+                .document_sources()
+                .map(|s| s.id())
+                .collect::<Vec<_>>()
+        );
+        assert!(project.ds_dirty);
+        project.save().unwrap();
+        let mut reopened = Project::load(&destination).unwrap();
+        let rules = reopened.document_designspace().unwrap().rules();
+        assert_eq!(rules[0].substitutions[0].name, "A.alt");
+        assert_eq!(rules[0].substitutions[1].replacement, "A.alt");
+        assert_eq!(
+            reopened
+                .document_designspace()
+                .unwrap()
+                .hoi_trajectories()
+                .unwrap()[0]
+                .glyph,
+            "A.alt"
+        );
+        for source in reopened.document_sources() {
+            let font = reopened.encode_ufo_source(source.id()).unwrap();
+            assert_eq!(
+                font.lib[GLYPH_ORDER_KEY],
+                plist::Value::Array(vec!["Aacute".into(), "A.alt".into()])
+            );
+            let names = font.lib[PSNAMES_KEY].as_dictionary().unwrap();
+            assert_eq!(names.get("A.alt"), Some(&"uni0041".into()));
+            assert!(!names.contains_key("A"));
+        }
+        reopened.remove_document_glyph("A.alt").unwrap();
+        assert!(reopened.ds_dirty);
+        reopened.save().unwrap();
+        let removed = Project::load(&destination).unwrap();
+        let structure = removed.document_designspace().unwrap();
+        assert_eq!(
+            structure.rules()[0].substitutions,
+            vec![crate::font::model::designspace::CanonicalSubstitution {
+                name: "Aacute".into(),
+                replacement: "Aacute".into(),
+            }]
+        );
+        assert!(structure.hoi_trajectories().unwrap().is_empty());
+        for source in removed.document_sources() {
+            let font = removed.encode_ufo_source(source.id()).unwrap();
+            assert!(font.get_glyph("A.alt").is_none());
+            assert_eq!(
+                font.lib[GLYPH_ORDER_KEY],
+                plist::Value::Array(vec!["Aacute".into()])
+            );
+            assert_eq!(
+                font.lib[PSNAMES_KEY]
+                    .as_dictionary()
+                    .unwrap()
+                    .keys()
+                    .collect::<Vec<_>>(),
+                vec!["Aacute"]
+            );
+        }
+        std::fs::remove_dir_all(path).unwrap();
     }
 
     #[test]
@@ -536,8 +709,39 @@ mod tests {
     }
 
     #[test]
+    fn malformed_later_source_rejects_the_whole_lifecycle_edit() {
+        use crate::font::persistence::source_format::SourceFormatData;
+        use crate::formats::metadata::lib_keys::PSNAMES_KEY;
+
+        let mut project = metadata_project();
+        let source = SourceId(1);
+        let mut font = project.encode_ufo_source(source).unwrap();
+        font.lib
+            .insert(PSNAMES_KEY.into(), plist::Value::Integer(42.into()));
+        let base = project.variable.source_structure_snapshot();
+        let mut replacement = base.clone();
+        replacement
+            .source_formats
+            .insert(source, SourceFormatData::from_ufo(&font));
+        project
+            .variable
+            .restore_source_structure_if_current(&base, replacement)
+            .unwrap();
+        project.mark_saved();
+        let before = project.variable.source_structure_snapshot();
+        let revision = project.document_revision();
+
+        assert!(project.begin_rename_glyph("A", "A.alt").is_err());
+        assert_eq!(project.variable.source_structure_snapshot(), before);
+        assert!(project.begin_remove_glyph("A").is_err());
+        assert_eq!(project.variable.source_structure_snapshot(), before);
+        assert_eq!(project.document_revision(), revision);
+        assert!(!project.is_modified());
+    }
+
+    #[test]
     fn rejected_and_stale_transactions_leave_state_unchanged() {
-        let mut project = project();
+        let mut project = metadata_project();
         let revision = project.document_revision();
         let no_op = project.begin_add_glyph("A", 500.0, None).unwrap();
         assert!(matches!(
@@ -557,23 +761,27 @@ mod tests {
             })
             .unwrap();
         let changed_revision = project.document_revision();
+        let before = project.variable.source_structure_snapshot();
         assert_eq!(
             project.commit_glyph_transaction(transaction),
             Err(GlyphTransactionError::Stale)
         );
         assert_eq!(project.document_revision(), changed_revision);
+        assert_eq!(project.variable.source_structure_snapshot(), before);
+        assert!(!project.ds_dirty);
         assert!(project.document_glyph("A").is_some());
         assert!(project.document_glyph("A.alt").is_none());
     }
 
     #[test]
     fn rename_moves_and_remove_clears_project_layer_history() {
-        let mut project = project();
+        let mut project = metadata_project();
         let source = project.document_sources().next().unwrap();
         let old = GlyphLayerAddress {
             glyph: "A".into(),
             layer: source.default_layer(),
         };
+        let source = source.id();
         let mut edit = project.begin_document_layer_transaction(&old).unwrap();
         edit.draft_mut().set_width(501.25).unwrap();
         project.commit_document_layer_transaction(edit).unwrap();
@@ -595,6 +803,30 @@ mod tests {
             ),
             1
         );
+        for (direction, width) in [
+            (crate::font::history::HistoryDirection::Undo, 500.125),
+            (crate::font::history::HistoryDirection::Redo, 501.25),
+        ] {
+            project
+                .replay_document_layer_history(&renamed, direction)
+                .unwrap();
+            assert_eq!(
+                project
+                    .document_layer("A.alt", &renamed.layer)
+                    .unwrap()
+                    .width(),
+                width
+            );
+            assert_eq!(
+                project.document_designspace().unwrap().rules()[0].substitutions[0].name,
+                "A.alt"
+            );
+            let font = project.encode_ufo_source(source).unwrap();
+            assert_eq!(
+                crate::formats::metadata::lib_keys::read_production_name(&font, "A.alt"),
+                Some("uni0041".into())
+            );
+        }
 
         project.remove_document_glyph("A.alt").unwrap();
         assert_eq!(

@@ -184,6 +184,12 @@ impl CanonicalSourceStructureSnapshot {
                 .remove_glyph_references(name)
                 .map_err(|error| error.to_string())?;
         }
+        for format in self.source_formats.values_mut() {
+            format.remove_glyph_references(name)?;
+        }
+        if let Some(designspace) = &mut self.designspace {
+            designspace.remove_glyph_references(name)?;
+        }
         Ok(addresses)
     }
 
@@ -204,6 +210,12 @@ impl CanonicalSourceStructureSnapshot {
                 .font_metadata
                 .rename_glyph_references(old, new)
                 .map_err(|error| error.to_string())?;
+        }
+        for format in self.source_formats.values_mut() {
+            format.rename_glyph_references(old, new)?;
+        }
+        if let Some(designspace) = &mut self.designspace {
+            designspace.rename_glyph_references(old, new)?;
         }
 
         for preserved in glyph.layers.values_mut() {
