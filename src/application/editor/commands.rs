@@ -221,8 +221,17 @@ impl Workspace {
             return;
         }
 
-        let removed_active =
-            matches!(self.mode, Mode::Editor(_)) && self.session.glyph_name == name;
+        let was_editor = matches!(self.mode, Mode::Editor(_));
+        let was_graph = matches!(self.mode, Mode::Graph);
+        let removed_active = self.session.glyph_name == name;
+        let removed_before = self
+            .tabs
+            .iter()
+            .take(self.active_tab)
+            .filter(|tab| tab.session.glyph_name == name)
+            .count();
+        self.park();
+        self.active_tab -= removed_before;
         self.tabs.retain(|tab| tab.session.glyph_name != name);
         self.cells = Arc::new(cells_of(&self.font, &self.palette));
         self.multi_selected = Arc::new(std::collections::HashSet::new());
@@ -231,14 +240,19 @@ impl Workspace {
         self.note = format!("removed {name}");
 
         if removed_active {
-            if self.tabs.is_empty() {
-                self.mode = Mode::Overview;
-                self.active_tab = 0;
+            if !was_editor || self.tabs.is_empty() {
+                self.settle_on_overview();
+                if was_graph {
+                    self.mode = Mode::Graph;
+                }
             } else {
                 let next = self.active_tab.min(self.tabs.len() - 1);
                 self.active_tab = usize::MAX;
                 self.activate_tab(next);
             }
+        } else if was_editor && let Some(index) = self.font.index_of(&self.session.glyph_name) {
+            self.selected = Some(index);
+            self.mode = Mode::Editor(index);
         }
     }
 
@@ -1548,6 +1562,74 @@ mod tests {
         }
         glyph.contours.push(contour);
         glyph
+    }
+
+    #[test]
+    fn removing_another_glyph_preserves_the_live_tab_and_rebinds_its_index() {
+        for removed in ["A", "C", "D"] {
+            let mut app = Workspace::untitled().unwrap();
+            app.tabs.clear();
+            app.active_tab = 0;
+            app.open_glyph_tab("A");
+            app.new_tab();
+            app.open_glyph_tab("B");
+            app.open_glyph_tab("C");
+            app.activate_tab(2);
+            let identity = app.tabs[app.active_tab].text_context_id;
+            let session = app.session.clone();
+            app.selected = app.font.index_of(removed);
+            app.command_remove_glyph();
+
+            let index = app.font.index_of("B").unwrap();
+            assert!(matches!(app.mode, Mode::Editor(current) if current == index));
+            assert_eq!(app.selected, Some(index));
+            assert_eq!(app.tabs[app.active_tab].text_context_id, identity);
+            assert!(Arc::ptr_eq(&app.session, &session));
+            assert!(app.tabs.iter().all(|tab| tab.session.glyph_name != removed));
+            // Switching must not park B into the tab that shifted into its former slot.
+            let other = if removed == "C" { "A" } else { "C" };
+            app.open_glyph_tab(other);
+            app.open_glyph_tab("B");
+            assert_eq!(app.tabs[app.active_tab].text_context_id, identity);
+            assert_eq!(app.session.glyph_name, "B");
+        }
+    }
+
+    #[test]
+    fn removing_active_glyph_selects_the_next_surviving_tab() {
+        let mut app = Workspace::untitled().unwrap();
+        app.tabs.clear();
+        app.active_tab = 0;
+        app.open_glyph_tab("A");
+        app.new_tab();
+        app.open_glyph_tab("B");
+        app.open_glyph_tab("C");
+        app.activate_tab(1);
+        app.command_remove_glyph();
+        assert_eq!(app.session.glyph_name, "B");
+        assert_eq!(app.active_tab, 0);
+        assert_eq!(app.tabs[1].session.glyph_name, "C");
+        assert!(matches!(app.mode, Mode::Editor(index) if Some(index) == app.font.index_of("B")));
+    }
+
+    #[test]
+    fn removing_the_last_tab_clears_the_deleted_session_without_changing_other_surfaces() {
+        for mode in [Mode::Editor(0), Mode::Overview, Mode::Graph] {
+            let mut app = Workspace::untitled().unwrap();
+            app.tabs.clear();
+            app.active_tab = 0;
+            app.open_glyph_tab("A");
+            let was_graph = matches!(mode, Mode::Graph);
+            app.mode = mode;
+            app.command_remove_glyph();
+            assert!(app.tabs.is_empty());
+            assert_eq!(app.active_tab, 0);
+            assert_ne!(app.session.glyph_name, "A");
+            assert_eq!(app.selected, None);
+            assert_eq!(app.selected_points, 0);
+            assert_eq!(matches!(app.mode, Mode::Graph), was_graph);
+            assert!(!matches!(app.mode, Mode::Editor(_)));
+        }
     }
 
     #[test]

@@ -15,6 +15,8 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
 ### Changed
 
 - Feature generation and live measurements use fewer temporary allocations without changing feature text or measurement ordering.
+- Removing a glyph preserves the active surviving tab and updates its editor index after the glyph list shifts.
+  Closing every tab for the deleted glyph selects the next surviving tab or clears the deleted session, without leaving stale state in the overview or graph.
 - Glyph rename and removal update every source's glyph order and production-name mapping, Designspace substitutions, and supported HOI trajectory references in the same guarded transaction.
   Renaming retains production-name values, rule identities, and unrelated metadata; removal retains empty rules and their conditions.
   Saves persist the changed Designspace as well as its UFO sources.
