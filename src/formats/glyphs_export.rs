@@ -7,7 +7,8 @@
 //! Each master maps to the working-copy UFO that [`super::glyphs_import`] named for it.
 //! A master layer is replaced only when its drawing differs from what the import made of it,
 //! so unedited layers keep Glyphs data the import does not read, such as hints and node user
-//! data. Glyphs new to the working copy are added and glyphs gone from every master removed.
+//! data. New glyphs are added and deliberately deleted imported glyphs are removed; glyphs
+//! skipped by the original import remain untouched, tracked separately from the working set.
 //! Unicode values, kerning groups and kerning follow the working copy when they changed.
 //! The rest of the file is kept as glyphslib reads it; a Glyphs 2 file is written as Glyphs 3.
 //!
@@ -178,6 +179,14 @@ fn merge(font: &mut Glyphs3, sources: &[WorkingSource]) -> Result<Changes, Strin
                 .into(),
         );
     }
+    let imported = sources
+        .iter()
+        .map(|source| {
+            super::metadata::lib_keys::read_foreign_glyphs(&source.font).ok_or(
+                "the working copy has no imported glyph inventory; reopen the original source",
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let original = font.clone();
     let template = original
         .glyphs
@@ -218,8 +227,12 @@ fn merge(font: &mut Glyphs3, sources: &[WorkingSource]) -> Result<Changes, Strin
     }
     let keep: HashSet<&str> = order.iter().map(String::as_str).collect();
     let count = font.glyphs.len();
-    font.glyphs
-        .retain(|glyph| keep.contains(glyph.name.as_str()));
+    font.glyphs.retain(|glyph| {
+        keep.contains(glyph.name.as_str())
+            || imported
+                .iter()
+                .all(|names| names.get(glyph.name.as_str()) == Some(&false))
+    });
     changes.glyph_set = font.glyphs.len() != count;
 
     let (first_groups, second_groups) = kerning_groups(&masters[0].1.font);
@@ -547,10 +560,14 @@ unitsPerEm = 1000;
 "#;
 
     fn convert(tag: &str) -> (Glyphs3, Vec<WorkingSource>) {
-        let GlyphsFont::Glyphs3(font) = GlyphsFont::load_str(SOURCE).unwrap() else {
+        convert_source(tag, SOURCE)
+    }
+
+    fn convert_source(tag: &str, text: &str) -> (Glyphs3, Vec<WorkingSource>) {
+        let GlyphsFont::Glyphs3(font) = GlyphsFont::load_str(text).unwrap() else {
             panic!("a Glyphs 3 source");
         };
-        let files = super::super::glyphs_import::glyphs_to_ufo_files(SOURCE).unwrap();
+        let files = super::super::glyphs_import::glyphs_to_ufo_files(text).unwrap();
         let root = std::env::temp_dir().join(format!("rb-glyphs-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         for file in &files.files {
@@ -571,6 +588,61 @@ unitsPerEm = 1000;
         let changes = merge(&mut font, &sources).unwrap();
         assert_eq!(font, original);
         assert!(changes.glyphs.is_empty() && !changes.glyph_set && !changes.kerning);
+    }
+
+    #[test]
+    fn skipped_glyphs_survive_but_deliberate_deletions_do_not() {
+        let text = SOURCE.replace(
+            "glyphs = (",
+            r#"glyphs = (
+{
+glyphname = Alternate;
+layers = ({ layerId = alternate; associatedMasterId = m01; width = 321;
+hints = ({ type = Stem; }); });
+},
+{
+glyphname = Broken;
+layers = ({ layerId = m01; width = 123; shapes = ({ ref = Missing; }); });
+},
+{
+glyphname = Composite;
+layers = ({ layerId = m01; width = 400; shapes = ({ ref = B; }); });
+},"#,
+        );
+        let (mut font, mut sources) = convert_source("skipped", &text);
+        assert!(sources[0].font.get_glyph("Alternate").is_none());
+        assert!(sources[0].font.get_glyph("Broken").is_none());
+        assert!(sources[0].font.get_glyph("Composite").is_some());
+        let before = font.clone();
+        let changes = merge(&mut font, &sources).unwrap();
+        assert_eq!(font, before);
+        assert!(!changes.glyph_set);
+
+        let layer = sources[0].font.default_layer_mut();
+        layer.remove_glyph("B");
+        layer.insert_glyph(norad::Glyph::new("New"));
+        merge(&mut font, &sources).unwrap();
+        assert!(!font.glyphs.iter().any(|glyph| glyph.name == "B"));
+        assert!(font.glyphs.iter().any(|glyph| glyph.name == "New"));
+
+        // Deleting the base on the previous save made Composite unimportable now,
+        // but the original imported inventory still identifies its deletion.
+        let layer = sources[0].font.default_layer_mut();
+        layer.remove_glyph("Composite");
+        layer.remove_glyph("New");
+        merge(&mut font, &sources).unwrap();
+        let names: Vec<_> = font
+            .glyphs
+            .iter()
+            .map(|glyph| glyph.name.as_str())
+            .collect();
+        assert_eq!(names, ["Alternate", "Broken", "A"]);
+        for name in ["Alternate", "Broken"] {
+            assert_eq!(
+                font.glyphs.iter().find(|glyph| glyph.name == name),
+                before.glyphs.iter().find(|glyph| glyph.name == name)
+            );
+        }
     }
 
     #[test]

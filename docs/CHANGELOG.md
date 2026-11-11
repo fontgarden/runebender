@@ -15,6 +15,14 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
 ### Changed
 
 - Feature generation and live measurements use fewer temporary allocations without changing feature text or measurement ordering.
+- Save As detaches Glyphs and Fontra write-back only after successfully publishing the new UFO/Designspace document.
+  Later saves cannot overwrite the original foreign input.
+- Glyphs and Fontra saves preserve glyphs skipped during import while retaining intentional deletions.
+  Fontra component locations and extension data follow component identity through edits and reordering.
+  Older foreign working copies without import provenance must reopen the original source before write-back.
+  Preserve pending edits with Save As before reopening an older working copy.
+- Default graph specimens render built-in pages without implicitly compiling a Rust example.
+  Script examples remain available through the explicit add action; existing saved graphs are unchanged.
 - MCP installation reports use typed internal fields while retaining their JSON format.
   Headless compilation now lives beside the other font commands, preserving variable-project support and overwrite protection.
 - Canonical project import returns typed metadata errors instead of panicking on malformed UFO input.

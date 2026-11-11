@@ -1102,22 +1102,6 @@ mod tests {
             "with Auto off the graph waits for Run"
         );
         app.graph.auto_run = true;
-        let graph = app.live_graph_session().unwrap().snapshot().graph;
-        assert!(
-            graph
-                .nodes
-                .iter()
-                .all(|node| node.type_name != "live.python")
-        );
-        assert_eq!(
-            graph
-                .nodes
-                .iter()
-                .filter(|node| node.type_name == "live.proof")
-                .count(),
-            graph_live::SPECIMEN_PAGES + 1,
-            "the built-in pages and the example script's proof"
-        );
         assert!(live_autorun_waiting(&app), "the first render does not wait");
         live_autorun_tick(&mut app);
         assert!(!app.graph.live_ui_handles.is_empty(), "{}", app.note);

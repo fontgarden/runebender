@@ -47,7 +47,8 @@ impl Project {
     ///
     /// Every UFO, optional Designspace and external relative feature include is staged before
     /// publication. Existing or aliased destinations are refused, and a failure leaves both the
-    /// live Project paths and original source tree unchanged.
+    /// live Project paths and original source tree unchanged. A successful copy becomes an
+    /// independent UFO/Designspace document; later saves no longer write back to a foreign input.
     pub fn save_as(&mut self, directory: &Path) -> Result<(), String> {
         let plan = SaveAsPlan::new(self, directory, None)?;
         let SaveAsPlan {
@@ -71,6 +72,7 @@ impl Project {
                 .first()
                 .map(|source| source.source_path.clone());
         }
+        self.foreign_source = None;
         self.variable.revision = self.variable.revision.wrapping_add(1);
         Ok(())
     }
@@ -385,6 +387,179 @@ mod tests {
         let mut files = BTreeMap::new();
         walk(root, root, &mut files);
         files
+    }
+
+    fn write_foreign_font(root: &Path, extension: &str) -> PathBuf {
+        let path = root.join(format!("Source.{extension}"));
+        if extension == "fontra" {
+            std::fs::create_dir_all(path.join("glyphs")).unwrap();
+            std::fs::write(
+                path.join("font-data.json"),
+                r#"{
+  "unitsPerEm": 1000,
+  "fontInfo": {"familyName": "Save As Fixture"},
+  "sources": {"regular": {"name": "Regular", "location": {}}}
+}"#,
+            )
+            .unwrap();
+            std::fs::write(
+                path.join("glyph-info.csv"),
+                "glyph name;code points\nA;U+0041\n",
+            )
+            .unwrap();
+            std::fs::write(
+                path.join("glyphs/A^1.json"),
+                r#"{
+  "name": "A",
+  "sources": [
+    {"name": "Regular", "layerName": "regular", "location": {}, "locationBase": "regular"}
+  ],
+  "layers": {"regular": {"glyph": {"xAdvance": 500}}}
+}"#,
+            )
+            .unwrap();
+        } else {
+            let text = r#"{
+.formatVersion = 3;
+familyName = "Save As Fixture";
+unitsPerEm = 1000;
+axes = ({ name = Weight; tag = wght; });
+fontMaster = (
+  { id = regular; name = Regular; axesValues = (400); },
+  { id = bold; name = Bold; axesValues = (700); }
+);
+glyphs = ({
+  glyphname = A;
+  unicode = 65;
+  layers = (
+    { layerId = regular; width = 500; },
+    { layerId = bold; width = 700; }
+  );
+});
+}"#;
+            if extension == "glyphspackage" {
+                glyphslib::Font::load_str(text)
+                    .unwrap()
+                    .save(&path)
+                    .unwrap();
+            } else {
+                std::fs::write(&path, text).unwrap();
+            }
+        }
+        path
+    }
+
+    fn edit_width(project: &mut Project, width: f64) {
+        let layer = project.document_sources().next().unwrap().default_layer();
+        project
+            .edit_document_layer("A", &layer, |draft| {
+                draft.set_width(width)?;
+                Ok(())
+            })
+            .unwrap();
+        assert!(project.is_modified());
+    }
+
+    fn saved_width(path: &Path) -> f64 {
+        norad::Font::load(path)
+            .unwrap()
+            .default_layer()
+            .get_glyph("A")
+            .unwrap()
+            .width
+    }
+
+    #[test]
+    fn foreign_save_as_detaches_write_back_before_later_save() {
+        for extension in ["glyphs", "glyphspackage", "fontra"] {
+            let scratch = Scratch::new(extension);
+            let original = write_foreign_font(&scratch.0, extension);
+            let mut project = Project::load(&original).unwrap();
+            assert_eq!(project.foreign_source.as_ref().unwrap().path, original);
+            // Include the converted working copy in the byte-for-byte preservation check.
+            let original_bytes = tree_bytes(&scratch.0);
+            let source = project.source_id(0).unwrap();
+            let old_source = project.document_source_path(source).unwrap().to_owned();
+            let copy = Scratch::new("foreign-copy");
+            let target = copy.0.join(old_source.file_name().unwrap());
+
+            edit_width(&mut project, 610.0);
+            project.save_as(&copy.0).unwrap();
+
+            assert!(project.foreign_source.is_none());
+            assert!(!project.is_modified());
+            assert_eq!(project.document_source_path(source), Some(target.as_path()));
+            assert!(project.export_source.as_ref().unwrap().starts_with(&copy.0));
+            assert_eq!(saved_width(&target), 610.0);
+            assert_eq!(tree_bytes(&scratch.0), original_bytes);
+
+            edit_width(&mut project, 720.0);
+            project.save().unwrap();
+
+            assert!(!project.is_modified());
+            assert_eq!(saved_width(&target), 720.0);
+            assert_eq!(tree_bytes(&scratch.0), original_bytes);
+            let reopened = Project::load(project.export_source.as_ref().unwrap()).unwrap();
+            let layer = reopened.document_sources().next().unwrap().default_layer();
+            assert_eq!(reopened.document_layer("A", &layer).unwrap().width(), 720.0);
+        }
+    }
+
+    #[test]
+    fn failed_foreign_save_as_preserves_binding_paths_edits_and_dirty_state() {
+        for extension in ["glyphs", "glyphspackage", "fontra"] {
+            let scratch = Scratch::new(extension);
+            let original = write_foreign_font(&scratch.0, extension);
+            let mut project = Project::load(&original).unwrap();
+            edit_width(&mut project, 610.0);
+            let original_bytes = tree_bytes(&scratch.0);
+            let foreign = project.foreign_source.clone();
+            let export_source = project.export_source.clone();
+            let paths = project
+                .document_sources()
+                .map(|source| source.path().to_owned())
+                .collect::<Vec<_>>();
+            let revision = project.document_revision();
+            let ds_dirty = project.ds_dirty;
+            let source_dirty = project
+                .document_sources()
+                .map(|source| project.document_source_is_modified(source.id()))
+                .collect::<Vec<_>>();
+            let copy = Scratch::new("foreign-occupied");
+            std::fs::write(
+                copy.0.join(paths.last().unwrap().file_name().unwrap()),
+                "occupied",
+            )
+            .unwrap();
+            let destination_bytes = tree_bytes(&copy.0);
+
+            let error = project.save_as(&copy.0).unwrap_err();
+
+            assert!(error.contains("already exists"), "{error}");
+            assert_eq!(project.foreign_source, foreign);
+            assert_eq!(project.export_source, export_source);
+            assert_eq!(project.document_revision(), revision);
+            assert_eq!(project.ds_dirty, ds_dirty);
+            assert_eq!(
+                project
+                    .document_sources()
+                    .map(|source| source.path().to_owned())
+                    .collect::<Vec<_>>(),
+                paths
+            );
+            assert_eq!(
+                project
+                    .document_sources()
+                    .map(|source| project.document_source_is_modified(source.id()))
+                    .collect::<Vec<_>>(),
+                source_dirty
+            );
+            let layer = project.document_sources().next().unwrap().default_layer();
+            assert_eq!(project.document_layer("A", &layer).unwrap().width(), 610.0);
+            assert!(project.is_modified());
+            assert_eq!(tree_bytes(&scratch.0), original_bytes);
+            assert_eq!(tree_bytes(&copy.0), destination_bytes);
+        }
     }
 
     #[test]

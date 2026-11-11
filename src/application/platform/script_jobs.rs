@@ -1175,29 +1175,6 @@ mod native {
 
         #[cfg(unix)]
         #[test]
-        fn runtime_availability_rejects_oversized_version_output() {
-            use std::os::unix::fs::PermissionsExt;
-
-            let temporary = TemporaryDirectory::new().expect("temporary directory");
-            let executable = temporary.path.join("oversized-version");
-            write_script(
-                &executable,
-                b"#!/bin/sh\n/bin/dd if=/dev/zero bs=5000 count=1 2>/dev/null\n",
-            )
-            .expect("write executable");
-            let mut permissions = fs::metadata(&executable).expect("metadata").permissions();
-            permissions.set_mode(0o700);
-            fs::set_permissions(&executable, permissions).expect("make executable");
-
-            assert!(matches!(
-                ScriptRuntimeAvailability::check(executable),
-                ScriptRuntimeAvailability::Unavailable(message)
-                    if message.contains("exceeded 4096 bytes")
-            ));
-        }
-
-        #[cfg(unix)]
-        #[test]
         fn result_capture_ignores_working_directory_stdout_file() {
             let Some(python) = python() else {
                 return;

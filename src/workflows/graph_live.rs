@@ -412,6 +412,7 @@ pub fn recipe_raster(recipe: &Value) -> Option<[f64; 2]> {
 /// The default live graph: the current font feeding one proof per specimen page.
 ///
 /// `recipes` come from [`specimen_recipes`], top to bottom.
+/// Script examples are added explicitly: their cold compilation must not delay ordinary proofs.
 pub fn specimen_starter(source_id: SourceId, recipes: Vec<Value>) -> NodeGraph {
     // A proof node shows its image at the standard content width, 240 px,
     // inside a header, two port rows, and padding: 80 px in all
@@ -426,12 +427,6 @@ pub fn specimen_starter(source_id: SourceId, recipes: Vec<Value>) -> NodeGraph {
         .unwrap()
         .values
         .insert("source".into(), json!(source_id.0));
-    // The script's proof is captured at the same design-space location as the built-in pages.
-    let location = recipes
-        .first()
-        .and_then(|recipe| recipe.get("normalized_location"))
-        .cloned()
-        .unwrap_or_else(|| json!([]));
     let mut y = 32.0_f32;
     for recipe in recipes {
         let height = recipe_raster(&recipe).map_or(144.0, |[w, h]| CONTENT_WIDTH * h / w.max(1.0));
@@ -450,26 +445,6 @@ pub fn specimen_starter(source_id: SourceId, recipes: Vec<Value>) -> NodeGraph {
             y += (height as f32) + NODE_CHROME + GAP;
         }
     }
-    // A worked specimen script and the proof that renders it, below the built-in pages. Its
-    // proof is added last, so the built-in pages render first while the script compiles.
-    let example = crate::formats::specimen_script::EXAMPLES[2];
-    let script = graph.add(SPECIMEN_SCRIPT, [32.0, y]);
-    graph.node_mut(script).unwrap().values.insert(
-        "code".into(),
-        json!(example.code(ScriptLanguage::Designbot)),
-    );
-    let proof = graph.add("live.proof", [704.0, y]);
-    graph
-        .node_mut(proof)
-        .unwrap()
-        .values
-        .insert("recipe".into(), {
-            let mut recipe = default_proof_recipe();
-            recipe["normalized_location"] = location;
-            recipe
-        });
-    graph.connect(source, "font", proof, "font");
-    graph.connect(script, "code", proof, "code");
     graph
 }
 
@@ -1089,33 +1064,5 @@ mod tests {
                 serde_json::from_value(recipe).unwrap();
             parsed.validate().unwrap();
         }
-    }
-
-    #[test]
-    fn the_specimen_is_the_font_feeding_one_proof_per_page_and_grows_a_comparison() {
-        let recipes = specimen_recipes(|_| 10.0, &[]);
-        let mut graph = specimen_starter(SourceId(0), recipes);
-        let proofs: Vec<_> = graph
-            .nodes
-            .iter()
-            .filter(|node| node.type_name == "live.proof")
-            .collect();
-        // One proof per built-in page, and one for the example script.
-        assert_eq!(proofs.len(), SPECIMEN_PAGES + 1);
-        assert!(
-            proofs
-                .iter()
-                .all(|proof| graph.link_into(proof.id, "font").is_some())
-        );
-        assert!(!has_comparison(&graph));
-        let before = graph.nodes.len();
-        add_comparison(&mut graph, &default_proof_recipe()).unwrap();
-        assert!(has_comparison(&graph));
-        assert_eq!(graph.nodes.len(), before + 3);
-        assert!(
-            graph
-                .validate(&super::super::graph::Registry::core())
-                .is_empty()
-        );
     }
 }

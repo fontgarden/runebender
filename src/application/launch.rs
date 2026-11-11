@@ -162,9 +162,7 @@ pub(crate) fn run(
             for _ in 0..1200 {
                 workspace.live_graph_pump();
                 workspace.sync_live_graph_presentation();
-                if workspace.graph.proof_images.len()
-                    > runebender::workflows::graph_live::SPECIMEN_PAGES
-                {
+                if !workspace.live_graph_need_pump() {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));

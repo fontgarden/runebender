@@ -7,6 +7,7 @@
 //! [`write_back`] merges a saved working copy into a copy of the original folder: changed glyph
 //! layers, the glyph set and Unicode values, kerning, feature text and line metrics.
 //! A glyph file whose drawings did not change keeps its original text.
+//! The original import inventory distinguishes skipped glyphs from deliberate deletions.
 //!
 //! Read: continuous axes and their mappings, full font sources, outlines, components, anchors,
 //! advance widths, kerning groups and values, and feature text.
@@ -25,7 +26,7 @@
 //!   Cross-axis mappings are ignored.
 //! - Sparse sources, glyph sources between font sources, glyph axes, and the location of
 //!   variable components are not read, so they cannot be edited. Write-back leaves them as
-//!   they were, but a moved or rescaled component keeps its old location.
+//!   they were, bound to each imported component's identity even after a move or reorder.
 //! - Only the `kern` kerning table is read. Kerning groups come from the first source and
 //!   other UFO groups are dropped. Pair rows are written in sorted order, not file order.
 //! - Feature text comes from the first source only. Conditional substitutions are not read.
@@ -681,7 +682,7 @@ fn read_layer(
             ));
         }
         let c = compose(&component["transformation"]).as_coeffs();
-        out.components.push(norad::Component::new(
+        let mut imported = norad::Component::new(
             norad::Name::new(base).map_err(|error| format!("{name}: component {base}: {error}"))?,
             norad::AffineTransform {
                 x_scale: c[0],
@@ -691,8 +692,10 @@ fn read_layer(
                 x_offset: c[4],
                 y_offset: c[5],
             },
-            None,
-        ));
+            Some(norad::Identifier::from_uuidv4()),
+        );
+        super::metadata::lib_keys::write_fontra_component(&mut imported, component);
+        out.components.push(imported);
     }
     for anchor in glyph["anchors"].as_array().into_iter().flatten() {
         let anchor_name = anchor["name"]
@@ -756,10 +759,22 @@ fn write_layer(glyph: &norad::Glyph) -> Map<String, Value> {
         .components
         .iter()
         .map(|component| {
-            json!({
-                "name": component.base.as_str(),
-                "transformation": decompose(component.transform),
-            })
+            let mut value = super::metadata::lib_keys::read_fontra_component(component)
+                .unwrap_or_else(|| json!({"name": component.base.as_str()}));
+            let transform = component.transform;
+            if compose(&value["transformation"]).as_coeffs()
+                != [
+                    transform.x_scale,
+                    transform.xy_scale,
+                    transform.yx_scale,
+                    transform.y_scale,
+                    transform.x_offset,
+                    transform.y_offset,
+                ]
+            {
+                value["transformation"] = decompose(transform);
+            }
+            value
         })
         .collect();
     let anchors: Vec<Value> = glyph
@@ -1058,6 +1073,7 @@ pub fn to_ufo_files(folder: &Path) -> Result<ConversionResult, String> {
             fill_font_info(&mut ufo.font_info, &font, source, &family)?;
             ufo.features.clone_from(&features);
             let layer = ufo.default_layer_mut();
+            let mut imported = Vec::new();
             for name in &order {
                 let Some((_, glyph)) = glyph_files.get(*name) else {
                     continue;
@@ -1069,7 +1085,13 @@ pub fn to_ufo_files(folder: &Path) -> Result<ConversionResult, String> {
                 let static_glyph = &glyph["layers"][layer_name]["glyph"];
                 let codepoints = codepoints.get(name).copied().unwrap_or_default();
                 layer.insert_glyph(read_layer(name, static_glyph, codepoints, &mut warnings)?);
+                imported.push(*name);
             }
+            super::metadata::lib_keys::write_foreign_glyphs(
+                &mut ufo.lib,
+                imported,
+                order.iter().copied(),
+            );
             ufo.lib.insert(
                 "public.glyphOrder".into(),
                 plist::Value::Array(order.iter().map(|&name| name.into()).collect()),
@@ -1274,6 +1296,14 @@ fn write_text(path: &Path, text: &str) -> Result<(), String> {
 
 /// Write `original` with the working copy's edits merged in, as a new folder at `stage`.
 pub fn write_back(original: &Path, sources: &[WorkingSource], stage: &Path) -> Result<(), String> {
+    let imported = sources
+        .iter()
+        .map(|source| {
+            super::metadata::lib_keys::read_foreign_glyphs(&source.font).ok_or(
+                "the working copy has no imported glyph inventory; reopen the original source",
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     copy_folder(original, stage)?;
     let mut font = FontData::read(stage)?;
     let font_sources: Vec<(&FontSource, &WorkingSource)> = sources
@@ -1352,6 +1382,17 @@ pub fn write_back(original: &Path, sources: &[WorkingSource], stage: &Path) -> R
         }
     }
     let info = GlyphInfo::read(stage)?;
+    // A glyph absent from every imported source was never editable, not deleted.
+    for (name, original_codepoints, _) in &info.rows {
+        if !seen.contains(name.as_str())
+            && imported
+                .iter()
+                .all(|names| names.get(name.as_str()) == Some(&false))
+        {
+            order.push(name);
+            codepoints.insert(name, original_codepoints.clone());
+        }
+    }
     let extra: HashMap<&str, &Vec<String>> = info
         .rows
         .iter()
@@ -1458,8 +1499,13 @@ pub fn write_back(original: &Path, sources: &[WorkingSource], stage: &Path) -> R
             write_text(&path, &fontra_json(&glyph))?;
         }
     }
-    for (path, _) in files.into_values() {
-        std::fs::remove_file(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    for (name, (path, _)) in files {
+        if !imported
+            .iter()
+            .all(|names| names.get(name.as_str()) == Some(&false))
+        {
+            std::fs::remove_file(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+        }
     }
 
     // Kerning: the "kern" table takes the UFO groups, and the UFO values in the columns of the
@@ -1611,6 +1657,141 @@ mod tests {
             write_text(&root.join(&file.path), &file.text).unwrap();
         }
         super::super::foreign::read_working_copy(&root.join("TestSans.designspace")).unwrap()
+    }
+
+    #[test]
+    fn skipped_glyphs_keep_their_files_and_rows_after_deletions() {
+        let folder = fixture("skipped");
+        let mut data = read_json(&folder.join(FONT_DATA)).unwrap();
+        data["sources"]["sparse"] =
+            json!({"name": "Sparse", "isSparse": true, "location": {"Weight": 75}});
+        write_text(&folder.join(FONT_DATA), &fontra_json(&data)).unwrap();
+        let mut rows = String::from("glyph name;code points;custom\nA;U+0041\nAacute;U+00C1\n");
+        let mut untouched = Vec::new();
+        for (name, source) in [
+            ("Between", json!({"location": {"Weight": 75}})),
+            ("Sparse", json!({"locationBase": "sparse", "location": {}})),
+            (
+                "Inactive",
+                json!({"locationBase": "regular", "inactive": true}),
+            ),
+        ] {
+            let mut source = source;
+            source["layerName"] = "original".into();
+            let glyph = json!({
+                "name": name,
+                "axes": [{"name": "local", "minValue": 0, "defaultValue": 0, "maxValue": 1}],
+                "customData": {"untouched": [1, 2, 3]},
+                "sources": [source],
+                "layers": {"original": {"glyph": {"xAdvance": 333, "customData": {"keep": true}}}}
+            });
+            let path = format!("glyphs/{}.json", string_to_file_name(name));
+            // Deliberately unlike the serializer's usual layout.
+            let text = format!("  {glyph}\n");
+            write_text(&folder.join(&path), &text).unwrap();
+            untouched.push((path, text));
+            rows.push_str(&format!("{name};U+E001;preserved\n"));
+        }
+        write_text(&folder.join(GLYPH_INFO), &rows).unwrap();
+        let mut sources = load(
+            &to_ufo_files(&folder).unwrap(),
+            &folder.with_file_name("out"),
+        );
+        for source in &sources {
+            for name in ["Between", "Sparse", "Inactive"] {
+                assert!(source.font.get_glyph(name).is_none());
+            }
+        }
+        for source in &mut sources {
+            source.font.default_layer_mut().remove_glyph("Aacute");
+        }
+        sources[1]
+            .font
+            .default_layer_mut()
+            .insert_glyph(norad::Glyph::new("New"));
+        let stage = folder.with_file_name("Saved.fontra");
+        write_back(&folder, &sources, &stage).unwrap();
+        sources[1].font.default_layer_mut().remove_glyph("New");
+        let again = folder.with_file_name("Again.fontra");
+        write_back(&stage, &sources, &again).unwrap();
+        for saved in [&stage, &again] {
+            assert!(!saved.join("glyphs/Aacute^1.json").exists());
+            for (path, text) in &untouched {
+                assert_eq!(std::fs::read_to_string(saved.join(path)).unwrap(), *text);
+            }
+            let rows = std::fs::read_to_string(saved.join(GLYPH_INFO)).unwrap();
+            assert!(!rows.contains("Aacute;"));
+            for name in ["Between", "Sparse", "Inactive"] {
+                assert!(rows.contains(&format!("{name};U+E001;preserved")));
+            }
+        }
+        assert!(!again.join("glyphs/New^1.json").exists());
+        assert!(
+            !std::fs::read_to_string(again.join(GLYPH_INFO))
+                .unwrap()
+                .contains("New;")
+        );
+        let _ = std::fs::remove_dir_all(folder.parent().unwrap());
+    }
+
+    #[test]
+    fn component_payload_follows_identity_through_edits_and_reordering() {
+        let folder = fixture("component-payload");
+        let path = "glyphs/Aacute^1.json";
+        let mut original = read_json(&folder.join(path)).unwrap();
+        let components = json!([
+            {"name": "A", "location": {"Weight": 75}, "customData": {"owner": "first"},
+             "transformation": {"translateX": 10, "scaleX": -1}},
+            {"name": "A", "location": {"Weight": 25}, "customData": {"owner": "second"},
+             "transformation": {"translateX": 20}},
+            {"name": "A", "location": {"Weight": 90}, "customData": {"owner": "deleted"}}
+        ]);
+        original["layers"]["default"]["glyph"]["components"] = components.clone();
+        write_text(&folder.join(path), &fontra_json(&original)).unwrap();
+        let mut sources = load(
+            &to_ufo_files(&folder).unwrap(),
+            &folder.with_file_name("out"),
+        );
+        let glyph = sources[1]
+            .font
+            .default_layer_mut()
+            .get_glyph_mut("Aacute")
+            .unwrap();
+        glyph.width += 10.0;
+        glyph.components[0].transform.x_offset = 30.0;
+        glyph.components.swap(0, 1);
+        glyph.components.pop();
+        // Same base and same index as the deleted component is not the same identity.
+        glyph.components.push(norad::Component::new(
+            norad::Name::new("A").unwrap(),
+            norad::AffineTransform::default(),
+            None,
+        ));
+        let stage = folder.with_file_name("Saved.fontra");
+        write_back(&folder, &sources, &stage).unwrap();
+        let saved = read_json(&stage.join(path)).unwrap();
+        let output = &saved["layers"]["default"]["glyph"]["components"];
+        assert_eq!(output[0], components[1]);
+        assert_eq!(output[1]["location"], components[0]["location"]);
+        assert_eq!(output[1]["customData"], components[0]["customData"]);
+        assert_eq!(output[1]["transformation"]["translateX"], 30);
+        assert!(output[2].get("location").is_none());
+        assert!(output[2].get("customData").is_none());
+
+        // A second save still uses object-bound data, not the original array positions.
+        sources[1]
+            .font
+            .default_layer_mut()
+            .get_glyph_mut("Aacute")
+            .unwrap()
+            .width += 10.0;
+        let again = folder.with_file_name("Again.fontra");
+        write_back(&stage, &sources, &again).unwrap();
+        assert_eq!(
+            read_json(&again.join(path)).unwrap()["layers"]["default"]["glyph"]["components"],
+            *output
+        );
+        let _ = std::fs::remove_dir_all(folder.parent().unwrap());
     }
 
     #[test]

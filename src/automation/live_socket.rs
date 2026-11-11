@@ -206,12 +206,9 @@ impl Server {
                         let _ = stream.set_nonblocking(false);
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
                         let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-                        if worker_connections
-                            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
-                                (active < MAX_LIVE_CONNECTIONS).then_some(active + 1)
-                            })
-                            .is_err()
-                        {
+                        // This listener is the only thread that increments the count;
+                        // connection handlers can only decrease it between this check and admission.
+                        if worker_connections.load(Ordering::Acquire) >= MAX_LIVE_CONNECTIONS {
                             let _ = write_frame(
                                 &mut stream,
                                 &serde_json::json!({"ok":false,"error_code":"connection_capacity",
@@ -219,6 +216,7 @@ impl Server {
                             );
                             continue;
                         }
+                        worker_connections.fetch_add(1, Ordering::AcqRel);
                         let sender = sender.clone();
                         let epoch = worker_epoch.clone();
                         let cancellations = worker_cancellations.clone();
@@ -634,6 +632,51 @@ mod tests {
         assert!(server.try_recv().is_none());
         assert!(!signal.load(Ordering::Acquire));
         assert_eq!(client.join().unwrap()["ok"], true);
+    }
+
+    #[test]
+    fn connection_capacity_is_reusable_after_a_handler_finishes() {
+        let server = Server::start().unwrap();
+        let mut clients = Vec::new();
+        let mut requests = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        for _ in 0..MAX_LIVE_CONNECTIONS {
+            let mut client = UnixStream::connect(server.path()).unwrap();
+            client
+                .write_all(b"{\"name\":\"font_info\",\"arguments\":{}}\n")
+                .unwrap();
+            let request = loop {
+                if let Some(request) = server.try_recv() {
+                    break request;
+                }
+                assert!(Instant::now() < deadline, "connection was not admitted");
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            clients.push(client);
+            requests.push(request);
+        }
+        let mut rejected = UnixStream::connect(server.path()).unwrap();
+        rejected
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let result: Value =
+            serde_json::from_str(&read_frame(&mut rejected, MAX_FRAME_BYTES).unwrap()).unwrap();
+        assert_eq!(result["error_code"], "connection_capacity");
+
+        requests
+            .pop()
+            .unwrap()
+            .respond(|_| serde_json::json!({"ok":true}));
+        read_frame(&mut clients.pop().unwrap(), MAX_FRAME_BYTES).unwrap();
+        while server.active_connections.load(Ordering::Acquire) == MAX_LIVE_CONNECTIONS {
+            assert!(
+                Instant::now() < deadline,
+                "completed handler retained its slot"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let result = call(server.path(), &cancel_call(&server, "capacity", "unknown")).unwrap();
+        assert_eq!(result["cancellation_status"], "unknown");
     }
 
     #[test]

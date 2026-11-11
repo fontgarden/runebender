@@ -127,6 +127,7 @@ fn convert(font: GlyphsFont) -> Result<ConversionResult, String> {
         // Glyphs for this master's main layer.
         let mut existing = HashSet::new();
         let mut contents = String::new();
+        let mut imported = Vec::new();
         for glyph in &font.glyphs {
             let Some(layer) = glyph
                 .layers
@@ -138,6 +139,7 @@ fn convert(font: GlyphsFont) -> Result<ConversionResult, String> {
             };
             match layer_to_glif(font, glyph, layer) {
                 Ok(xml) => {
+                    imported.push(glyph.name.as_str());
                     let file_name =
                         norad::user_name_to_file_name(&glyph.name, "", ".glif", |candidate| {
                             !existing.contains(candidate)
@@ -157,6 +159,18 @@ fn convert(font: GlyphsFont) -> Result<ConversionResult, String> {
                 Err(e) => warnings.push(format!("{} ({master_name}): {e}", glyph.name)),
             }
         }
+        let mut lib = plist::Dictionary::new();
+        super::metadata::lib_keys::write_foreign_glyphs(
+            &mut lib,
+            imported,
+            font.glyphs.iter().map(|glyph| glyph.name.as_str()),
+        );
+        let mut bytes = Vec::new();
+        plist::to_writer_xml(&mut bytes, &lib).map_err(|error| error.to_string())?;
+        files.push(ConvertedFile {
+            path: format!("{ufo_dir}/lib.plist"),
+            text: String::from_utf8(bytes).map_err(|error| error.to_string())?,
+        });
         files.push(ConvertedFile {
             path: format!("{ufo_dir}/glyphs/contents.plist"),
             text: plist_doc(&format!("<dict>\n{contents}</dict>")),

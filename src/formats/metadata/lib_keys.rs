@@ -17,6 +17,59 @@ use crate::formats::ufo::bezpath_to_contour;
 #[cfg(test)]
 use crate::outline::glyph_paths::contour_to_bezpath;
 
+/// Font lib key recording which original foreign-source glyphs were imported.
+pub const FOREIGN_GLYPHS_KEY: &str = "com.runebender.foreignGlyphs";
+
+/// Read original glyph import status, independently of the current glyph inventory.
+pub fn read_foreign_glyphs(font: &norad::Font) -> Option<std::collections::HashMap<&str, bool>> {
+    font.lib
+        .get(FOREIGN_GLYPHS_KEY)?
+        .as_dictionary()?
+        .iter()
+        .map(|(name, imported)| Some((name.as_str(), imported.as_boolean()?)))
+        .collect()
+}
+
+/// Record which original glyphs were imported, including an empty inventory.
+pub fn write_foreign_glyphs<'a>(
+    lib: &mut plist::Dictionary,
+    imported: impl IntoIterator<Item = &'a str>,
+    original: impl IntoIterator<Item = &'a str>,
+) {
+    let imported: HashSet<_> = imported.into_iter().collect();
+    lib.insert(
+        FOREIGN_GLYPHS_KEY.into(),
+        plist::Value::Dictionary(
+            original
+                .into_iter()
+                .map(|name| {
+                    (
+                        name.to_owned(),
+                        plist::Value::Boolean(imported.contains(name)),
+                    )
+                })
+                .collect(),
+        ),
+    );
+}
+
+/// Component object-lib key holding its original Fontra payload.
+pub const FONTRA_COMPONENT_KEY: &str = "com.runebender.fontraComponent";
+
+/// Read preserved Fontra data only while this remains the same component base.
+pub fn read_fontra_component(component: &norad::Component) -> Option<serde_json::Value> {
+    let text = component.lib()?.get(FONTRA_COMPONENT_KEY)?.as_string()?;
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    (value["name"].as_str() == Some(component.base.as_str())).then_some(value)
+}
+
+/// Bind unsupported Fontra data to the component's own stable UFO identity.
+pub fn write_fontra_component(component: &mut norad::Component, value: &serde_json::Value) {
+    let mut lib = component.lib().cloned().unwrap_or_default();
+    lib.insert(FONTRA_COMPONENT_KEY.into(), value.to_string().into());
+    component.replace_lib(lib);
+}
+
 /// Original Python Babelfont layer identity retained when importing into UFO.
 pub const BABELFONT_LAYER_KEY: &str = "com.runebender.babelfontLayer";
 
