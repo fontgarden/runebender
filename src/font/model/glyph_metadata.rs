@@ -48,7 +48,7 @@ pub(crate) fn set_skipped_exports(font: &mut norad::Font, names: Vec<String>) {
 /// A typed value from the UFO `public.openTypeCategories` dictionary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OpenTypeGlyphCategory {
-    /// No category is assigned explicitly.
+    /// Explicitly unclassified (GDEF class zero), not a request for category inference.
     Unassigned,
     /// A base glyph.
     Base,
@@ -56,7 +56,7 @@ pub enum OpenTypeGlyphCategory {
     Mark,
     /// A ligature glyph.
     Ligature,
-    /// A glyph intended only as a component source.
+    /// A component glyph (GDEF class four), independent of whether it is exported.
     Component,
     /// A source value this Runebender version does not interpret.
     Other(String),

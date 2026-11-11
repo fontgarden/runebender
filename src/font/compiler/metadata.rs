@@ -127,6 +127,8 @@ pub(super) fn glyph_category_from_values<'a>(
         Some(OpenTypeGlyphCategory::Base) => return Ok(GlyphCategory::Base),
         Some(OpenTypeGlyphCategory::Mark) => return Ok(GlyphCategory::Mark),
         Some(OpenTypeGlyphCategory::Ligature) => return Ok(GlyphCategory::Ligature),
+        // The pinned Babelfont IR adapter coerces Unknown and Custom to Base.
+        // Reject unsupported explicit classes rather than silently changing GDEF semantics.
         Some(category) => {
             return Err(format!(
                 "{glyph_name}: unsupported OpenType category {}",
@@ -135,23 +137,26 @@ pub(super) fn glyph_category_from_values<'a>(
         }
         None => (),
     }
-    let anchor_names: Vec<_> = anchor_names.into_iter().collect();
-    let mark = anchor_names.iter().any(|name| name.starts_with('_'))
-        || codepoints.into_iter().any(|codepoint| {
-            matches!(
-                unicode_general_category::get_general_category(codepoint),
-                unicode_general_category::GeneralCategory::NonspacingMark
-                    | unicode_general_category::GeneralCategory::SpacingMark
-                    | unicode_general_category::GeneralCategory::EnclosingMark
-            )
-        });
-    let ligature = anchor_names.iter().any(|name| {
-        name.rsplit_once('_')
-            .is_some_and(|(_, suffix)| suffix.parse::<usize>().is_ok_and(|index| index > 0))
-    });
-    Ok(if mark {
-        GlyphCategory::Mark
-    } else if ligature {
+    let mut ligature = false;
+    for name in anchor_names {
+        if name.starts_with('_') {
+            return Ok(GlyphCategory::Mark);
+        }
+        ligature |= name
+            .rsplit_once('_')
+            .is_some_and(|(_, suffix)| suffix.parse::<usize>().is_ok_and(|index| index > 0));
+    }
+    if codepoints.into_iter().any(|codepoint| {
+        matches!(
+            unicode_general_category::get_general_category(codepoint),
+            unicode_general_category::GeneralCategory::NonspacingMark
+                | unicode_general_category::GeneralCategory::SpacingMark
+                | unicode_general_category::GeneralCategory::EnclosingMark
+        )
+    }) {
+        return Ok(GlyphCategory::Mark);
+    }
+    Ok(if ligature {
         GlyphCategory::Ligature
     } else {
         GlyphCategory::Base
@@ -473,8 +478,7 @@ mod tests {
                 [],
                 std::iter::empty()
             )
-            .unwrap_err()
-            .contains("unsupported OpenType category")
+            .is_err()
         );
         for unsupported in [
             OpenTypeGlyphCategory::Unassigned,
@@ -488,6 +492,44 @@ mod tests {
                     std::iter::empty()
                 )
                 .is_err()
+            );
+        }
+        // Explicit classes override inference; mark evidence overrides ligature anchors.
+        for (explicit, codepoints, anchors, expected) in [
+            (
+                Some(OpenTypeGlyphCategory::Base),
+                vec!['\u{301}'],
+                vec!["_top"],
+                babelfont::GlyphCategory::Base,
+            ),
+            (
+                None,
+                vec![],
+                vec!["top_1", "_top"],
+                babelfont::GlyphCategory::Mark,
+            ),
+            (
+                None,
+                vec![],
+                vec!["_top", "top_1"],
+                babelfont::GlyphCategory::Mark,
+            ),
+            (
+                None,
+                vec!['\u{301}'],
+                vec!["top_1"],
+                babelfont::GlyphCategory::Mark,
+            ),
+            (
+                None,
+                vec!['A'],
+                vec!["top_0", "top_x"],
+                babelfont::GlyphCategory::Base,
+            ),
+        ] {
+            assert_eq!(
+                glyph_category_from_values("test", explicit.as_ref(), codepoints, anchors).unwrap(),
+                expected
             );
         }
     }
