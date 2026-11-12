@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       collect_crash_dump:
-        description: 'Collect a WER minidump (unsanitized memory; public fixture only; retained 1 day)'
+        description: 'Collect/analyze a crash dump (may relaunch under CDB; public fixture memory; retained 1 day)'
         type: boolean
         default: true
       install_debugging_tools:
@@ -88,6 +88,7 @@ jobs:
           retention-days: 1
       # Never collect dumps automatically on PRs/pushes. Binary process memory cannot be redacted.
       # The script scopes/restores LocalDumps, allows one minidump <=64 MiB, and keeps the native gate.
+      # Missing WER dumps trigger one bounded CDB reproduction, never a substitute startup gate.
       - uses: actions/upload-artifact@v4
         if: always() && github.event_name == 'workflow_dispatch' && inputs.collect_crash_dump
         with:

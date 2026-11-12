@@ -218,6 +218,128 @@ function Export-DumpAnalysis([string]$Cdb, [string]$DumpPath) {
     }
 }
 
+function Export-LiveReproduction([string]$Cdb) {
+    # This is a SECOND execution for evidence, never a replacement for the failed native gate.
+    # sxd passes first-chance AVs to the app; -c2 runs only for an unhandled second-chance AV.
+    # https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/sx--sxd--sxe--sxi--sxn--sxr--sx---set-exceptions-
+    $images = Split-Path -Parent $exe
+    $diagnostics.reproductionStartedUtc = [datetime]::UtcNow.ToString('o')
+    $diagnostics.debuggerPath = $Cdb
+    $diagnostics.debuggerVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($Cdb).FileVersion
+    $diagnostics.localPdbAvailable = Test-Path ([IO.Path]::ChangeExtension($exe, '.pdb'))
+    $diagnostics.reproductionOutcome = 'incomplete'
+    $diagnostics.reproductionCapturedSecondChanceAv = $false
+    [void](New-Item -ItemType Directory -Force 'windows-smoke-dumps')
+    # The relative dump filename avoids nested quotes inside the CDB -c2 command string.
+    # Keep the original working directory, executable, font, backend and close timing.
+    # A live second-chance stop already selects the faulting thread's register context.
+    # Write its minidump before any potentially slow symbol downloads or thread switching.
+    $capture = @(
+        '.echo RUNEBENDER_SECOND_CHANCE_AV',
+        '.exr -1', 'r',
+        '.dump /mR windows-smoke-dumps/runebender.dmp',
+        '.reload /f runebender.exe',
+        'kv 0n64', '~* kb 0n32', 'lmv',
+        '!analyze -v', 'q'
+    ) -join '; '
+    @(
+        '.version',
+        "sxd -c2 `"$capture`" av",
+        'sx',
+        'g'
+    ) | Set-Content "$scratch/cdb-live.commands" -Encoding ascii
+    $symbols = "$images;srv*$scratch/symbols*https://msdl.microsoft.com/download/symbols"
+    $debugger = $null
+    $target = $null
+    $closeAt = $null
+    $closeRequested = $false
+    try {
+        $debugger = Start-Process -FilePath $Cdb -ArgumentList @(
+            '-i', "`"$images`"", '-y', "`"$symbols`"",
+            '-lines', '-sins', '-ses', '-noshell', '-nosqm', '-G',
+            '-logo', "`"$scratch/cdb-live.log`"", '-cf', "`"$scratch/cdb-live.commands`"",
+            "`"$exe`"", "`"$font`""
+        ) -PassThru -NoNewWindow -RedirectStandardOutput "$scratch/cdb-live.stdout.txt" `
+            -RedirectStandardError "$scratch/cdb-live.stderr.txt"
+        [void]$debugger.Handle
+        $deadline = (Get-Date).AddSeconds(120)
+        while (!$debugger.HasExited -and (Get-Date) -lt $deadline) {
+            if (!$target) {
+                # Parent identity prevents touching any unrelated process/window on the runner.
+                $child = Get-CimInstance Win32_Process -Filter "ParentProcessId = $($debugger.Id) AND Name = 'runebender.exe'" `
+                    -OperationTimeoutSec 3 | Select-Object -First 1
+                if ($child) {
+                    $target = Get-Process -Id $child.ProcessId -ErrorAction SilentlyContinue
+                    if ($target) {
+                        [void]$target.Handle
+                        $diagnostics.reproductionProcessId = $target.Id
+                    }
+                }
+            }
+            if ($target) {
+                $target.Refresh()
+                if (!$target.HasExited -and !$closeRequested -and $target.MainWindowHandle -ne 0 -and $target.MainWindowTitle -eq 'Runebender') {
+                    if ($null -eq $closeAt) { $closeAt = (Get-Date).AddSeconds($NativeObservationSeconds) }
+                    if ((Get-Date) -ge $closeAt) {
+                        $closeRequested = $true
+                        $diagnostics.reproductionCloseRequested = $target.CloseMainWindow()
+                    }
+                }
+            }
+            Start-Sleep -Milliseconds 500
+            $debugger.Refresh()
+        }
+        if (!$debugger.HasExited) {
+            $diagnostics.reproductionOutcome = 'timed-out'
+            throw 'CDB reproduction exceeded two minutes; a timeout is not evidence of successful startup or a reproduced crash'
+        }
+        $diagnostics.reproductionDebuggerExitCode = $debugger.ExitCode
+        $diagnostics.reproductionOutcome = 'exited-without-confirmed-second-chance-access-violation'
+    } finally {
+        if ($debugger) {
+            if (!$debugger.HasExited) {
+                $debugger.Kill($true)
+                [void]$debugger.WaitForExit(5000)
+            }
+            $debugger.Dispose()
+        }
+        if ($target) {
+            if (!$target.HasExited) {
+                $target.Kill()
+                [void]$target.WaitForExit(5000)
+            }
+            $target.Dispose()
+        }
+        if (Test-Path "$scratch/cdb-live.log") {
+            Export-DiagnosticText "$scratch/cdb-live.log" 'native-debugger.log'
+        } elseif (Test-Path "$scratch/cdb-live.stdout.txt") {
+            Export-DiagnosticText "$scratch/cdb-live.stdout.txt" 'native-debugger.log'
+        }
+        if (Test-Path "$scratch/cdb-live.stderr.txt") {
+            Export-DiagnosticText "$scratch/cdb-live.stderr.txt" 'native-debugger.stderr.txt'
+        }
+        $log = [string](Get-Content "$out/native-debugger.log" -Raw -ErrorAction SilentlyContinue)
+        # Match the executed marker line, not its occurrence inside the echoed filter command.
+        $captured = $log -match '(?m)^RUNEBENDER_SECOND_CHANCE_AV\s*$'
+        $diagnostics.reproductionCapturedSecondChanceAv = $captured
+        if ($captured -and $diagnostics.reproductionOutcome -ne 'timed-out') {
+            $diagnostics.reproductionOutcome = 'second-chance-access-violation'
+        }
+        $liveDump = Get-Item -LiteralPath 'windows-smoke-dumps/runebender.dmp' -ErrorAction SilentlyContinue
+        if ($liveDump) {
+            if ($captured -and $log.Contains('Dump successfully written') -and $liveDump.Length -le 64MB) {
+                $diagnostics.dumpSource = 'cdb-second-chance-reproduction'
+                $diagnostics.dumpBytes = $liveDump.Length
+                $diagnostics.dumpSha256 = (Get-FileHash $liveDump.FullName -Algorithm SHA256).Hash
+            } else {
+                Remove-Item -LiteralPath $liveDump.FullName -Force
+                $diagnostics.notes.Add('The live-reproduction minidump was incomplete, unconfirmed, or exceeded 64 MiB; not uploaded.')
+            }
+        }
+        if (!$captured) { $diagnostics.notes.Add('The bounded debugger reproduction did not capture a second-chance access violation.') }
+    }
+}
+
 $registry = $null
 $oldValues = @{}
 $registryCreated = $false
@@ -375,8 +497,15 @@ try {
                 Copy-Item -LiteralPath $dump.FullName -Destination "$dumpOut/runebender.dmp"
                 $diagnostics.dumpBytes = $dump.Length
                 $diagnostics.dumpSha256 = (Get-FileHash "$dumpOut/runebender.dmp" -Algorithm SHA256).Hash
+                $diagnostics.dumpSource = 'WER-original-native-process'
             } else { $diagnostics.notes.Add("Minidump exceeded the 64 MiB publication limit ($($dump.Length) bytes); not uploaded.") }
-        } elseif ($diagnostics.dumpEnabled) { $diagnostics.notes.Add('No completed minidump arrived within the bounded collection window.') }
+        } elseif ($diagnostics.dumpEnabled) { $diagnostics.notes.Add('No completed WER minidump arrived within the bounded collection window.') }
+        if ($CollectCrashDump -and $abnormal -and !$dumpReady -and $cdb) {
+            try { Export-LiveReproduction $cdb } catch {
+                $diagnostics.notes.Add("Live debugger reproduction failed: $_")
+                Write-Warning 'The second diagnostic reproduction did not complete; original native failure is preserved.'
+            }
+        }
     }
 } finally {
     # Restore only the values we changed, including their original registry types.
