@@ -410,9 +410,9 @@ pub(crate) enum EditorEvent {
     },
     /// The local AI shapes tool: the box was dismissed.
     AiShapeDrop,
-    /// The local AI shapes tool: the ghost was added to the glyph.
+    /// Ask the workspace to accept this exact, origin-guarded drawing preview.
     AiShapeKept {
-        word: String,
+        ghost: Arc<ShapeGhost>,
     },
     /// Open a component of the open glyph in place.
     EnterComponent(ComponentId),
@@ -838,14 +838,9 @@ impl EditorWidget {
             }
             Key::Named(NamedKey::Enter) => {
                 if let Some(ghost) = self.ai_ghost.clone() {
-                    if self.session.add_generated_contours(&ghost.contours) {
-                        self.ai_box = None;
-                        self.ai_ghost = None;
-                        ctx.submit_action::<EditorEvent>(EditorEvent::AiShapeKept {
-                            word: ghost.word.clone(),
-                        });
-                        self.emit(ctx, true);
-                    }
+                    self.ai_box = None;
+                    self.ai_ghost = None;
+                    ctx.submit_action::<EditorEvent>(EditorEvent::AiShapeKept { ghost });
                 } else {
                     ctx.submit_action::<EditorEvent>(EditorEvent::AiShapeDraw { rect, seed: 0 });
                 }
@@ -4945,6 +4940,11 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
             dirty = true;
         }
         if !Arc::ptr_eq(&self.session, &prev.session) {
+            if self.session.canonical_address() != prev.session.canonical_address() {
+                element.widget.ai_box = None;
+                element.widget.ai_hover = None;
+                element.widget.ai_ghost = None;
+            }
             let viewport = element.widget.session.viewport.clone();
             let fitted = element.widget.session.fitted;
             element.widget.session = (*self.session).clone();

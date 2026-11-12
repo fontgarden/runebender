@@ -9,7 +9,9 @@ use crate::application::editor::session::{Session, SessionSyncOutcome};
 use crate::application::platform::dialogs;
 use crate::application::view::canvas::grid::cells_of;
 use crate::application::widgets::shortcuts;
-use crate::application::workspace::{MetadataEdit, Mode, Sel, Sort, Tool, Workspace};
+use crate::application::workspace::{
+    DocumentGroupScope, MetadataEdit, Mode, Sel, Sort, Tool, Workspace,
+};
 use std::sync::Arc;
 
 const SAMPLE_STRINGS: &[&str] = &[
@@ -67,6 +69,7 @@ impl Workspace {
         };
         self.refresh_changed_glyphs(&change);
         self.metadata_undo.push(MetadataEdit::DocumentLayer {
+            revision: self.font.project.document_revision(),
             glyph,
             address: address.clone(),
             label: "component add".into(),
@@ -77,6 +80,7 @@ impl Workspace {
             ),
         });
         self.metadata_redo.clear();
+        self.overview_redo.clear();
         if self.reload_canonical_layer(&address) {
             let mut session = (*self.session).clone();
             let _ = session.select_component_id(component_id);
@@ -149,6 +153,7 @@ impl Workspace {
         };
         self.refresh_changed_glyphs(&change);
         self.metadata_undo.push(MetadataEdit::DocumentLayer {
+            revision: self.font.project.document_revision(),
             glyph,
             address: address.clone(),
             label: "component alignment".into(),
@@ -159,6 +164,7 @@ impl Workspace {
             ),
         });
         self.metadata_redo.clear();
+        self.overview_redo.clear();
         let _ = self.reload_canonical_layer(&address);
         let aligned = disabled;
         self.note = if aligned {
@@ -288,6 +294,7 @@ impl Workspace {
             runebender::font::project::DocumentEditOutcome::Changed { .. }
         ) {
             self.metadata_undo.push(MetadataEdit::DocumentLayer {
+                revision: self.font.project.document_revision(),
                 glyph: name.clone(),
                 address: address.clone(),
                 label: "reinterpolate".into(),
@@ -301,6 +308,7 @@ impl Workspace {
                 ),
             });
             self.metadata_redo.clear();
+            self.overview_redo.clear();
             self.font.rebuild_cache();
             if matches!(self.mode, Mode::Editor(_)) {
                 let _ = self.reload_canonical_layer(&address);
@@ -314,25 +322,69 @@ impl Workspace {
 
     /// Apply Glyphs-style sidebearing formulas in every master.
     pub(crate) fn command_update_metrics(&mut self) {
+        use std::collections::BTreeMap;
+
         use kurbo::Shape as _;
-        use runebender::font::project::Project;
+        use runebender::font::project::{CanonicalLayerTransaction, Project};
         use runebender::font::variable::{GlyphLayerAddress, LayerId};
         use runebender::formats::metadata::metrics_keys::MetricsFormula;
 
-        let resolve = |project: &Project,
-                       layer: &LayerId,
-                       formula: &MetricsFormula,
-                       want_left: bool|
-         -> Option<f64> {
+        fn path(
+            project: &Project,
+            layer: &LayerId,
+            drafts: &BTreeMap<String, CanonicalLayerTransaction>,
+            name: &str,
+        ) -> Option<kurbo::BezPath> {
+            let view = |name: &str| {
+                drafts
+                    .get(name)
+                    .map(|transaction| transaction.draft().view())
+                    .or_else(|| project.document_layer(name, layer))
+            };
+            runebender::outline::glyph_paths::canonical_layer_to_bezpath(
+                view(name)?,
+                view,
+                |name| {
+                    project
+                        .document_glyph(name)
+                        .map(|glyph| {
+                            glyph
+                                .layer_ids()
+                                .filter(|id| id.source == layer.source)
+                                .filter_map(|id| {
+                                    if id == layer {
+                                        view(name)
+                                    } else {
+                                        glyph.layer(id)
+                                    }
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                },
+            )
+            .ok()
+        }
+
+        fn resolve(
+            project: &Project,
+            layer: &LayerId,
+            drafts: &BTreeMap<String, CanonicalLayerTransaction>,
+            formula: &MetricsFormula,
+            want_left: bool,
+        ) -> Option<f64> {
             match formula {
                 MetricsFormula::Constant(value) => Some(*value),
                 MetricsFormula::Reference { glyph, mirror, op } => {
-                    let address = GlyphLayerAddress {
-                        glyph: glyph.clone(),
-                        layer: layer.clone(),
-                    };
-                    let ink = project.document_layer_path(&address).ok()?.bounding_box();
-                    let advance = project.document_layer(glyph, layer)?.width();
+                    let ink = path(project, layer, drafts, glyph)?.bounding_box();
+                    let advance = drafts
+                        .get(glyph)
+                        .map(|transaction| transaction.draft().view().width())
+                        .or_else(|| {
+                            project
+                                .document_layer(glyph, layer)
+                                .map(|view| view.width())
+                        })?;
                     let mut value = if want_left != *mirror {
                         ink.x0
                     } else {
@@ -348,128 +400,111 @@ impl Workspace {
                     Some(value)
                 }
             }
-        };
+        }
 
         let mut adjusted = 0;
-        for _ in 0..5 {
-            let mut moved = false;
-            let sources = self
-                .font
-                .project
-                .document_sources()
-                .map(|source| (source.id(), source.default_layer()))
-                .collect::<Vec<_>>();
-            for (_, layer) in sources {
-                let keyed: Vec<(String, Option<MetricsFormula>, Option<MetricsFormula>)> = self
-                    .font
-                    .project
+        let staged = (|| {
+            let project = &self.font.project;
+            let mut staged = Vec::new();
+            for source in project.document_sources() {
+                let layer = source.default_layer();
+                let keyed = project
                     .glyph_names()
                     .filter_map(|name| {
-                        let view = self.font.project.document_layer(name, &layer)?;
+                        let view = project.document_layer(name, &layer)?;
                         let left = view.metrics_formula(true).ok().flatten();
                         let right = view.metrics_formula(false).ok().flatten();
                         (left.is_some() || right.is_some()).then(|| (name.to_owned(), left, right))
                     })
-                    .collect();
-                for (name, left, right) in keyed {
+                    .collect::<Vec<_>>();
+                let mut drafts = BTreeMap::new();
+                for (name, _, _) in &keyed {
                     let address = GlyphLayerAddress {
                         glyph: name.clone(),
                         layer: layer.clone(),
                     };
-                    if let Some(formula) = left
-                        && let Some(target) = resolve(&self.font.project, &layer, &formula, true)
-                        && let Ok(path) = self.font.project.document_layer_path(&address)
-                    {
-                        let ink = path.bounding_box();
-                        let delta = (target - ink.x0).round();
-                        if delta != 0.0
-                            && let Ok(mut transaction) =
-                                self.font.project.begin_document_layer_transaction(&address)
+                    drafts.insert(
+                        name.clone(),
+                        project
+                            .begin_document_layer_transaction(&address)
+                            .map_err(|error| error.to_string())?,
+                    );
+                }
+                // Resolve chained formulas and components against staged layers, not partially
+                // committed root state. All passes and sources publish together below.
+                for _ in 0..5 {
+                    let mut moved = false;
+                    for (name, left, right) in &keyed {
+                        if let Some(formula) = left
+                            && let Some(target) = resolve(project, &layer, &drafts, formula, true)
+                            && let Some(outline) = path(project, &layer, &drafts, name)
                         {
-                            let components = transaction
-                                .draft()
-                                .view()
-                                .components()
-                                .map(|component| (component.id(), component.transform()))
-                                .collect::<Vec<_>>();
-                            let edited = (|| {
+                            let delta = (target - outline.bounding_box().x0).round();
+                            if delta != 0.0 {
+                                let transaction = drafts.get_mut(name).expect("keyed layer draft");
+                                let components = transaction
+                                    .draft()
+                                    .view()
+                                    .components()
+                                    .map(|component| (component.id(), component.transform()))
+                                    .collect::<Vec<_>>();
                                 let draft = transaction.draft_mut();
-                                let mut changed = draft.transform_points(
-                                    &[],
-                                    kurbo::Affine::translate((delta, 0.0)),
-                                )?;
+                                let mut changed = draft
+                                    .transform_points(&[], kurbo::Affine::translate((delta, 0.0)))
+                                    .map_err(|error| error.to_string())?;
                                 for (id, transform) in components {
-                                    changed |= draft.set_component_transform(
-                                        id,
-                                        kurbo::Affine::translate((delta, 0.0)) * transform,
-                                    )?;
+                                    changed |= draft
+                                        .set_component_transform(
+                                            id,
+                                            kurbo::Affine::translate((delta, 0.0)) * transform,
+                                        )
+                                        .map_err(|error| error.to_string())?;
                                 }
-                                Ok::<_, runebender::font::DocumentEditError>(changed)
-                            })();
-                            if edited == Ok(true)
-                                && matches!(
-                                    self.font
-                                        .project
-                                        .commit_document_layer_transaction(transaction),
-                                    Ok(
-                                        runebender::font::project::DocumentEditOutcome::Changed { .. }
-                                    )
-                                )
+                                if changed {
+                                    moved = true;
+                                    adjusted += 1;
+                                }
+                            }
+                        }
+                        if let Some(formula) = right
+                            && let Some(target) = resolve(project, &layer, &drafts, formula, false)
+                            && let Some(outline) = path(project, &layer, &drafts, name)
+                        {
+                            let wanted = (outline.bounding_box().x1 + target).round();
+                            let transaction = drafts.get_mut(name).expect("keyed layer draft");
+                            if (transaction.draft().view().width() - wanted).abs() >= 1.0
+                                && transaction
+                                    .draft_mut()
+                                    .set_width(wanted)
+                                    .map_err(|error| error.to_string())?
                             {
                                 moved = true;
                                 adjusted += 1;
                             }
                         }
                     }
-                    if let Some(formula) = right
-                        && let Some(target) = resolve(&self.font.project, &layer, &formula, false)
-                        && let Ok(path) = self.font.project.document_layer_path(&address)
-                        && let Some(advance) = self
-                            .font
-                            .project
-                            .document_layer(&name, &layer)
-                            .map(|view| view.width())
-                    {
-                        let wanted = (path.bounding_box().x1 + target).round();
-                        if (advance - wanted).abs() >= 1.0
-                            && let Ok(mut transaction) =
-                                self.font.project.begin_document_layer_transaction(&address)
-                            && transaction.draft_mut().set_width(wanted) == Ok(true)
-                            && matches!(
-                                self.font
-                                    .project
-                                    .commit_document_layer_transaction(transaction),
-                                Ok(runebender::font::project::DocumentEditOutcome::Changed { .. })
-                            )
-                        {
-                            moved = true;
-                            adjusted += 1;
-                        }
+                    if !moved {
+                        break;
                     }
                 }
+                staged.extend(drafts.into_values());
             }
-            if !moved {
-                break;
+            Ok::<_, String>(staged)
+        })();
+        let result = staged.and_then(|transactions| {
+            self.font
+                .project
+                .commit_document_layer_group("update metrics", transactions)
+                .map_err(|error| error.to_string())
+        });
+        match result {
+            Ok(Some((group, change))) => {
+                self.record_document_group(group, &change, DocumentGroupScope::Document);
+                self.note = format!("Metrics keys: {adjusted} sidebearings adjusted");
             }
+            Ok(None) => self.note = "Metrics keys: everything in sync".into(),
+            Err(error) => self.note = format!("Metrics keys: {error}"),
         }
-        if adjusted > 0 {
-            self.font.rebuild_cache();
-            self.cells = Arc::new(cells_of(&self.font, &self.palette));
-            self.modified = true;
-            if matches!(self.mode, Mode::Editor(_))
-                && let Some(address) = self.font.active_layer_address(&self.session.glyph_name)
-            {
-                let mut session = (*self.session).clone();
-                let _ = session.reload_from_project(&self.font.project, &address);
-                self.session = Arc::new(session);
-                self.refresh_metric_bufs();
-            }
-        }
-        self.note = if adjusted == 0 {
-            "Metrics keys: everything in sync".into()
-        } else {
-            format!("Metrics keys: {adjusted} sidebearings adjusted")
-        };
     }
 
     /// Select positional Arabic forms whose joining bands disagree.
@@ -593,81 +628,52 @@ impl Workspace {
         let Some(name) = self.font.glyphs.get(index).map(|glyph| glyph.name.clone()) else {
             return;
         };
-        let active_source = self.font.project.source_id(self.font.active());
-        let addresses = self
-            .font
-            .project
-            .document_sources()
-            .filter_map(|source| {
+        let staged = (|| {
+            let mut transactions = Vec::new();
+            for source in self.font.project.document_sources() {
                 let address = runebender::font::variable::GlyphLayerAddress {
                     glyph: name.clone(),
                     layer: source.default_layer(),
                 };
-                self.font
+                if self
+                    .font
                     .project
                     .document_layer(&name, &address.layer)
-                    .is_some()
-                    .then_some((source.id(), address))
-            })
-            .collect::<Vec<_>>();
-        let mut baked = 0;
-        let mut active_address = None;
-        for (source, address) in addresses {
-            let Ok(mut transaction) = self.font.project.begin_document_layer_transaction(&address)
-            else {
-                continue;
-            };
-            if transaction.draft_mut().bake_masks() != Ok(true) {
-                continue;
-            }
-            if matches!(
-                self.font
+                    .is_none()
+                {
+                    continue;
+                }
+                let mut transaction = self
+                    .font
                     .project
-                    .commit_document_layer_transaction(transaction),
-                Ok(runebender::font::project::DocumentEditOutcome::Changed { .. })
-            ) {
-                baked += 1;
-                if Some(source) == active_source {
-                    active_address = Some(address);
+                    .begin_document_layer_transaction(&address)
+                    .map_err(|error| error.to_string())?;
+                if transaction
+                    .draft_mut()
+                    .bake_masks()
+                    .map_err(|error| error.to_string())?
+                {
+                    transactions.push(transaction);
                 }
             }
-        }
-        self.font.project.compute_compat();
-        self.font.rebuild_cache();
-        if baked > 0 {
-            if let Some(address) = active_address.as_ref() {
-                self.metadata_undo.push(MetadataEdit::DocumentLayer {
-                    glyph: name.clone(),
-                    address: address.clone(),
-                    label: "bake masks".into(),
-                    component_selection: (
-                        self.session.selected_component,
-                        self.session.selected_component,
-                    ),
-                    layer_history_depth: self.font.project.document_layer_history_depth(
-                        address,
-                        runebender::font::history::HistoryDirection::Undo,
-                    ),
-                });
-                self.metadata_redo.clear();
+            Ok::<_, String>(transactions)
+        })();
+        let result = staged.and_then(|transactions| {
+            self.font
+                .project
+                .commit_document_layer_group("bake masks", transactions)
+                .map_err(|error| error.to_string())
+        });
+        match result {
+            Ok(Some((group, change))) => {
+                let baked = change.affected_layers().len();
+                self.font.project.compute_compat();
+                self.record_document_group(group, &change, DocumentGroupScope::Document);
+                self.note = format!("Masks baked in {baked} master(s)");
             }
-            if matches!(self.mode, Mode::Editor(_))
-                && self.session.glyph_name == name
-                && let Some(address) = active_address.as_ref()
-            {
-                let mut session = (*self.session).clone();
-                let _ = session.reload_from_project(&self.font.project, address);
-                self.session = Arc::new(session);
-                self.selected_points = 0;
-            }
-            self.cells = Arc::new(cells_of(&self.font, &self.palette));
-            self.modified = true;
+            Ok(None) => self.note = "No masks to bake".into(),
+            Err(error) => self.note = format!("Masks: {error}"),
         }
-        self.note = if baked == 0 {
-            "No masks to bake".into()
-        } else {
-            format!("Masks baked in {baked} master(s)")
-        };
     }
 
     /// Write the selected glyph as SVG beside the document source.
@@ -1313,6 +1319,7 @@ impl Workspace {
         };
         self.refresh_changed_glyphs(&change);
         self.metadata_undo.push(MetadataEdit::DocumentLayer {
+            revision: self.font.project.document_revision(),
             glyph,
             address: address.clone(),
             label: "paste contours".into(),
@@ -1326,6 +1333,7 @@ impl Workspace {
             ),
         });
         self.metadata_redo.clear();
+        self.overview_redo.clear();
         if self.reload_canonical_layer(&address)
             && let Some(layer) = self
                 .font
@@ -1413,6 +1421,7 @@ impl Workspace {
             }
         }
         self.metadata_undo.push(MetadataEdit::SourceStructure {
+            revision: self.font.project.document_revision(),
             glyph: name,
             label: "send to background".into(),
             before: Box::new(before),
@@ -1420,6 +1429,7 @@ impl Workspace {
             undo_depth,
         });
         self.metadata_redo.clear();
+        self.overview_redo.clear();
         self.show_background = true;
         self.modified = true;
         self.note = "sent to background".into();
@@ -1467,6 +1477,7 @@ impl Workspace {
             }
         }
         self.metadata_undo.push(MetadataEdit::SourceStructure {
+            revision: self.font.project.document_revision(),
             glyph: name.clone(),
             label: "swap background".into(),
             before: Box::new(before),
@@ -1474,6 +1485,7 @@ impl Workspace {
             undo_depth,
         });
         self.metadata_redo.clear();
+        self.overview_redo.clear();
         self.font.rebuild_cache();
         if !self.reload_canonical_layer(&address) {
             self.note = "The swapped foreground could not be reloaded".into();
@@ -1511,6 +1523,7 @@ impl Workspace {
             }
         }
         self.metadata_undo.push(MetadataEdit::SourceStructure {
+            revision: self.font.project.document_revision(),
             glyph: name,
             label: "clear background".into(),
             before: Box::new(before),
@@ -1518,6 +1531,7 @@ impl Workspace {
             undo_depth,
         });
         self.metadata_redo.clear();
+        self.overview_redo.clear();
         self.modified = true;
         self.note = "cleared background".into();
     }
@@ -2148,7 +2162,7 @@ mod tests {
             .collect(),
         );
         assert_eq!(workspace.selected_glyph_text(), "hn");
-        workspace.command_update_metrics();
+        workspace.dispatch(shortcuts::AppAction::UpdateMetrics);
         let h = workspace.font.index_of("h").expect("h remains present");
         assert_eq!(workspace.font.glyphs[h].ink.x0, 60.0);
         assert_eq!(
@@ -2156,21 +2170,7 @@ mod tests {
             510.0
         );
         let address = workspace.font.active_layer_address("h").unwrap();
-        assert_eq!(
-            workspace.font.project.document_layer_history_depth(
-                &address,
-                runebender::font::history::HistoryDirection::Undo,
-            ),
-            2
-        );
-        workspace
-            .font
-            .project
-            .replay_document_layer_history(
-                &address,
-                runebender::font::history::HistoryDirection::Undo,
-            )
-            .unwrap();
+        workspace.dispatch(shortcuts::AppAction::Undo);
         assert_eq!(
             workspace
                 .font
@@ -2180,14 +2180,6 @@ mod tests {
                 .width(),
             500.0
         );
-        workspace
-            .font
-            .project
-            .replay_document_layer_history(
-                &address,
-                runebender::font::history::HistoryDirection::Undo,
-            )
-            .unwrap();
         assert_eq!(
             workspace
                 .font
@@ -2198,16 +2190,7 @@ mod tests {
                 .x0,
             0.0
         );
-        for _ in 0..2 {
-            workspace
-                .font
-                .project
-                .replay_document_layer_history(
-                    &address,
-                    runebender::font::history::HistoryDirection::Redo,
-                )
-                .unwrap();
-        }
+        workspace.dispatch(shortcuts::AppAction::Redo);
         assert!(workspace.modified);
         assert!(workspace.save());
         let reopened = Workspace::open(&path).expect("the saved fixture reopens");
@@ -2233,6 +2216,431 @@ mod tests {
         );
 
         std::fs::remove_dir_all(path).expect("the fixture is removed");
+    }
+
+    fn two_source_workspace(fonts: [norad::Font; 2]) -> Workspace {
+        use runebender::font::project::{Project, SourceInput};
+
+        let document = norad::designspace::DesignSpaceDocument {
+            format: 5.0,
+            axes: vec![norad::designspace::Axis {
+                name: "Weight".into(),
+                tag: "wght".into(),
+                minimum: Some(400.0),
+                default: 400.0,
+                maximum: Some(700.0),
+                hidden: false,
+                map: None,
+                values: None,
+                label_names: Vec::new(),
+            }],
+            sources: [("Regular.ufo", 400.0), ("Bold.ufo", 700.0)]
+                .into_iter()
+                .map(|(filename, value)| norad::designspace::Source {
+                    familyname: None,
+                    stylename: None,
+                    name: None,
+                    filename: filename.into(),
+                    layer: None,
+                    location: vec![norad::designspace::Dimension {
+                        name: "Weight".into(),
+                        xvalue: Some(value),
+                        uservalue: None,
+                        yvalue: None,
+                    }],
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let mut fonts = fonts.into_iter();
+        let project = Project::from_designspace(document, |filename| {
+            Ok(SourceInput::from_font(
+                fonts.next().expect("one supplied font per source"),
+                filename.into(),
+            ))
+        })
+        .unwrap();
+        Workspace::from_model(crate::application::font_model::FontModel::from_project(
+            project,
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn update_metrics_consumer_undo_redo_restores_all_glyphs_and_masters() {
+        use kurbo::Shape as _;
+        use runebender::formats::metadata::metrics_keys::write_metrics_key;
+
+        let fonts = [(50.0, 450.0), (80.0, 420.0)].map(|(left, right)| {
+            let mut font = norad::Font::new();
+            font.default_layer_mut()
+                .insert_glyph(rectangle("n", left, right));
+            for (name, reference) in [("b", "=h"), ("h", "=n+10")] {
+                let mut glyph = rectangle(name, 0.0, 400.0);
+                write_metrics_key(&mut glyph, true, reference);
+                write_metrics_key(&mut glyph, false, if name == "h" { "=n" } else { "=h" });
+                font.default_layer_mut().insert_glyph(glyph);
+            }
+            font
+        });
+        let mut app = two_source_workspace(fonts);
+        app.selected = None;
+        let before = app.font.project.document_snapshot();
+        app.dispatch(shortcuts::AppAction::UpdateMetrics);
+        assert_eq!(app.metadata_undo.len(), 1);
+        for (source, (left, width)) in app
+            .font
+            .project
+            .document_sources()
+            .zip([(60.0, 510.0), (90.0, 570.0)])
+        {
+            for glyph in ["b", "h"] {
+                let address = runebender::font::variable::GlyphLayerAddress {
+                    glyph: glyph.into(),
+                    layer: source.default_layer(),
+                };
+                assert_eq!(
+                    app.font
+                        .project
+                        .document_layer_path(&address)
+                        .unwrap()
+                        .bounding_box()
+                        .x0,
+                    left
+                );
+                assert_eq!(
+                    app.font
+                        .project
+                        .document_layer(glyph, &address.layer)
+                        .unwrap()
+                        .width(),
+                    width
+                );
+            }
+        }
+        let after = app.font.project.document_snapshot();
+        assert_ne!(before, after);
+        app.set_master(1);
+        app.mode = Mode::Graph;
+        assert!(app.can_overview_history_step(false));
+        app.dispatch(shortcuts::AppAction::Undo);
+        assert_eq!(app.font.project.document_snapshot(), before);
+        app.dispatch(shortcuts::AppAction::Redo);
+        assert_eq!(app.font.project.document_snapshot(), after);
+        app.dispatch(shortcuts::AppAction::UpdateMetrics);
+        assert_eq!(
+            app.metadata_undo.len(),
+            1,
+            "an in-sync command adds no history"
+        );
+        app.open_glyph(app.font.index_of("n").unwrap());
+        app.dispatch(shortcuts::AppAction::Undo);
+        assert_eq!(app.font.project.document_snapshot(), before);
+        app.dispatch(shortcuts::AppAction::UpdateMetrics);
+        assert_eq!(app.metadata_undo.len(), 1);
+        assert_eq!(app.font.project.document_snapshot(), after);
+        assert!(app.can_metadata_history_step(false));
+        app.dispatch(shortcuts::AppAction::Undo);
+        assert_eq!(app.font.project.document_snapshot(), before);
+        app.dispatch(shortcuts::AppAction::Redo);
+        assert_eq!(app.font.project.document_snapshot(), after);
+    }
+
+    fn mask_font(masked: bool) -> norad::Font {
+        let mut font = norad::Font::new();
+        let mut glyph = rectangle("A", 0.0, 200.0);
+        if masked {
+            glyph
+                .contours
+                .extend(rectangle("cut", 50.0, 150.0).contours);
+            glyph.lib.insert(
+                runebender::formats::metadata::lib_keys::MASKS_KEY.into(),
+                plist::Value::Array(vec![plist::Value::Integer(1.into())]),
+            );
+        }
+        font.default_layer_mut().insert_glyph(glyph);
+        font
+    }
+
+    #[test]
+    fn bake_masks_consumer_history_restores_two_sources_and_inactive_only_changes() {
+        for active_masked in [true, false] {
+            for editor in [false, true] {
+                let mut app = two_source_workspace([mask_font(active_masked), mask_font(true)]);
+                app.selected = app.font.index_of("A");
+                if editor {
+                    app.open_glyph(app.selected.unwrap());
+                }
+                let before = app.font.project.document_snapshot();
+                app.dispatch(shortcuts::AppAction::BakeMasks);
+                let after = app.font.project.document_snapshot();
+                assert_ne!(before, after);
+                assert_eq!(app.metadata_undo.len(), 1);
+                let MetadataEdit::DocumentGroup { addresses, .. } = &app.metadata_undo[0] else {
+                    panic!("baking records one canonical group");
+                };
+                assert_eq!(addresses.len(), if active_masked { 2 } else { 1 });
+                if !active_masked {
+                    assert_ne!(
+                        addresses[0].layer.source,
+                        app.font.project.source_id(0).unwrap()
+                    );
+                }
+                app.dispatch(shortcuts::AppAction::Undo);
+                assert_eq!(app.font.project.document_snapshot(), before);
+                app.dispatch(shortcuts::AppAction::Redo);
+                assert_eq!(app.font.project.document_snapshot(), after);
+                app.dispatch(shortcuts::AppAction::BakeMasks);
+                assert_eq!(app.metadata_undo.len(), 1, "already baked adds no history");
+            }
+        }
+    }
+
+    #[test]
+    fn stale_multi_source_command_undo_never_replays_a_partial_group() {
+        let mut app = two_source_workspace([mask_font(true), mask_font(true)]);
+        app.selected = app.font.index_of("A");
+        app.dispatch(shortcuts::AppAction::BakeMasks);
+        let source = app.font.project.source_id(1).unwrap();
+        let layer = app
+            .font
+            .project
+            .document_source(source)
+            .unwrap()
+            .default_layer();
+        app.font
+            .project
+            .edit_document_layer("A", &layer, |draft| {
+                draft.set_width(777.0)?;
+                Ok(())
+            })
+            .unwrap();
+        let before = app.font.project.document_snapshot();
+        let revision = app.font.project.document_revision();
+        assert!(!app.can_overview_history_step(false));
+        app.dispatch(shortcuts::AppAction::Undo);
+        assert_eq!(app.font.project.document_snapshot(), before);
+        assert_eq!(app.font.project.document_revision(), revision);
+        assert_eq!(app.metadata_undo.len(), 1);
+        assert!(app.metadata_redo.is_empty());
+    }
+
+    #[test]
+    fn stale_inactive_command_group_never_falls_through_to_an_older_editor_edit() {
+        let mut app = two_source_workspace([mask_font(false), mask_font(true)]);
+        app.open_glyph(app.font.index_of("A").unwrap());
+        app.set_advance_from_buf("650".into());
+        app.dispatch(shortcuts::AppAction::BakeMasks);
+        assert_eq!(app.metadata_undo.len(), 2);
+        let source = app.font.project.source_id(1).unwrap();
+        let layer = app
+            .font
+            .project
+            .document_source(source)
+            .unwrap()
+            .default_layer();
+        app.font
+            .project
+            .edit_document_layer("A", &layer, |draft| {
+                draft.set_width(777.0)?;
+                Ok(())
+            })
+            .unwrap();
+        let before = app.font.project.document_snapshot();
+        assert!(!app.can_metadata_history_step(false));
+        app.dispatch(shortcuts::AppAction::Undo);
+        assert_eq!(app.font.project.document_snapshot(), before);
+        assert_eq!(app.metadata_undo.len(), 2);
+        assert!(app.metadata_redo.is_empty());
+    }
+
+    fn command_history_workspace() -> Workspace {
+        let fonts = [(), ()].map(|()| {
+            let mut font = norad::Font::new();
+            font.default_layer_mut()
+                .insert_glyph(rectangle("n", 50.0, 450.0));
+            let mut glyph = rectangle("A", 0.0, 400.0);
+            runebender::formats::metadata::metrics_keys::write_metrics_key(
+                &mut glyph, true, "=n+10",
+            );
+            runebender::formats::metadata::metrics_keys::write_metrics_key(&mut glyph, false, "=n");
+            font.default_layer_mut().insert_glyph(glyph);
+            font.default_layer_mut()
+                .insert_glyph(rectangle("B", 0.0, 400.0));
+            font
+        });
+        two_source_workspace(fonts)
+    }
+
+    #[test]
+    fn overview_replays_other_glyph_layer_and_structure_history_without_losing_redo() {
+        for structure in [false, true] {
+            let mut app = command_history_workspace();
+            app.open_glyph(app.font.index_of("A").unwrap());
+            let before = app.font.project.document_snapshot();
+            if structure {
+                app.send_to_background();
+            } else {
+                app.set_advance_from_buf("650".into());
+            }
+            let after = app.font.project.document_snapshot();
+            assert_ne!(before, after);
+            assert_eq!(app.metadata_undo.len(), 1);
+            app.new_tab();
+            app.open_glyph(app.font.index_of("B").unwrap());
+            let unrelated = app.session.clone();
+            app.mode = Mode::Overview;
+            app.selected = app.font.index_of("A");
+            assert!(app.can_overview_history_step(false));
+            app.dispatch(shortcuts::AppAction::Undo);
+            assert_eq!(app.font.project.document_snapshot(), before);
+            assert!(app.metadata_undo.is_empty());
+            assert_eq!(app.metadata_redo.len(), 1);
+            assert!(Arc::ptr_eq(&app.session, &unrelated));
+            assert_eq!(app.tabs[0].session.advance(), 500.0);
+            assert!(app.can_overview_history_step(true));
+            app.dispatch(shortcuts::AppAction::Redo);
+            assert_eq!(app.font.project.document_snapshot(), after);
+            assert_eq!(app.metadata_undo.len(), 1);
+            assert!(app.metadata_redo.is_empty());
+            assert!(Arc::ptr_eq(&app.session, &unrelated));
+        }
+    }
+
+    #[test]
+    fn contextual_groups_outside_the_selected_glyph_do_not_block_overview_history() {
+        use runebender::font::history::HistoryDirection;
+        use runebender::font::project::EditHistoryGroupState;
+
+        for stale in [false, true] {
+            let mut app = command_history_workspace();
+            app.selected = app.font.index_of("B");
+            app.overview_set_advance("650".into());
+            let address = app.font.active_layer_address("A").unwrap();
+            let mut transaction = app
+                .font
+                .project
+                .begin_document_layer_transaction(&address)
+                .unwrap();
+            transaction.draft_mut().set_width(700.0).unwrap();
+            let (group, change) = app
+                .font
+                .project
+                .commit_document_layer_group("contextual agent edit", vec![transaction])
+                .unwrap()
+                .unwrap();
+            app.record_document_group(group, &change, DocumentGroupScope::Contextual);
+            if stale {
+                app.font
+                    .project
+                    .edit_document_layer("A", &address.layer, |draft| {
+                        draft.set_width(800.0)?;
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+            assert!(app.can_overview_history_step(false));
+            app.dispatch(shortcuts::AppAction::Undo);
+            assert_eq!(
+                app.font.glyphs[app.font.index_of("B").unwrap()].advance,
+                500.0
+            );
+            assert_eq!(
+                app.font.project.document_edit_history_group_state(group),
+                Some(EditHistoryGroupState::Applied)
+            );
+            assert!(app.can_overview_history_step(true));
+            app.dispatch(shortcuts::AppAction::Redo);
+            assert_eq!(
+                app.font.glyphs[app.font.index_of("B").unwrap()].advance,
+                650.0
+            );
+            app.selected = app.font.index_of("A");
+            if stale {
+                let before = app.font.project.document_snapshot();
+                assert!(!app.can_overview_history_step(false));
+                app.dispatch(shortcuts::AppAction::Undo);
+                assert_eq!(app.font.project.document_snapshot(), before);
+                assert!(
+                    app.font
+                        .project
+                        .check_document_edit_history_group(group, HistoryDirection::Undo)
+                        .is_err()
+                );
+            } else {
+                assert!(app.can_overview_history_step(false));
+                app.dispatch(shortcuts::AppAction::Undo);
+                assert_eq!(
+                    app.font.project.document_edit_history_group_state(group),
+                    Some(EditHistoryGroupState::Undone)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn editor_orders_newer_overview_edits_before_older_command_groups() {
+        let mut app = command_history_workspace();
+        app.selected = app.font.index_of("A");
+        let before = app.font.project.document_snapshot();
+        app.dispatch(shortcuts::AppAction::UpdateMetrics);
+        let metrics = app.font.project.document_snapshot();
+        app.overview_set_advance("700".into());
+        let advance = app.font.project.document_snapshot();
+        app.open_glyph(app.font.index_of("A").unwrap());
+        for (action, expected) in [
+            (shortcuts::AppAction::Undo, &metrics),
+            (shortcuts::AppAction::Undo, &before),
+            (shortcuts::AppAction::Redo, &metrics),
+            (shortcuts::AppAction::Redo, &advance),
+        ] {
+            assert!(app.can_editor_history_step(action == shortcuts::AppAction::Redo));
+            app.dispatch(action);
+            assert_eq!(&app.font.project.document_snapshot(), expected);
+            assert_eq!(
+                app.session.advance(),
+                app.font.glyphs[app.font.index_of("A").unwrap()].advance
+            );
+        }
+    }
+
+    #[test]
+    fn new_command_group_discards_old_layer_redo_after_its_own_redo_is_invalidated() {
+        use runebender::font::history::HistoryDirection;
+
+        let mut app = command_history_workspace();
+        app.open_glyph(app.font.index_of("A").unwrap());
+        app.set_advance_from_buf("600".into());
+        app.dispatch(shortcuts::AppAction::Undo);
+        let address = app.font.active_layer_address("A").unwrap();
+        assert_eq!(
+            app.font
+                .project
+                .document_layer_history_depth(&address, HistoryDirection::Redo),
+            1
+        );
+        app.dispatch(shortcuts::AppAction::UpdateMetrics);
+        assert_eq!(
+            app.font
+                .project
+                .document_layer_history_depth(&address, HistoryDirection::Redo),
+            0
+        );
+        assert_eq!(
+            app.font
+                .project
+                .document_layer_history_depth(&address, HistoryDirection::Undo),
+            0
+        );
+        app.dispatch(shortcuts::AppAction::Undo);
+        app.open_glyph(app.font.index_of("B").unwrap());
+        app.set_advance_from_buf("650".into());
+        assert!(app.metadata_redo.is_empty());
+        app.open_glyph(app.font.index_of("A").unwrap());
+        let before_redo = app.font.project.document_snapshot();
+        assert!(!app.can_editor_history_step(true));
+        app.dispatch(shortcuts::AppAction::Redo);
+        assert_eq!(app.font.project.document_snapshot(), before_redo);
     }
 }
 

@@ -85,7 +85,7 @@ pub(crate) fn editor_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<>
                     app.text_language.as_deref(),
                 )
         }),
-        app.shapes.ghost.clone(),
+        app.shapes_current_ghost(),
         app.editor_focus.clone(),
         |app: &mut Workspace, ev| match ev {
             canvas::editor::EditorEvent::Interpolation(event) => app.interpolation_event(event),
@@ -102,7 +102,9 @@ pub(crate) fn editor_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<>
                 app.shapes_redraw(rect, seed);
             }
             canvas::editor::EditorEvent::AiShapeDrop => app.shapes_drop(),
-            canvas::editor::EditorEvent::AiShapeKept { word } => app.shapes_kept(&word),
+            canvas::editor::EditorEvent::AiShapeKept { ghost } => {
+                app.shapes_accept(&ghost);
+            }
             canvas::editor::EditorEvent::Undo => app.undo_open_glyph(false),
             canvas::editor::EditorEvent::Redo => app.undo_open_glyph(true),
             canvas::editor::EditorEvent::TextChanged(text) => app.set_editor_text(text),

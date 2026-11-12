@@ -634,6 +634,14 @@ impl Session {
             .or(self.canonical_base.as_ref())
     }
 
+    /// Stable canonical target of this session, including an in-progress edit draft.
+    pub(crate) fn canonical_address(
+        &self,
+    ) -> Option<&runebender::font::variable::GlyphLayerAddress> {
+        self.current_transaction()
+            .map(|transaction| transaction.address())
+    }
+
     fn stage_canonical_edit(
         &mut self,
         label: &'static str,
@@ -2450,6 +2458,7 @@ impl Workspace {
             self.restore_text_context(text_context);
         }
         self.selected_points = 0;
+        self.shapes_context_changed();
     }
 
     /// Make a tab the live one.
@@ -2457,6 +2466,7 @@ impl Workspace {
         let Some(tab) = self.tabs.get(index) else {
             return;
         };
+        let context_changed = self.active_tab != index || !matches!(self.mode, Mode::Editor(_));
         let (session, tool, text_context) =
             (tab.session.clone(), tab.tool, tab.text_context.clone());
         self.park();
@@ -2485,6 +2495,9 @@ impl Workspace {
             .and_then(|g| g.codepoint)
             .map(|c| format!("{:04X}", c as u32))
             .unwrap_or_default();
+        if context_changed {
+            self.shapes_context_changed();
+        }
     }
 
     /// A second tab on the glyph that is open, with its own session.
@@ -2563,6 +2576,8 @@ impl Workspace {
         if let Some(entry) = self.font.glyphs.get(index)
             && let Some(session) = Session::new_from_model(&self.font, &entry.name)
         {
+            let context_changed = self.session.canonical_address() != session.canonical_address()
+                || !matches!(self.mode, Mode::Editor(_));
             self.advance_buf = format!("{}", round_units(session.advance()));
             let (l, r) = metric_bufs(&session);
             self.lsb_buf = l;
@@ -2588,6 +2603,9 @@ impl Workspace {
             self.selected = Some(index);
             self.selected_points = 0;
             self.mode = Mode::Editor(index);
+            if context_changed {
+                self.shapes_context_changed();
+            }
             return true;
         }
         false
@@ -2642,6 +2660,7 @@ impl Workspace {
                         runebender::font::history::HistoryDirection::Undo,
                     );
                     self.metadata_undo.push(MetadataEdit::DocumentLayer {
+                        revision: self.font.project.document_revision(),
                         glyph: name.clone(),
                         address: address.clone(),
                         label: label.into(),
@@ -2652,6 +2671,7 @@ impl Workspace {
                         ),
                     });
                     self.metadata_redo.clear();
+                    self.overview_redo.clear();
                     if !session.reload_from_project(&self.font.project, &address) {
                         self.note = "The committed glyph layer could not be reloaded".into();
                         session.sync_rejected = true;
@@ -2767,6 +2787,12 @@ impl Workspace {
             return;
         }
         self.follow_history_into_part(redo);
+        if !self.overview_metadata_is_next(redo)
+            && let Some(index) = self.overview_history_index(redo)
+        {
+            self.replay_overview_history(index, redo);
+            return;
+        }
         if self.metadata_history_step(redo) {
             return;
         }
@@ -2808,52 +2834,134 @@ impl Workspace {
         self.note.clear();
     }
 
+    fn overview_history_index(&self, redo: bool) -> Option<usize> {
+        let entries = if redo {
+            &self.overview_redo
+        } else {
+            &self.overview_undo
+        };
+        entries.iter().rposition(|batch| {
+            !matches!(self.mode, Mode::Editor(_))
+                || (Some(batch.source) == self.font.project.source_id(self.font.active())
+                    && batch.glyphs.contains(&self.session.glyph_name))
+        })
+    }
+
+    /// Editor availability follows the same applicable overview and metadata action as dispatch.
+    pub(crate) fn can_editor_history_step(&self, redo: bool) -> bool {
+        if !self.overview_metadata_is_next(redo) {
+            return self.can_overview_history_step(redo);
+        }
+        let metadata = self.metadata_history_index(redo).map(|index| {
+            if redo {
+                &self.metadata_redo[index]
+            } else {
+                &self.metadata_undo[index]
+            }
+        });
+        if matches!(metadata, Some(MetadataEdit::DocumentGroup { .. })) {
+            return self.can_metadata_history_step(redo);
+        }
+        self.can_metadata_history_step(redo)
+            || self.font.can_replay_history(
+                &self.session.glyph_name,
+                if redo {
+                    runebender::font::history::HistoryDirection::Redo
+                } else {
+                    runebender::font::history::HistoryDirection::Undo
+                },
+            )
+    }
+
+    fn overview_metadata_is_next(&self, redo: bool) -> bool {
+        let batch = self.overview_history_index(redo).map(|index| {
+            if redo {
+                &self.overview_redo[index]
+            } else {
+                &self.overview_undo[index]
+            }
+        });
+        let metadata = self.metadata_history_index(redo).map(|index| {
+            if redo {
+                &self.metadata_redo[index]
+            } else {
+                &self.metadata_undo[index]
+            }
+        });
+        match (batch, metadata) {
+            (None, _) => true,
+            (Some(_), None) => false,
+            (Some(batch), Some(metadata)) => {
+                if redo {
+                    metadata.revision() < batch.revision
+                } else {
+                    metadata.revision() > batch.revision
+                }
+            }
+        }
+    }
+
+    /// Availability for the same chronological document action used by overview and graph Undo.
+    pub(crate) fn can_overview_history_step(&self, redo: bool) -> bool {
+        if self.overview_metadata_is_next(redo) {
+            return self.can_metadata_history_step(redo);
+        }
+        let Some(index) = self.overview_history_index(redo) else {
+            return false;
+        };
+        let batch = if redo {
+            &self.overview_redo[index]
+        } else {
+            &self.overview_undo[index]
+        };
+        let Some(source) = self.font.project.document_source(batch.source) else {
+            return false;
+        };
+        let layer = source.default_layer();
+        let direction = if redo {
+            runebender::font::history::HistoryDirection::Redo
+        } else {
+            runebender::font::history::HistoryDirection::Undo
+        };
+        batch.glyphs.iter().all(|glyph| {
+            self.font.project.can_replay_document_layer_history(
+                &runebender::font::variable::GlyphLayerAddress {
+                    glyph: glyph.clone(),
+                    layer: layer.clone(),
+                },
+                direction,
+            )
+        })
+    }
+
     /// Undo in the active editing context. Overview actions may change a
     /// multi-selection, so their per-glyph engine snapshots travel as one batch.
     pub(crate) fn undo_active_edit(&mut self, redo: bool) {
-        if matches!(self.mode, Mode::Graph) {
-            self.metadata_history_step(redo);
-            return;
-        }
+        // The graph's own history is handled by the command dispatcher. Its document fallback
+        // shares the overview's chronological history, independent of the highlighted glyph.
         if matches!(self.mode, Mode::Editor(_)) {
             self.undo_open_glyph(redo);
             return;
         }
-        if !matches!(self.mode, Mode::Overview) {
+        if !matches!(self.mode, Mode::Overview | Mode::Graph) {
             return;
         }
-        if matches!(
-            if redo {
-                self.metadata_redo.last()
-            } else {
-                self.metadata_undo.last()
-            },
-            Some(MetadataEdit::AgentGroup { .. })
-        ) && self.metadata_history_step(redo)
-        {
+        let metadata_next = self.overview_metadata_is_next(redo);
+        if metadata_next {
+            // Do not fall through to an older layer edit when the next metadata action is stale.
+            self.metadata_history_step(redo);
             return;
         }
-        let has_overview_batch = if redo {
-            !self.overview_redo.is_empty()
-        } else {
-            !self.overview_undo.is_empty()
-        };
-        if !has_overview_batch && self.metadata_history_step(redo) {
-            return;
+        if let Some(index) = self.overview_history_index(redo) {
+            self.replay_overview_history(index, redo);
         }
+    }
+
+    fn replay_overview_history(&mut self, index: usize, redo: bool) {
         let batch = if redo {
-            self.overview_redo.pop()
+            self.overview_redo.remove(index)
         } else {
-            self.overview_undo.pop()
-        };
-        let Some(batch) = batch else {
-            self.note = if redo {
-                "Nothing to redo"
-            } else {
-                "Nothing to undo"
-            }
-            .into();
-            return;
+            self.overview_undo.remove(index)
         };
         let Some(layer) = self
             .font
@@ -2863,9 +2971,9 @@ impl Workspace {
         else {
             self.note = "Restore the removed source before undoing its glyph edits".into();
             if redo {
-                self.overview_redo.push(batch);
+                self.overview_redo.insert(index, batch);
             } else {
-                self.overview_undo.push(batch);
+                self.overview_undo.insert(index, batch);
             }
             return;
         };
@@ -2889,9 +2997,9 @@ impl Workspace {
         }) {
             self.note = "The overview edit changed before history replay".into();
             if redo {
-                self.overview_redo.push(batch);
+                self.overview_redo.insert(index, batch);
             } else {
-                self.overview_undo.push(batch);
+                self.overview_undo.insert(index, batch);
             }
             return;
         }
@@ -2904,21 +3012,34 @@ impl Workspace {
             {
                 self.note = "The overview edit changed before history replay".into();
                 if redo {
-                    self.overview_redo.push(batch);
+                    self.overview_redo.insert(index, batch);
                 } else {
-                    self.overview_undo.push(batch);
+                    self.overview_undo.insert(index, batch);
                 }
                 return;
             }
         }
         if Some(batch.source) == self.font.project.source_id(self.font.active()) {
             self.font.rebuild_cache();
+            if batch.glyphs.contains(&self.session.glyph_name)
+                && let Some(address) = self.font.active_layer_address(&self.session.glyph_name)
+            {
+                let _ = self.reload_canonical_layer(&address);
+            }
         }
-        if redo {
-            self.overview_undo.push(batch);
+        let entries = if redo {
+            &mut self.overview_undo
         } else {
-            self.overview_redo.push(batch);
-        }
+            &mut self.overview_redo
+        };
+        let position = entries.partition_point(|candidate| {
+            if redo {
+                candidate.revision < batch.revision
+            } else {
+                candidate.revision > batch.revision
+            }
+        });
+        entries.insert(position, batch);
         self.cells = Arc::new(cells_of(&self.font, &self.palette));
         self.modified = true;
     }
@@ -2987,6 +3108,7 @@ impl Workspace {
                 self.settle_on_overview();
             }
         }
+        self.shapes_context_changed();
     }
 
     /// The current axis location as a name->value map (user units).

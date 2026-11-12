@@ -278,9 +278,13 @@ impl Workspace {
         let glyph = self.session.glyph_name.clone();
         let undo_depth = self.font.history_depth(&glyph, HistoryDirection::Undo);
         if self.font.project.set_hoi_trajectories(records)? {
-            self.metadata_undo
-                .push(MetadataEdit::Interpolation { glyph, undo_depth });
+            self.metadata_undo.push(MetadataEdit::Interpolation {
+                glyph,
+                undo_depth,
+                revision: self.font.project.document_revision(),
+            });
             self.metadata_redo.clear();
+            self.overview_redo.clear();
             self.modified = true;
             self.note = "Interpolation updated".into();
         }

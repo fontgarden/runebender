@@ -137,39 +137,21 @@ impl Entry {
                 .can_undo(&crate::application::widgets::proof_pencil::prefix(app)),
             A::Redo if app.proof_view && app.review.pencil => false,
             A::Undo => match app.mode {
-                Mode::Editor(index) => {
-                    app.font.glyphs.get(index).is_some_and(|glyph| {
-                        app.font.can_replay_history(
-                            &glyph.name,
-                            runebender::font::history::HistoryDirection::Undo,
-                        )
-                    }) || app.can_metadata_history_step(false)
-                }
-                Mode::Overview => {
-                    !app.overview_undo.is_empty() || app.can_metadata_history_step(false)
-                }
+                Mode::Editor(_) => app.can_editor_history_step(false),
+                Mode::Overview => app.can_overview_history_step(false),
                 Mode::Graph => {
                     crate::application::editor::tools::graph::controls::live_graph_can_step(
                         app, false,
-                    ) || app.can_metadata_history_step(false)
+                    ) || app.can_overview_history_step(false)
                 }
             },
             A::Redo => match app.mode {
-                Mode::Editor(index) => {
-                    app.font.glyphs.get(index).is_some_and(|glyph| {
-                        app.font.can_replay_history(
-                            &glyph.name,
-                            runebender::font::history::HistoryDirection::Redo,
-                        )
-                    }) || app.can_metadata_history_step(true)
-                }
-                Mode::Overview => {
-                    !app.overview_redo.is_empty() || app.can_metadata_history_step(true)
-                }
+                Mode::Editor(_) => app.can_editor_history_step(true),
+                Mode::Overview => app.can_overview_history_step(true),
                 Mode::Graph => {
                     crate::application::editor::tools::graph::controls::live_graph_can_step(
                         app, true,
-                    ) || app.can_metadata_history_step(true)
+                    ) || app.can_overview_history_step(true)
                 }
             },
             A::MetaballsToCubic | A::MetaballsToHyperbezier => editor,

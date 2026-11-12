@@ -9,11 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       collect_crash_dump:
-        description: 'Collect/analyze a crash dump (may relaunch under CDB; public fixture memory; retained 1 day)'
-        type: boolean
-        default: true
-      install_debugging_tools:
-        description: 'If CDB is missing, install only Debugging Tools from the signed Microsoft SDK installer'
+        description: 'Retry failed native startup under installed CDB (public fixture memory; dump retained 1 day)'
         type: boolean
         default: true
       native_observation_seconds:
@@ -61,12 +57,10 @@ jobs:
         shell: pwsh
         env:
           COLLECT_CRASH_DUMP: ${{ github.event_name == 'workflow_dispatch' && inputs.collect_crash_dump }}
-          INSTALL_DEBUGGING_TOOLS: ${{ github.event_name == 'workflow_dispatch' && inputs.install_debugging_tools }}
           NATIVE_OBSERVATION_SECONDS: ${{ inputs.native_observation_seconds || '0' }}
         run: |
           $collect = $env:COLLECT_CRASH_DUMP -eq 'true'
-          $install = $env:INSTALL_DEBUGGING_TOOLS -eq 'true'
-          ./.github/scripts/windows-smoke.ps1 -CollectCrashDump:$collect -InstallDebuggingTools:$install -NativeObservationSeconds ([int]$env:NATIVE_OBSERVATION_SECONDS)
+          ./.github/scripts/windows-smoke.ps1 -CollectCrashDump:$collect -NativeObservationSeconds ([int]$env:NATIVE_OBSERVATION_SECONDS)
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -80,15 +74,12 @@ jobs:
             windows-smoke/window.stdout.txt
             windows-smoke/window.stderr.txt
             windows-smoke/masonry-dense.log
-            windows-smoke/native-events.json
             windows-smoke/diagnostic-status.json
-            windows-smoke/debugger-install.log
             windows-smoke/native-debugger.log
             windows-smoke/native-debugger.stderr.txt
           retention-days: 1
       # Never collect dumps automatically on PRs/pushes. Binary process memory cannot be redacted.
-      # The script scopes/restores LocalDumps, allows one minidump <=64 MiB, and keeps the native gate.
-      # Missing WER dumps trigger one bounded CDB reproduction, never a substitute startup gate.
+      # One installed-CDB reproduction may produce a <=64 MiB minidump; the native gate still fails.
       - uses: actions/upload-artifact@v4
         if: always() && github.event_name == 'workflow_dispatch' && inputs.collect_crash_dump
         with:

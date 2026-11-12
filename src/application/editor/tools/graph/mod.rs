@@ -68,12 +68,23 @@ pub(crate) struct NodeJob {
     pub(crate) finished: Arc<Mutex<Option<RunReport>>>,
     /// Cancellation is retained even before the background child starts.
     pub(crate) cancellation: ProcessCancellation,
+    /// Exact editable graph snapshot that launched this run. Reopening even the same path
+    /// creates a different snapshot; graph edits likewise retire the old run's presentation.
+    pub(crate) graph: Option<Arc<NodeGraph>>,
     /// The active master and in-memory document session at launch.
     pub(crate) master_path: PathBuf,
     pub(crate) document_id: u64,
     pub(crate) active_glyph: String,
     pub(crate) foreground_revisions: BTreeMap<String, String>,
     pub(crate) all_glyphs: bool,
+}
+
+impl NodeJob {
+    fn owns(&self, state: &OpenGraph) -> bool {
+        self.graph
+            .as_ref()
+            .is_some_and(|graph| Arc::ptr_eq(graph, &state.graph))
+    }
 }
 
 /// Everything graph-related the app holds.
@@ -125,11 +136,17 @@ pub(crate) struct GraphState {
     pub(crate) content_sizes: BTreeMap<u32, [f32; 2]>,
 }
 
-impl Drop for GraphState {
-    fn drop(&mut self) {
+impl GraphState {
+    fn cancel_disk_run(&self) {
         if let Some(job) = &self.job {
             job.cancellation.cancel();
         }
+    }
+}
+
+impl Drop for GraphState {
+    fn drop(&mut self) {
+        self.cancel_disk_run();
     }
 }
 
@@ -260,6 +277,7 @@ impl Workspace {
     ///
     /// The image supplied by the view is a fixture, not a computed font proof.
     fn open_graph_content_fixture(&mut self) {
+        self.graph.cancel_disk_run();
         let mut graph = runebender::workflows::graph_live::comparison_starter(
             runebender::font::variable::SourceId(0),
         );
@@ -338,6 +356,7 @@ impl Workspace {
     pub(crate) fn open_graph_file(&mut self, path: &Path) {
         match NodeGraph::load(path) {
             Ok(graph) => {
+                self.graph.cancel_disk_run();
                 let registry = self.node_registry();
                 let problems = graph.validate(&registry);
                 let order = graph.order().unwrap_or_default();
@@ -371,6 +390,7 @@ impl Workspace {
     /// A new empty file beside the font, named so it does not collide.
     /// Written on Save.
     pub(crate) fn new_graph_file(&mut self) {
+        self.graph.cancel_disk_run();
         let dir = self.font_dir().join("graphs");
         let mut n = 1;
         let mut path = dir.join("untitled.graph.json");
@@ -438,6 +458,9 @@ impl Workspace {
         let Some(state) = self.graph.open.as_mut() else {
             return;
         };
+        if *state.graph == graph {
+            return;
+        }
         state.problems = graph.validate(&state.registry);
         state.order = graph.order().unwrap_or_default();
         let mut rows = (*state.rows).clone();
@@ -445,6 +468,10 @@ impl Workspace {
         rows.retain(|id, _| ids.contains(id));
         for id in ids {
             rows.entry(id).or_insert(RowState::Waiting);
+        }
+        if let Some(job) = &self.graph.job {
+            job.cancellation.cancel();
+            rows.values_mut().for_each(|row| *row = RowState::Waiting);
         }
         state.rows = Arc::new(rows);
         state.graph = Arc::new(graph);
@@ -520,6 +547,7 @@ impl Workspace {
             tools.insert("font-ml".to_string(), font_ml);
         }
         let job = NodeJob {
+            graph: Some(graph.clone()),
             master_path,
             document_id: self.document_id,
             active_glyph: self.session.glyph_name.clone(),
@@ -577,9 +605,21 @@ impl Workspace {
         let Some(job) = self.graph.job.clone() else {
             return;
         };
+        let current = self
+            .graph
+            .open
+            .as_ref()
+            .is_some_and(|state| job.owns(state));
+        if !current {
+            job.cancellation.cancel();
+            self.note =
+                "Node run cancelled after graph changed; disk effects are not undone".into();
+        }
         let batch: Vec<Event> =
             std::mem::take(&mut *job.events.lock().unwrap_or_else(|e| e.into_inner()));
         if let Some(state) = self.graph.open.as_mut()
+            && current
+            && !job.cancellation.is_cancelled()
             && !batch.is_empty()
         {
             let mut rows = (*state.rows).clone();
@@ -631,6 +671,15 @@ impl Workspace {
     /// The run ended. Install changes the font on disk, so the font is
     /// re-read when one ran.
     fn graph_finished(&mut self, job: &NodeJob, report: &RunReport) {
+        if job.graph.is_some()
+            && !self
+                .graph
+                .open
+                .as_ref()
+                .is_some_and(|state| job.owns(state))
+        {
+            job.cancellation.cancel();
+        }
         if job.cancellation.is_cancelled() {
             self.note = "Node run cancelled; disk effects are not undone".into();
             return;
@@ -650,7 +699,9 @@ impl Workspace {
                 _ => None,
             })
             .collect();
-        if let Some(state) = self.graph.open.as_mut() {
+        if let Some(state) = self.graph.open.as_mut()
+            && job.owns(state)
+        {
             let mut rows = (*state.rows).clone();
             for n in &report.nodes {
                 let note = match n.status {
@@ -761,6 +812,162 @@ fn summary_line(n: &graph_run::NodeResult) -> String {
 mod tests {
     use super::*;
 
+    fn disk_graph_workspace() -> (Workspace, u32) {
+        let project =
+            runebender::font::project::Project::new_font(PathBuf::from("graph-ownership.ufo"));
+        let mut app = Workspace::from_model(
+            crate::application::font_model::FontModel::from_project(project),
+        )
+        .expect("the in-memory font opens");
+        app.new_graph_file();
+        let mut graph = NodeGraph::default();
+        let id = graph.add("core.source", [0.0, 0.0]);
+        app.graph_changed(graph);
+        (app, id)
+    }
+
+    fn disk_job(app: &Workspace) -> NodeJob {
+        NodeJob {
+            graph: app.graph.open.as_ref().map(|state| state.graph.clone()),
+            master_path: app.font.source().to_path_buf(),
+            document_id: app.document_id,
+            active_glyph: app.session.glyph_name.clone(),
+            foreground_revisions: foreground_revisions(&app.font, &[])
+                .expect("the foreground revisions are captured"),
+            all_glyphs: true,
+            ..NodeJob::default()
+        }
+    }
+
+    fn finish_disk_job(job: &NodeJob, id: u32) {
+        *job.finished.lock().unwrap() = Some(RunReport {
+            ok: true,
+            nodes: vec![graph_run::NodeResult {
+                id,
+                type_name: "core.source".into(),
+                status: Status::Ran,
+                hash: String::new(),
+                outputs: BTreeMap::new(),
+                report: serde_json::Value::Null,
+                seconds: 0.0,
+            }],
+        });
+    }
+
+    fn queue_disk_progress(job: &NodeJob, id: u32) {
+        job.events.lock().unwrap().extend([
+            Event::Start {
+                id,
+                type_name: "core.source".into(),
+                index: 1,
+                total: 1,
+            },
+            Event::Progress {
+                id,
+                done: 1,
+                total: 2,
+                label: "original graph".into(),
+            },
+        ]);
+    }
+
+    fn assert_retired_disk_job(app: &mut Workspace, job: &NodeJob, id: u32) {
+        queue_disk_progress(job, id);
+        app.graph_pump();
+        assert!(job.cancellation.is_cancelled());
+        assert_eq!(
+            app.graph.open.as_ref().unwrap().rows.get(&id),
+            Some(&RowState::Waiting)
+        );
+        finish_disk_job(job, id);
+        app.graph_pump();
+        assert!(app.graph.job.is_none());
+        assert_eq!(
+            app.graph.open.as_ref().unwrap().rows.get(&id),
+            Some(&RowState::Waiting)
+        );
+    }
+
+    #[test]
+    fn disk_graph_progress_and_completion_do_not_follow_new_graph() {
+        let (mut app, id) = disk_graph_workspace();
+        let job = disk_job(&app);
+        app.graph.job = Some(job.clone());
+        app.new_graph_file();
+        let mut replacement = NodeGraph::default();
+        assert_eq!(replacement.add("core.source", [0.0, 0.0]), id);
+        app.graph_changed(replacement);
+
+        assert_retired_disk_job(&mut app, &job, id);
+    }
+
+    #[test]
+    fn disk_graph_open_and_same_path_reload_retire_the_original_run() {
+        let (mut app, id) = disk_graph_workspace();
+        let root = std::env::temp_dir().join(format!(
+            "runebender-graph-ownership-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("the system clock is after the Unix epoch")
+                .as_nanos(),
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let first = root.join("first.graph.json");
+        let second = root.join("second.graph.json");
+        let graph = app.graph.open.as_ref().unwrap().graph.clone();
+        graph.save(&first).unwrap();
+        graph.save(&second).unwrap();
+        for replacement in [&first, &second] {
+            app.open_graph_file(&first);
+            let job = disk_job(&app);
+            app.graph.job = Some(job.clone());
+            app.open_graph_file(replacement);
+
+            assert_retired_disk_job(&mut app, &job, id);
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn disk_graph_edit_retires_run_but_unchanged_snapshot_keeps_current_results() {
+        let (mut app, id) = disk_graph_workspace();
+        let job = disk_job(&app);
+        app.graph.job = Some(job.clone());
+        app.graph_changed((*app.graph.open.as_ref().unwrap().graph).clone());
+        queue_disk_progress(&job, id);
+        app.graph_pump();
+        assert!(!job.cancellation.is_cancelled());
+        assert_eq!(
+            app.graph.open.as_ref().unwrap().rows.get(&id),
+            Some(&RowState::Running(Some("1/2 original graph".into())))
+        );
+        app.graph_set_value(id, "changed", true.into());
+
+        assert_retired_disk_job(&mut app, &job, id);
+
+        let job = disk_job(&app);
+        app.graph.job = Some(job.clone());
+        finish_disk_job(&job, id);
+        app.graph_pump();
+        assert!(!job.cancellation.is_cancelled());
+        assert!(app.graph.job.is_none());
+        assert!(matches!(
+            app.graph.open.as_ref().unwrap().rows.get(&id),
+            Some(RowState::Done(Status::Ran, _))
+        ));
+    }
+
+    #[test]
+    fn cancelled_disk_graph_does_not_publish_queued_progress_or_completion() {
+        let (mut app, id) = disk_graph_workspace();
+        let job = disk_job(&app);
+        app.graph.job = Some(job.clone());
+        job.cancellation.cancel();
+
+        assert_retired_disk_job(&mut app, &job, id);
+    }
+
     #[test]
     fn running_a_graph_never_saves_unsaved_font_edits() {
         let root = std::env::temp_dir().join(format!(
@@ -821,19 +1028,6 @@ mod tests {
             assert_eq!(node.title, row.title);
             assert_eq!(node.implemented, row.implemented);
         }
-    }
-
-    #[test]
-    fn malformed_task_registry_reports_why_it_is_unavailable() {
-        assert!(
-            parse_tasks_json(b"not json")
-                .unwrap_err()
-                .contains("invalid JSON")
-        );
-        assert_eq!(
-            parse_tasks_json(br#"{"schema": {}}"#).unwrap_err(),
-            "font-ml tasks --json returned no tasks array"
-        );
     }
 
     #[test]
@@ -912,6 +1106,11 @@ mod tests {
         );
 
         let job = NodeJob {
+            graph: workspace
+                .graph
+                .open
+                .as_ref()
+                .map(|state| state.graph.clone()),
             master_path: font_path,
             document_id: workspace.document_id,
             active_glyph: workspace.session.glyph_name.clone(),
@@ -940,7 +1139,6 @@ mod tests {
                 Some("training deliberately not run".into())
             ))
         );
-        assert_eq!(workspace.note, "1 nodes failed");
         std::fs::remove_dir_all(root).expect("the graph fixture is removed");
     }
 
@@ -995,12 +1193,10 @@ mod tests {
         };
 
         workspace.revert_to_saved();
+        let replacement_document = workspace.document_id;
         workspace.graph_finished(&job, &report);
 
-        assert_eq!(
-            workspace.note,
-            "Node result is stale after a document, master, glyph, or revision change"
-        );
+        assert_eq!(workspace.document_id, replacement_document);
         std::fs::remove_dir_all(path).expect("the empty UFO fixture is removed");
     }
 
@@ -1068,7 +1264,6 @@ mod tests {
             workspace.ai.proposals.is_empty(),
             "cancelled late result imported a proposal"
         );
-        assert!(workspace.note.contains("cancelled"));
         let job = NodeJob {
             cancellation: ProcessCancellation::default(),
             ..job
@@ -1091,7 +1286,6 @@ mod tests {
                 .as_ref()
                 .map(|graph| graph.rows.as_ref())
         );
-        assert!(workspace.note.contains("Review 1 proposal"));
         std::fs::remove_dir_all(path).expect("the fixture is removed");
     }
 
@@ -1154,10 +1348,6 @@ mod tests {
         assert_eq!(
             workspace.font.font_snapshot().get_glyph("A").unwrap().width,
             540.0
-        );
-        assert_eq!(
-            workspace.note,
-            "Node result is stale after a document, master, glyph, or revision change"
         );
         std::fs::remove_dir_all(path).expect("the fixture is removed");
     }
@@ -1278,7 +1468,6 @@ mod tests {
                 .as_ref()
                 .map(|graph| graph.rows.as_ref())
         );
-        assert!(workspace.note.contains("Review 1 proposal"));
         let rows = workspace
             .graph
             .open

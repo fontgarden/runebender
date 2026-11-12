@@ -437,8 +437,10 @@ impl Workspace {
         self.overview_undo.push(OverviewEditBatch {
             source,
             glyphs: names,
+            revision: self.font.project.document_revision(),
         });
         self.overview_redo.clear();
+        self.metadata_redo.clear();
         self.font.rebuild_cache();
         self.cells = Arc::new(cells_of(&self.font, &self.palette));
         self.modified = true;

@@ -186,6 +186,9 @@ Toolbar Shapes group, Local AI Shapes. Source: `src/application/editor/tools/ai_
 
 - Drag a box and choose a word. The model draws a ghost in the box. Enter keeps
   it, Tab draws another and Esc removes it. Resizing the box draws it again.
+- Drawing jobs and previews belong to one document, glyph identity, source, layer, and captured revision.
+  Switching targets or making a canonical document edit discards them conservatively; unrelated training keeps running.
+  Enter asks the workspace to validate the exact displayed preview before inserting it as one ordinary undoable edit.
 - Draws with `font-ml run draw --prompt <word> --box x,y,w,h`.
 - Trains with `font-ml run train-draw`: Quick is 6000 steps (about 12 minutes),
   Thorough is 15000 steps (about 30 minutes). Add This Font's Shapes continues
