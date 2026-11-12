@@ -555,6 +555,7 @@ impl Workspace {
         self.refresh_metric_bufs();
         self.refresh_coord_bufs();
         self.note.clear();
+        self.shapes_context_changed();
     }
 }
 

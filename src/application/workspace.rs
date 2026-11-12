@@ -81,27 +81,42 @@ pub(crate) enum Tool {
 pub(crate) struct OverviewEditBatch {
     pub(crate) source: runebender::font::variable::SourceId,
     pub(crate) glyphs: Vec<String>,
+    /// Commit order shared with metadata actions, independent of glyph or source selection.
+    pub(crate) revision: u64,
 }
 
-/// A cross-master metadata edit and the active glyph-history depth immediately
-/// before it. The depth keeps metadata Undo ordered with outline edits.
+/// Where an ordinary Undo may reach a canonical multi-layer history group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DocumentGroupScope {
+    /// Agent edits follow the glyph and source which they changed.
+    Contextual,
+    /// Whole-font commands remain reachable from any active glyph or source.
+    Document,
+}
+
+/// Metadata and grouped commands ordered by original commit revision alongside overview actions.
+/// Per-glyph depths also keep metadata ordered with the editor's layer history.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum MetadataEdit {
     Interpolation {
+        revision: u64,
         glyph: String,
         undo_depth: usize,
     },
-    AgentGroup {
+    DocumentGroup {
+        revision: u64,
         group: runebender::font::project::EditHistoryGroupId,
         addresses: Vec<runebender::font::variable::GlyphLayerAddress>,
-        overview_undo_depth: usize,
+        scope: DocumentGroupScope,
     },
     Rename {
+        revision: u64,
         before: String,
         after: String,
         undo_depth: usize,
     },
     Unicode {
+        revision: u64,
         source_ids: Vec<runebender::font::variable::SourceId>,
         glyph: String,
         before: Vec<Vec<char>>,
@@ -109,11 +124,13 @@ pub(crate) enum MetadataEdit {
         undo_depth: usize,
     },
     SourceMetadata {
+        revision: u64,
         glyph: String,
         label: String,
         undo_depth: usize,
     },
     DocumentLayer {
+        revision: u64,
         glyph: String,
         address: runebender::font::variable::GlyphLayerAddress,
         label: String,
@@ -125,12 +142,28 @@ pub(crate) enum MetadataEdit {
         ),
     },
     SourceStructure {
+        revision: u64,
         glyph: String,
         label: String,
         before: Box<runebender::font::variable::DocumentSnapshot>,
         after: Box<runebender::font::variable::DocumentSnapshot>,
         undo_depth: usize,
     },
+}
+
+impl MetadataEdit {
+    /// Original commit order; replay retains it when moving between history piles.
+    pub(crate) fn revision(&self) -> u64 {
+        match self {
+            Self::Interpolation { revision, .. }
+            | Self::DocumentGroup { revision, .. }
+            | Self::Rename { revision, .. }
+            | Self::Unicode { revision, .. }
+            | Self::SourceMetadata { revision, .. }
+            | Self::DocumentLayer { revision, .. }
+            | Self::SourceStructure { revision, .. } => *revision,
+        }
+    }
 }
 
 pub(crate) struct Workspace {
@@ -163,7 +196,7 @@ pub(crate) struct Workspace {
     /// one user action so a multi-selection mark change undoes once.
     pub(crate) overview_undo: Vec<OverviewEditBatch>,
     pub(crate) overview_redo: Vec<OverviewEditBatch>,
-    /// Cross-master metadata changes, ordered with the active glyph's engine history.
+    /// Metadata and grouped commands, ordered with overview and per-glyph engine history.
     pub(crate) metadata_undo: Vec<MetadataEdit>,
     pub(crate) metadata_redo: Vec<MetadataEdit>,
     pub(crate) filter: String,

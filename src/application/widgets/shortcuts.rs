@@ -12,18 +12,27 @@
 //! Xilem does not yet provide an application-level keymap layer, so this
 //! widget keeps the behavior at the root of Runebender's view tree.
 
+#[cfg(any(target_os = "macos", test))]
 use masonry::accesskit::{Node, Role};
+#[cfg(any(target_os = "macos", test))]
 use masonry::core::keyboard::KeyState;
+#[cfg(any(target_os = "macos", test))]
 use masonry::core::{
     AccessCtx, ChildrenIds, EventCtx, FromDynWidget, LayoutCtx, MeasureCtx, NewWidget, PaintCtx,
     PropertiesMut, PropertiesRef, RegisterCtx, TextEvent, Widget, WidgetMut, WidgetPod,
 };
+#[cfg(any(target_os = "macos", test))]
 use masonry::kurbo::{Axis, Point, Size};
+#[cfg(any(target_os = "macos", test))]
 use masonry::layout::{LenReq, Length};
+#[cfg(target_os = "macos")]
 use xilem::core::{MessageCtx, MessageResult, Mut, View, ViewMarker};
+#[cfg(target_os = "macos")]
 use xilem::{Pod, ViewCtx, WidgetView};
 
-use crate::application::workspace::{AppState, Tool};
+#[cfg(target_os = "macos")]
+use crate::application::workspace::AppState;
+use crate::application::workspace::Tool;
 
 /// Workspace-level actions a shortcut or a menu item can fire.
 // Some variants are only constructed by the menu table, which the
@@ -139,10 +148,12 @@ pub(crate) enum AppAction {
     SortByUnicode,
 }
 
+#[cfg(any(target_os = "macos", test))]
 pub(crate) struct ShortcutHost {
     inner: WidgetPod<dyn Widget>,
 }
 
+#[cfg(any(target_os = "macos", test))]
 impl ShortcutHost {
     pub(crate) fn new(child: NewWidget<impl Widget + ?Sized>) -> Self {
         Self {
@@ -150,15 +161,12 @@ impl ShortcutHost {
         }
     }
 
-    #[cfg_attr(
-        not(target_os = "macos"),
-        allow(dead_code, reason = "the reactive wrapper is used by the macOS root")
-    )]
     pub(crate) fn child_mut<'t>(this: &'t mut WidgetMut<'_, Self>) -> WidgetMut<'t, dyn Widget> {
         this.ctx.get_mut(&mut this.widget.inner)
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 impl Widget for ShortcutHost {
     type Action = AppAction;
 
@@ -242,23 +250,19 @@ impl Widget for ShortcutHost {
 // ---------------------------------------------------------------------------
 // View wrapper (single reactive child, following `sized_box`).
 
-#[cfg_attr(
-    not(target_os = "macos"),
-    allow(dead_code, reason = "the in-window menu is the non-macOS root wrapper")
-)]
+#[cfg(target_os = "macos")]
 pub(crate) struct ShortcutHostView<V> {
     inner: V,
 }
 
-#[cfg_attr(
-    not(target_os = "macos"),
-    allow(dead_code, reason = "the in-window menu is the non-macOS root wrapper")
-)]
+#[cfg(target_os = "macos")]
 pub(crate) fn shortcut_host<V: WidgetView<AppState>>(inner: V) -> ShortcutHostView<V> {
     ShortcutHostView { inner }
 }
 
+#[cfg(target_os = "macos")]
 impl<V> ViewMarker for ShortcutHostView<V> {}
+#[cfg(target_os = "macos")]
 impl<V> View<AppState, (), ViewCtx> for ShortcutHostView<V>
 where
     V: WidgetView<AppState>,
@@ -320,6 +324,7 @@ where
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 // Keep FromDynWidget in scope for downcast().
 #[expect(unused_imports, reason = "the trait is used only on some platforms")]
 use FromDynWidget as _;

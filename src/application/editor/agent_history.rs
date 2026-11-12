@@ -1,7 +1,7 @@
 // Copyright 2026 the Runebender Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! One application history entry and cache refresh for each canonical agent group.
+//! Shared application history and cache refresh for canonical command and agent edit groups.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -12,30 +12,32 @@ use runebender::font::project::{
 };
 
 use crate::application::view::canvas::grid::cells_of;
-use crate::application::workspace::{MetadataEdit, Mode, Workspace};
+use crate::application::workspace::{DocumentGroupScope, MetadataEdit, Mode, Workspace};
 
 impl Workspace {
-    pub(crate) fn record_agent_group(
+    pub(crate) fn record_document_group(
         &mut self,
         group: EditHistoryGroupId,
         change: &DocumentChange,
+        scope: DocumentGroupScope,
     ) {
         self.metadata_undo.retain(|edit| match edit {
-            MetadataEdit::AgentGroup { group, .. } => self
+            MetadataEdit::DocumentGroup { group, .. } => self
                 .font
                 .project
                 .document_edit_history_group_state(*group)
                 .is_some(),
             _ => true,
         });
-        self.metadata_undo.push(MetadataEdit::AgentGroup {
+        self.metadata_undo.push(MetadataEdit::DocumentGroup {
             group,
             addresses: change.affected_layers().to_vec(),
-            overview_undo_depth: self.overview_undo.len(),
+            revision: self.font.project.document_revision(),
+            scope,
         });
         self.metadata_redo.clear();
         self.overview_redo.clear();
-        self.refresh_agent_change(change);
+        self.refresh_document_group_change(change);
     }
 
     /// Refresh only active-source views; switching sources rebuilds other source views canonically.
@@ -94,7 +96,7 @@ impl Workspace {
         }
     }
 
-    fn refresh_agent_change(&mut self, change: &DocumentChange) {
+    fn refresh_document_group_change(&mut self, change: &DocumentChange) {
         let names = self.refresh_changed_glyphs(change);
         for tab in &mut self.tabs {
             if tab.session.glyph_name == self.session.glyph_name
@@ -123,27 +125,15 @@ impl Workspace {
         self.modified |= self.font.project.is_modified();
     }
 
-    pub(crate) fn can_agent_metadata_step(&self, edit: &MetadataEdit, redo: bool) -> bool {
-        let MetadataEdit::AgentGroup {
-            group,
-            addresses,
-            overview_undo_depth,
+    pub(crate) fn document_group_in_context(&self, edit: &MetadataEdit) -> bool {
+        let MetadataEdit::DocumentGroup {
+            addresses, scope, ..
         } = edit
         else {
             return false;
         };
-        if self.session.gesture_in_progress()
-            || (matches!(self.mode, Mode::Overview | Mode::Graph)
-                && self.overview_undo.len() != *overview_undo_depth)
-        {
-            return false;
-        }
-        if matches!(self.mode, Mode::Graph) {
-            return self
-                .font
-                .project
-                .check_document_edit_history_group(*group, direction(redo))
-                .is_ok();
+        if *scope == DocumentGroupScope::Document || matches!(self.mode, Mode::Graph) {
+            return true;
         }
         let glyph = match self.mode {
             Mode::Editor(_) => Some(self.session.glyph_name.as_str()),
@@ -156,28 +146,44 @@ impl Workspace {
         let Some(address) = glyph.and_then(|glyph| self.font.active_layer_address(glyph)) else {
             return false;
         };
-        // Auxiliary edits belong to this glyph's history even though its foreground is displayed.
         addresses.iter().any(|target| {
             target.glyph == address.glyph && target.layer.source == address.layer.source
-        }) && self
-            .font
-            .project
-            .check_document_edit_history_group(*group, direction(redo))
-            .is_ok()
+        })
     }
 
-    pub(crate) fn agent_metadata_step(&mut self, edit: &MetadataEdit, redo: bool) -> bool {
-        if !self.can_agent_metadata_step(edit, redo) {
-            return false;
-        }
-        let MetadataEdit::AgentGroup { group, .. } = edit else {
+    pub(crate) fn can_document_group_step(&self, edit: &MetadataEdit, redo: bool) -> bool {
+        let MetadataEdit::DocumentGroup { group, .. } = edit else {
             return false;
         };
-        self.replay_agent_group(*group, direction(redo)).is_ok()
+        !self.session.gesture_in_progress()
+            && self.document_group_in_context(edit)
+            && self
+                .font
+                .project
+                .check_document_edit_history_group(*group, direction(redo))
+                .is_ok()
+    }
+
+    pub(crate) fn document_group_step(&mut self, edit: &MetadataEdit, redo: bool) -> bool {
+        if !self.document_group_in_context(edit) {
+            return false;
+        }
+        if self.session.gesture_in_progress() {
+            self.note = "Finish the canvas gesture before history replay".into();
+            return true;
+        }
+        let MetadataEdit::DocumentGroup { group, .. } = edit else {
+            return false;
+        };
+        if let Err(error) = self.replay_document_group(*group, direction(redo)) {
+            self.note = error;
+        }
+        // A stale newest group must never fall through to an older per-layer edit.
+        true
     }
 
     /// Targeted and ordinary history both move this same entry after one guarded engine replay.
-    pub(crate) fn replay_agent_group(
+    pub(crate) fn replay_document_group(
         &mut self,
         group: EditHistoryGroupId,
         direction: HistoryDirection,
@@ -191,31 +197,30 @@ impl Workspace {
         } else {
             &self.metadata_undo
         };
-        let position = entries.iter().position(|edit| matches!(edit, MetadataEdit::AgentGroup { group: candidate, .. } if *candidate == group))
+        let position = entries.iter().position(|edit| matches!(edit, MetadataEdit::DocumentGroup { group: candidate, .. } if *candidate == group))
             .ok_or("group has no application history entry in this direction; inspect its current state")?;
         let result = self
             .font
             .project
             .replay_document_edit_history_group(group, direction)
             .map_err(|error| error.to_string())?;
-        let mut edit = if redo {
+        let edit = if redo {
             self.metadata_redo.remove(position)
         } else {
             self.metadata_undo.remove(position)
         };
-        if let MetadataEdit::AgentGroup {
-            overview_undo_depth,
-            ..
-        } = &mut edit
-        {
-            *overview_undo_depth = self.overview_undo.len();
-        }
-        if redo {
-            self.metadata_undo.push(edit);
+        let entries = if redo {
+            &mut self.metadata_undo
         } else {
-            self.metadata_redo.push(edit);
-        }
-        self.refresh_agent_change(&result.change);
+            &mut self.metadata_redo
+        };
+        let position = if redo {
+            entries.partition_point(|candidate| candidate.revision() < edit.revision())
+        } else {
+            entries.partition_point(|candidate| candidate.revision() > edit.revision())
+        };
+        entries.insert(position, edit);
+        self.refresh_document_group_change(&result.change);
         let label = self
             .font
             .project

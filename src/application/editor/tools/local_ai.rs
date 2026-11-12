@@ -24,6 +24,9 @@ use runebender::workflows::process::{
     OutputStream, ProcessCancellation, ProcessLimits, ProcessOutcome,
 };
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::application::workspace::DocumentGroupScope;
+
 use crate::application::editor::session::Session;
 use crate::application::font_model::FontModel;
 use crate::application::view::canvas::grid::cells_of;
@@ -648,7 +651,7 @@ impl Workspace {
                     .map(|layer| layer.glyph.clone())
                     .collect();
                 self.remember_debt_install(task, &installed);
-                self.record_agent_group(history_group, &change);
+                self.record_document_group(history_group, &change, DocumentGroupScope::Contextual);
                 self.ai.installed_order.push(InstalledProposalEdit {
                     layer_history_depth: 0,
                     address,
@@ -782,7 +785,7 @@ impl Workspace {
         }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(group) = edit.group {
-            if let Err(error) = self.replay_agent_group(group, HistoryDirection::Undo) {
+            if let Err(error) = self.replay_document_group(group, HistoryDirection::Undo) {
                 self.ai.installed_order.push(edit);
                 self.note = format!("Cannot undo model install: {error}");
             } else {

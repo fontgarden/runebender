@@ -16,16 +16,85 @@ use std::time::Instant;
 
 use masonry::kurbo::{self, BezPath, Point, Rect, Shape as _};
 use runebender::font::LayerPointType;
+use runebender::font::edit_batch::canonical_glyph_revision;
 use runebender::font::generated::{GeneratedContour, GeneratedPoint};
+use runebender::font::variable::{GlyphId, GlyphLayerAddress};
 use runebender::workflows::graph_run::{self, ShapesModel};
 use runebender::workflows::process::{
     self, OutputStream, ProcessCancellation, ProcessLimits, ProcessOutcome,
 };
 
+use crate::application::editor::session::SessionSyncOutcome;
 use crate::application::workspace::Workspace;
 
 /// The outcome of a drawing request, once the worker has one.
 type DrawOutcome = Arc<Mutex<Option<Result<Vec<GeneratedContour>, String>>>>;
+
+/// The exact editing target that owns a drawing and its eventual preview.
+#[derive(Debug, Clone)]
+struct DrawOrigin {
+    document_id: u64,
+    /// Fast conservative freshness: any canonical document edit retires the drawing.
+    document_revision: u64,
+    address: GlyphLayerAddress,
+    glyph_id: GlyphId,
+    revision: String,
+}
+
+impl DrawOrigin {
+    fn capture(app: &Workspace) -> Result<Self, String> {
+        let address = app
+            .session
+            .canonical_address()
+            .ok_or("The active glyph layer is unavailable")?
+            .clone();
+        let glyph_id = app
+            .font
+            .project
+            .document_glyph(&address.glyph)
+            .ok_or("The active glyph is unavailable")?
+            .id();
+        let layer = app
+            .font
+            .project
+            .document_layer(&address.glyph, &address.layer)
+            .ok_or("The active glyph layer is unavailable")?;
+        let origin = Self {
+            document_id: app.document_id,
+            document_revision: app.font.project.document_revision(),
+            address,
+            glyph_id,
+            revision: canonical_glyph_revision(layer)?,
+        };
+        if !origin.is_current(app) {
+            return Err("Finish the active glyph edit before drawing".into());
+        }
+        Ok(origin)
+    }
+
+    fn matches_context(&self, app: &Workspace) -> bool {
+        app.document_id == self.document_id
+            && app.font.project.document_revision() == self.document_revision
+            && app.session.glyph_name == self.address.glyph
+            && app.session.canonical_address() == Some(&self.address)
+            && app.font.project.source_id(app.font.active()) == Some(self.address.layer.source)
+            && app
+                .font
+                .project
+                .document_glyph(&self.address.glyph)
+                .is_some_and(|glyph| glyph.id() == self.glyph_id)
+    }
+
+    fn is_current(&self, app: &Workspace) -> bool {
+        self.matches_context(app)
+            && app
+                .session
+                .current_layer()
+                .and_then(|layer| canonical_glyph_revision(layer).ok())
+                .as_ref()
+                == Some(&self.revision)
+    }
+}
 
 /// What a model drew for a box and a word, waiting to be kept.
 #[derive(Debug, Clone)]
@@ -34,6 +103,7 @@ pub(crate) struct ShapeGhost {
     pub(crate) seed: u64,
     pub(crate) contours: Vec<GeneratedContour>,
     pub(crate) path: BezPath,
+    origin: DrawOrigin,
 }
 
 /// A drawing request in flight.
@@ -43,6 +113,7 @@ pub(crate) struct DrawJob {
     pub(crate) seed: u64,
     /// The box the shape is for; what comes back is fitted to it.
     pub(crate) rect: Rect,
+    origin: DrawOrigin,
     finished: DrawOutcome,
     cancellation: ProcessCancellation,
 }
@@ -329,11 +400,7 @@ impl Workspace {
     }
 
     pub(crate) fn shapes_drop(&mut self) {
-        if let Some(job) = self.shapes.job.take() {
-            job.cancellation.cancel();
-        }
-        self.shapes.rect = None;
-        self.shapes.ghost = None;
+        self.shapes_discard_drawing();
         self.shapes.note.clear();
     }
 
@@ -357,11 +424,67 @@ impl Workspace {
         self.shapes_draw(rect, &shape, seed);
     }
 
-    pub(crate) fn shapes_kept(&mut self, word: &str) {
+    /// Retire drawings only when their editing target or captured document revision changed.
+    pub(crate) fn shapes_context_changed(&mut self) {
+        let has_drawing = self.shapes.job.is_some() || self.shapes.ghost.is_some();
+        let stale = self.shapes.job.as_ref().is_some_and(|job| {
+            job.cancellation.is_cancelled() || !job.origin.matches_context(self)
+        }) || self
+            .shapes
+            .ghost
+            .as_ref()
+            .is_some_and(|ghost| !ghost.origin.matches_context(self));
+        if !has_drawing || stale {
+            self.shapes_discard_drawing();
+        }
+    }
+
+    /// Cancel/drop drawing-only state without changing the independent training lifetime.
+    fn shapes_discard_drawing(&mut self) {
+        if let Some(job) = self.shapes.job.take() {
+            job.cancellation.cancel();
+        }
         self.shapes.rect = None;
         self.shapes.ghost = None;
-        self.shapes.note = format!("Added {word}. Undo removes it.");
+        if self.shapes.training.is_none() {
+            self.shapes.note.clear();
+        }
+    }
+
+    /// Offer previews using the cheap conservative document-revision and editing-target guard.
+    pub(crate) fn shapes_current_ghost(&self) -> Option<Arc<ShapeGhost>> {
+        self.shapes
+            .ghost
+            .as_ref()
+            .filter(|ghost| ghost.origin.matches_context(self))
+            .cloned()
+    }
+
+    /// Enter accepts the exact published preview, never contours carried by another canvas.
+    pub(crate) fn shapes_accept(&mut self, ghost: &Arc<ShapeGhost>) -> bool {
+        let published = self
+            .shapes
+            .ghost
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, ghost));
+        if !published {
+            return false;
+        }
+        if !ghost.origin.is_current(self) {
+            self.shapes_discard_drawing();
+            return false;
+        }
+        let mut session = (*self.session).clone();
+        if !session.add_generated_contours(&ghost.contours)
+            || self.sync_session_from(&mut session) != SessionSyncOutcome::Changed
+        {
+            return false;
+        }
+        self.shapes.rect = None;
+        self.shapes.ghost = None;
+        self.shapes.note = format!("Added {}. Undo removes it.", ghost.word);
         self.finish_open_glyph_refresh();
+        true
     }
 
     /// Ask the model for `word` in `rect`; `seed` 0 is the most likely
@@ -390,6 +513,13 @@ impl Workspace {
             );
             return;
         }
+        let origin = match DrawOrigin::capture(self) {
+            Ok(origin) => origin,
+            Err(error) => {
+                self.shapes.note = error;
+                return;
+            }
+        };
         if let Some(job) = self.shapes.job.take() {
             job.cancellation.cancel();
         }
@@ -404,6 +534,7 @@ impl Workspace {
             word: word.clone(),
             seed,
             rect,
+            origin,
             finished: Arc::new(Mutex::new(None)),
             cancellation: ProcessCancellation::default(),
         };
@@ -461,6 +592,19 @@ impl Workspace {
 
     /// The pump: take what the worker threads have finished.
     pub(crate) fn shapes_pump(&mut self) {
+        if self
+            .shapes
+            .job
+            .as_ref()
+            .is_some_and(|job| job.cancellation.is_cancelled() || !job.origin.matches_context(self))
+            || self
+                .shapes
+                .ghost
+                .as_ref()
+                .is_some_and(|ghost| !ghost.origin.matches_context(self))
+        {
+            self.shapes_context_changed();
+        }
         if let Some(job) = self.shapes.job.clone() {
             let finished = job
                 .finished
@@ -469,24 +613,30 @@ impl Workspace {
                 .take();
             if let Some(result) = finished {
                 self.shapes.job = None;
-                match result {
-                    Ok(mut contours) => {
-                        fit_contours(&mut contours, job.rect);
-                        let points: usize = contours.iter().map(|c| c.points.len()).sum();
-                        let path = contours_path(&contours);
-                        self.shapes.ghost = Some(Arc::new(ShapeGhost {
-                            word: job.word.clone(),
-                            seed: job.seed,
-                            contours,
-                            path,
-                        }));
-                        self.shapes.note = format!(
-                            "{}: {points} points. Enter keeps it, Tab draws another, Esc drops it.",
-                            job.word
-                        );
+                if job.cancellation.is_cancelled() || !job.origin.is_current(self) {
+                    job.cancellation.cancel();
+                    self.shapes_discard_drawing();
+                } else {
+                    match result {
+                        Ok(mut contours) => {
+                            fit_contours(&mut contours, job.rect);
+                            let points: usize = contours.iter().map(|c| c.points.len()).sum();
+                            let path = contours_path(&contours);
+                            self.shapes.ghost = Some(Arc::new(ShapeGhost {
+                                word: job.word.clone(),
+                                seed: job.seed,
+                                contours,
+                                path,
+                                origin: job.origin.clone(),
+                            }));
+                            self.shapes.note = format!(
+                                "{}: {points} points. Enter keeps it, Tab draws another, Esc drops it.",
+                                job.word
+                            );
+                        }
+                        Err(e) if e == "cancelled" => {}
+                        Err(e) => self.shapes.note = format!("Could not draw: {e}"),
                     }
-                    Err(e) if e == "cancelled" => {}
-                    Err(e) => self.shapes.note = format!("Could not draw: {e}"),
                 }
             }
         }
@@ -759,6 +909,336 @@ pub(crate) fn fit_path(path: &BezPath, size: f64, inset: f64) -> BezPath {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn drawing_workspace() -> Workspace {
+        use crate::application::font_model::FontModel;
+        use runebender::font::project::{Project, SourceInput};
+
+        let document = norad::designspace::DesignSpaceDocument::load(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/core/Core.designspace"),
+        )
+        .unwrap();
+        let project = Project::from_designspace(document, |filename| {
+            let mut font = norad::Font::new();
+            for (name, character) in [("A", 'A'), ("B", 'B')] {
+                let mut glyph = norad::Glyph::new(name);
+                glyph.width = 500.0;
+                glyph.codepoints = norad::Codepoints::new([character]);
+                font.default_layer_mut().insert_glyph(glyph);
+            }
+            Ok(SourceInput::from_font(font, PathBuf::from(filename)))
+        })
+        .unwrap();
+        let mut app = Workspace::from_model(FontModel::from_project(project)).unwrap();
+        app.open_glyph(app.font.index_of("A").unwrap());
+        app
+    }
+
+    fn pending_drawing(app: &mut Workspace) -> DrawJob {
+        let rect = Rect::new(20.0, 30.0, 120.0, 130.0);
+        let job = DrawJob {
+            word: "square".into(),
+            seed: 0,
+            rect,
+            origin: DrawOrigin::capture(app).unwrap(),
+            finished: Arc::new(Mutex::new(None)),
+            cancellation: ProcessCancellation::default(),
+        };
+        app.shapes.rect = Some(rect);
+        app.shapes.ghost = None;
+        app.shapes.job = Some(job.clone());
+        job
+    }
+
+    fn finish_drawing(job: &DrawJob) {
+        *job.finished.lock().unwrap() = Some(contours_from(&serde_json::json!({
+            "contours": [[
+                {"x": 0.0, "y": 0.0, "type": "line"},
+                {"x": 10.0, "y": 0.0, "type": "line"},
+                {"x": 10.0, "y": 10.0, "type": "line"},
+                {"x": 0.0, "y": 10.0, "type": "line"}
+            ]]
+        })));
+    }
+
+    fn change_width(app: &mut Workspace, glyph: &str) {
+        let address = app.font.active_layer_address(glyph).unwrap();
+        let mut edit = app
+            .font
+            .project
+            .begin_document_layer_transaction(&address)
+            .unwrap();
+        edit.draft_mut().set_width(540.0).unwrap();
+        app.font
+            .project
+            .commit_document_layer_transaction(edit)
+            .unwrap();
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum DrawContextChange {
+        Glyph,
+        Source,
+        Layer,
+        Document,
+        Revision,
+        PendingRevision,
+        UnrelatedRevision,
+    }
+
+    fn change_drawing_context(app: &mut Workspace, change: DrawContextChange) {
+        match change {
+            DrawContextChange::Glyph => {
+                // Bypass switch cleanup to exercise the authoritative publication/accept guard.
+                app.session = Arc::new(
+                    crate::application::editor::session::Session::new_from_model(&app.font, "B")
+                        .unwrap(),
+                );
+            }
+            DrawContextChange::Source => app.set_master(1),
+            DrawContextChange::Layer => {
+                let mut address = app.font.active_layer_address("A").unwrap();
+                app.font
+                    .project
+                    .add_glyph_layer("A", &address.layer, "alternate")
+                    .unwrap();
+                address.layer.name = "alternate".into();
+                Arc::make_mut(&mut app.session).reload_from_project(&app.font.project, &address);
+            }
+            DrawContextChange::Document => app.document_id += 1,
+            DrawContextChange::Revision => change_width(app, "A"),
+            DrawContextChange::UnrelatedRevision => change_width(app, "B"),
+            DrawContextChange::PendingRevision => {
+                Arc::make_mut(&mut app.session).set_advance(540.0);
+            }
+        }
+    }
+
+    #[test]
+    fn drawing_pump_rejects_stale_glyph_source_layer_document_and_revision() {
+        for change in [
+            DrawContextChange::Glyph,
+            DrawContextChange::Source,
+            DrawContextChange::Layer,
+            DrawContextChange::Document,
+            DrawContextChange::Revision,
+            DrawContextChange::PendingRevision,
+            DrawContextChange::UnrelatedRevision,
+        ] {
+            let mut app = drawing_workspace();
+            let job = pending_drawing(&mut app);
+            change_drawing_context(&mut app, change);
+            let before = app.font.project.document_snapshot();
+            let revision = app.font.project.document_revision();
+            let history = app.metadata_undo.len();
+            finish_drawing(&job);
+
+            app.shapes_pump();
+
+            assert!(app.shapes.ghost.is_none(), "{change:?}");
+            assert!(app.shapes.job.is_none(), "{change:?}");
+            assert!(job.cancellation.is_cancelled(), "{change:?}");
+            assert_eq!(app.font.project.document_snapshot(), before, "{change:?}");
+            assert_eq!(app.font.project.document_revision(), revision, "{change:?}");
+            assert_eq!(app.metadata_undo.len(), history, "{change:?}");
+        }
+    }
+
+    #[test]
+    fn current_drawing_is_only_a_preview_until_accepted_as_one_undoable_edit() {
+        let mut app = drawing_workspace();
+        let job = pending_drawing(&mut app);
+        let before = app.font.project.document_snapshot();
+        let revision = app.font.project.document_revision();
+        let history = app.metadata_undo.len();
+        let address = app.font.active_layer_address("A").unwrap();
+        finish_drawing(&job);
+
+        app.shapes_pump();
+
+        let ghost = app
+            .shapes_current_ghost()
+            .expect("the current result previews");
+        assert_eq!(app.font.project.document_snapshot(), before);
+        assert_eq!(app.font.project.document_revision(), revision);
+        assert_eq!(app.metadata_undo.len(), history);
+        assert_eq!(ghost.path.bounding_box(), job.rect);
+        assert!(app.shapes_accept(&ghost));
+        assert!(!job.cancellation.is_cancelled());
+        assert_eq!(app.font.project.document_revision(), revision + 1);
+        assert_eq!(app.metadata_undo.len(), history + 1);
+        assert_eq!(
+            app.font
+                .project
+                .document_layer("A", &address.layer)
+                .unwrap()
+                .contours()
+                .count(),
+            1
+        );
+        assert_eq!(app.session.point_count(), 4);
+        assert!(app.shapes.ghost.is_none());
+        assert!(app.shapes.rect.is_none());
+
+        app.undo_active_edit(false);
+
+        assert_eq!(app.font.project.document_snapshot(), before);
+        assert_eq!(app.session.point_count(), 0);
+    }
+
+    #[test]
+    fn published_drawing_cannot_be_accepted_after_context_or_revision_changes() {
+        for change in [
+            DrawContextChange::Glyph,
+            DrawContextChange::Source,
+            DrawContextChange::Layer,
+            DrawContextChange::Document,
+            DrawContextChange::Revision,
+            DrawContextChange::PendingRevision,
+            DrawContextChange::UnrelatedRevision,
+        ] {
+            let mut app = drawing_workspace();
+            let job = pending_drawing(&mut app);
+            finish_drawing(&job);
+            app.shapes_pump();
+            let ghost = app.shapes_current_ghost().unwrap();
+            change_drawing_context(&mut app, change);
+            let before = app.font.project.document_snapshot();
+            let revision = app.font.project.document_revision();
+            let history = app.metadata_undo.len();
+
+            if !matches!(change, DrawContextChange::PendingRevision) {
+                assert!(app.shapes_current_ghost().is_none(), "{change:?}");
+            }
+            assert!(!app.shapes_accept(&ghost), "{change:?}");
+
+            assert!(app.shapes.ghost.is_none(), "{change:?}");
+            assert_eq!(app.font.project.document_snapshot(), before, "{change:?}");
+            assert_eq!(app.font.project.document_revision(), revision, "{change:?}");
+            assert_eq!(app.metadata_undo.len(), history, "{change:?}");
+        }
+    }
+
+    #[test]
+    fn glyph_switch_cancels_drawing_and_discards_an_already_published_ghost() {
+        let mut app = drawing_workspace();
+        let job = pending_drawing(&mut app);
+        app.open_glyph(app.font.index_of("B").unwrap());
+        finish_drawing(&job);
+        app.shapes_pump();
+        assert!(job.cancellation.is_cancelled());
+        assert!(app.shapes.ghost.is_none());
+        app.open_glyph(app.font.index_of("A").unwrap());
+        let job = pending_drawing(&mut app);
+        finish_drawing(&job);
+        app.shapes_pump();
+        let ghost = app.shapes_current_ghost().unwrap();
+
+        app.open_glyph(app.font.index_of("B").unwrap());
+
+        assert!(app.shapes.ghost.is_none());
+        assert!(app.shapes.rect.is_none());
+        assert!(!app.shapes_accept(&ghost));
+        assert_eq!(app.session.point_count(), 0);
+    }
+
+    #[test]
+    fn cancelled_drawing_cannot_publish_a_success_already_waiting_for_the_pump() {
+        let mut app = drawing_workspace();
+        let job = pending_drawing(&mut app);
+        let before = app.font.project.document_snapshot();
+        finish_drawing(&job);
+        job.cancellation.cancel();
+
+        app.shapes_pump();
+
+        assert!(app.shapes.job.is_none());
+        assert!(app.shapes.ghost.is_none());
+        assert!(app.shapes.rect.is_none());
+        assert_eq!(app.font.project.document_snapshot(), before);
+        assert!(app.metadata_undo.is_empty());
+    }
+
+    #[test]
+    fn superseded_ghost_cannot_replace_the_current_drawing_at_acceptance() {
+        let mut app = drawing_workspace();
+        let first = pending_drawing(&mut app);
+        finish_drawing(&first);
+        app.shapes_pump();
+        let old_ghost = app.shapes_current_ghost().unwrap();
+        let second = pending_drawing(&mut app);
+        finish_drawing(&second);
+        app.shapes_pump();
+        let current = app.shapes_current_ghost().unwrap();
+
+        assert!(!app.shapes_accept(&old_ghost));
+
+        assert!(Arc::ptr_eq(app.shapes.ghost.as_ref().unwrap(), &current));
+        assert_eq!(app.session.point_count(), 0);
+        assert!(app.shapes_accept(&current));
+        assert!(!app.shapes_accept(&current));
+        assert_eq!(app.session.point_count(), 4);
+    }
+
+    #[test]
+    fn drawing_context_cleanup_keeps_training_and_model_selection() {
+        let mut app = drawing_workspace();
+        let job = pending_drawing(&mut app);
+        let train = TrainJob {
+            name: "training".into(),
+            out: PathBuf::from("model-output"),
+            started: Instant::now(),
+            progress: Arc::new(Mutex::new((1, 10, "training".into()))),
+            samples: Arc::new(Mutex::new(Vec::new())),
+            finished: Arc::new(Mutex::new(None)),
+            cancellation: ProcessCancellation::default(),
+        };
+        app.shapes.training = Some(train.clone());
+        app.shapes.note = "Training".into();
+        app.shapes.model = Some(PathBuf::from("selected-model"));
+        app.shapes.thorough = true;
+        app.document_id += 1;
+
+        app.shapes_context_changed();
+        app.shapes_pump();
+
+        assert!(job.cancellation.is_cancelled());
+        assert!(!train.cancellation.is_cancelled());
+        assert!(Arc::ptr_eq(
+            &app.shapes.training.as_ref().unwrap().progress,
+            &train.progress
+        ));
+        assert_eq!(app.shapes.note, "Training");
+        assert_eq!(app.shapes.model, Some(PathBuf::from("selected-model")));
+        assert!(app.shapes.thorough);
+    }
+
+    #[test]
+    fn unchanged_drawing_context_preserves_pending_job_and_published_ghost() {
+        let mut app = drawing_workspace();
+        let job = pending_drawing(&mut app);
+
+        app.shapes_context_changed();
+        app.activate_tab(app.active_tab);
+
+        assert!(!job.cancellation.is_cancelled());
+        assert!(Arc::ptr_eq(
+            &app.shapes.job.as_ref().unwrap().finished,
+            &job.finished
+        ));
+        assert_eq!(app.shapes.rect, Some(job.rect));
+        finish_drawing(&job);
+        app.shapes_pump();
+        let ghost = app.shapes_current_ghost().unwrap();
+
+        app.shapes_context_changed();
+        app.activate_tab(app.active_tab);
+
+        assert!(Arc::ptr_eq(app.shapes.ghost.as_ref().unwrap(), &ghost));
+        assert_eq!(app.shapes.rect, Some(job.rect));
+        assert!(app.shapes_accept(&ghost));
+        assert_eq!(app.session.point_count(), 4);
+    }
 
     #[test]
     fn a_square_report_becomes_one_closed_contour() {

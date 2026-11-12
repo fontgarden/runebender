@@ -480,6 +480,18 @@ impl DocumentHistory {
         self.layers.discard_last(address)
     }
 
+    /// Invalidate an addressed redo branch when a new grouped edit supersedes it.
+    ///
+    /// Group replay deliberately does not call this: it must retain later per-layer redo entries.
+    pub(crate) fn clear_redo(&mut self, address: &GlyphLayerAddress) -> bool {
+        let Some(stack) = self.layers.stacks.get_mut(address) else {
+            return false;
+        };
+        let changed = !stack.redo.is_empty();
+        stack.redo.clear();
+        changed
+    }
+
     /// Undo or redo one canonical layer step through guarded Project restoration.
     pub fn replay(
         &mut self,

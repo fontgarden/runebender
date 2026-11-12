@@ -15,6 +15,12 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
 ### Changed
 
 - Feature generation, live measurements, and compiler category inference use fewer temporary allocations without changing their results.
+- Overview Undo and Redo follow chronological order across geometry and metadata edits, and new edits clear both redo branches.
+  Update Metrics and Bake Masks publish all affected glyphs and masters as one guarded, undoable command.
+- Disk-graph progress and completion stay with the graph snapshot that started the run.
+  Replacing, reopening, or editing that graph cancels obsolete publication without claiming to undo disk effects.
+- AI drawing results and acceptance are guarded by document, glyph, source, layer, and revision.
+  Switching targets or editing the document discards stale previews instead of offering them to another glyph; training is unaffected.
 - Removing a glyph preserves the active surviving tab and updates its editor index after the glyph list shifts.
   Closing every tab for the deleted glyph selects the next surviving tab or clears the deleted session, without leaving stale state in the overview or graph.
 - Glyph rename and removal update every source's glyph order and production-name mapping, Designspace substitutions, and supported HOI trajectory references in the same guarded transaction.

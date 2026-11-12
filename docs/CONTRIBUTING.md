@@ -78,6 +78,26 @@ Use [headless screenshots](UI-DESIGN.md#headless-screenshots) for visual work, b
 See [engine benchmarks](BENCHMARKS.md) for repeatable performance measurements rather than timing a debug build.
 Report the commands actually run, their results, and any missing prerequisites; never silently skip a meaningful assertion to make a check pass.
 
+## Windows native crash evidence
+
+The Windows workflow keeps CLI, CPU rendering, and actual native-window startup as separate gates.
+If native startup fails, dispatch a diagnostic run against an explicit revision:
+
+```sh
+gh workflow run windows.yml --ref main \
+  -f collect_crash_dump=true -f native_observation_seconds=0
+```
+
+The script retains bounded startup and Masonry logs.
+On failure, the opt-in collector uses an installed x64 CDB and the exact build's executable/PDB for one bounded reproduction, capturing only an unhandled second-chance access violation.
+It never installs or changes the graphics driver, changes render backends, or treats debugger failure or timeout as successful startup.
+Missing debugger support and incomplete reproduction remain explicit in `diagnostic-status.json`.
+The original native failure still fails the workflow.
+
+Use only the workflow's public font fixture for this run.
+The separate minidump artifact contains unsanitized process memory, is limited to 64 MiB, and expires after one day.
+Normal push and pull-request runs do not collect dumps.
+
 ## Architecture and source ownership
 
 Read the [canonical architecture guide](https://runebender.org/docs/architecture.html) and the relevant module header before moving code or adding a subsystem.

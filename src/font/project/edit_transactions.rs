@@ -1,7 +1,7 @@
 // Copyright 2026 the Runebender Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Bounded, guarded edit groups over canonical geometry and metrics in one source.
+//! Guarded canonical edit groups, including bounded one-source automation transactions.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -469,6 +469,59 @@ impl EditTransactionHistory {
 }
 
 impl Project {
+    /// Publish owned layer drafts across sources as one atomic, named history group.
+    ///
+    /// Every captured base is checked before any layer is changed. Unchanged drafts still act as
+    /// read guards, but an entirely unchanged group records no history. Native whole-font commands
+    /// are not subject to the bounded automation transaction's layer and operation limits.
+    pub fn commit_document_layer_group(
+        &mut self,
+        history_name: impl Into<String>,
+        transactions: Vec<CanonicalLayerTransaction>,
+    ) -> Result<Option<(EditHistoryGroupId, DocumentChange)>, DocumentEditTransactionError> {
+        let history_name = history_name.into();
+        if history_name.trim().is_empty() || history_name.len() > MAX_HISTORY_NAME_BYTES {
+            return Err(DocumentEditTransactionError::Invalid(format!(
+                "history name must contain 1..={MAX_HISTORY_NAME_BYTES} bytes"
+            )));
+        }
+        let mut targets = BTreeSet::new();
+        let mut edits = Vec::new();
+        for transaction in transactions {
+            let before = transaction.base;
+            let address = before.address().clone();
+            if !targets.insert(address.clone()) {
+                return Err(DocumentEditTransactionError::Invalid(format!(
+                    "duplicate edit target {} at {}",
+                    address.glyph, address.layer.name
+                )));
+            }
+            self.validate_edit_snapshot(&before)?;
+            let (layer, preserved) = transaction.draft.into_parts();
+            let after = CanonicalLayerSnapshot::new(address, layer, preserved);
+            if before != after {
+                edits.push(SnapshotEdit {
+                    before,
+                    after,
+                    changed_objects: Vec::new(),
+                });
+            }
+        }
+        if edits.is_empty() {
+            return Ok(None);
+        }
+        let replacements = edits
+            .iter()
+            .map(|edit| edit.after.clone())
+            .collect::<Vec<_>>();
+        let change = self.commit_edit_replacements(&replacements)?;
+        for address in change.affected_layers() {
+            self.document_history.clear_redo(address);
+        }
+        let group = self.edit_transaction_history.record(history_name, edits);
+        Ok(Some((group, change)))
+    }
+
     /// Stage a bounded one-source edit without mutating the project or any history.
     ///
     /// `reads` contains additional opaque dependencies not directly written by the transaction.
@@ -767,6 +820,9 @@ impl Project {
             .collect::<Vec<_>>();
         let before_revision = self.variable.revision;
         let change = self.commit_edit_replacements(&replacements)?;
+        for address in change.affected_layers() {
+            self.document_history.clear_redo(address);
+        }
         let history_group = self
             .edit_transaction_history
             .record(transaction.history_name, edits);
@@ -1087,6 +1143,185 @@ mod tests {
             glyph: glyph.into(),
             layer: project.document_source(source).unwrap().default_layer(),
         }
+    }
+
+    #[test]
+    fn new_group_commits_invalidate_layer_redo_but_group_replay_preserves_it() {
+        for bounded in [false, true] {
+            let mut project = project();
+            let a = address(&project, "A");
+            let source = a.layer.source;
+            let mut layer = project.begin_document_layer_transaction(&a).unwrap();
+            layer.draft_mut().set_width(600.0).unwrap();
+            project.commit_document_layer_transaction(layer).unwrap();
+            project
+                .replay_document_layer_history(&a, HistoryDirection::Undo)
+                .unwrap();
+            assert_eq!(
+                project.document_layer_history_depth(&a, HistoryDirection::Redo),
+                1
+            );
+
+            let group = if bounded {
+                let expected = project.capture_document_layer(&a).unwrap();
+                let transaction = project
+                    .begin_document_edit_transaction(
+                        source,
+                        "bounded group",
+                        Vec::new(),
+                        vec![DocumentLayerEdit::new(
+                            expected,
+                            vec![DocumentEditOperation::SetWidth(700.0)],
+                        )],
+                    )
+                    .unwrap();
+                let DocumentEditTransactionOutcome::Changed { history_group, .. } = project
+                    .commit_document_edit_transaction(transaction)
+                    .unwrap()
+                else {
+                    panic!("the group changes the width");
+                };
+                history_group
+            } else {
+                let mut layer = project.begin_document_layer_transaction(&a).unwrap();
+                layer.draft_mut().set_width(700.0).unwrap();
+                project
+                    .commit_document_layer_group("native group", vec![layer])
+                    .unwrap()
+                    .unwrap()
+                    .0
+            };
+            assert_eq!(
+                project.document_layer_history_depth(&a, HistoryDirection::Redo),
+                0
+            );
+            assert_eq!(
+                project.document_layer_history_depth(&a, HistoryDirection::Undo),
+                0
+            );
+            project
+                .replay_document_edit_history_group(group, HistoryDirection::Undo)
+                .unwrap();
+            assert!(!project.can_replay_document_layer_history(&a, HistoryDirection::Redo));
+            project
+                .replay_document_edit_history_group(group, HistoryDirection::Redo)
+                .unwrap();
+
+            let mut layer = project.begin_document_layer_transaction(&a).unwrap();
+            layer.draft_mut().set_width(800.0).unwrap();
+            project.commit_document_layer_transaction(layer).unwrap();
+            project
+                .replay_document_layer_history(&a, HistoryDirection::Undo)
+                .unwrap();
+            project
+                .replay_document_edit_history_group(group, HistoryDirection::Undo)
+                .unwrap();
+            project
+                .replay_document_edit_history_group(group, HistoryDirection::Redo)
+                .unwrap();
+            assert_eq!(
+                project.document_layer_history_depth(&a, HistoryDirection::Redo),
+                1
+            );
+            assert!(project.can_replay_document_layer_history(&a, HistoryDirection::Redo));
+        }
+    }
+
+    #[test]
+    fn layer_draft_group_commit_and_replay_reject_stale_members_atomically() {
+        let mut project = project();
+        let a = address(&project, "A");
+        let b = address(&project, "B");
+        let stage = |project: &Project| {
+            [&a, &b]
+                .into_iter()
+                .map(|address| {
+                    let mut transaction =
+                        project.begin_document_layer_transaction(address).unwrap();
+                    transaction.draft_mut().set_width(700.0).unwrap();
+                    transaction
+                })
+                .collect()
+        };
+        let stale = stage(&project);
+        project
+            .edit_document_layer("B", &b.layer, |draft| {
+                draft.set_width(600.0)?;
+                Ok(())
+            })
+            .unwrap();
+        let before = project.document_snapshot();
+        let revision = project.document_revision();
+        assert!(matches!(
+            project.commit_document_layer_group("stale group", stale),
+            Err(DocumentEditTransactionError::StaleLayer(address)) if address == b
+        ));
+        assert_eq!(project.document_snapshot(), before);
+        assert_eq!(project.document_revision(), revision);
+        assert!(project.edit_transaction_history.groups.is_empty());
+
+        let transactions = stage(&project);
+        let (group, change) = project
+            .commit_document_layer_group("two layer drafts", transactions)
+            .unwrap()
+            .unwrap();
+        assert_eq!(change.affected_layers(), &[a.clone(), b.clone()]);
+        let after = project.document_snapshot();
+        project
+            .replay_document_edit_history_group(group, HistoryDirection::Undo)
+            .unwrap();
+        assert_eq!(project.document_snapshot(), before);
+        project
+            .replay_document_edit_history_group(group, HistoryDirection::Redo)
+            .unwrap();
+        assert_eq!(project.document_snapshot(), after);
+
+        project
+            .edit_document_layer("B", &b.layer, |draft| {
+                draft.set_width(800.0)?;
+                Ok(())
+            })
+            .unwrap();
+        let before_conflict = project.document_snapshot();
+        let revision = project.document_revision();
+        assert!(matches!(
+            project.replay_document_edit_history_group(group, HistoryDirection::Undo),
+            Err(DocumentEditTransactionError::HistoryConflict { address, .. }) if address == b
+        ));
+        assert_eq!(project.document_snapshot(), before_conflict);
+        assert_eq!(project.document_revision(), revision);
+        assert_eq!(
+            project.document_edit_history_group_state(group),
+            Some(EditHistoryGroupState::Applied)
+        );
+
+        project
+            .edit_document_layer("B", &b.layer, |draft| {
+                draft.set_width(700.0)?;
+                Ok(())
+            })
+            .unwrap();
+        project
+            .replay_document_edit_history_group(group, HistoryDirection::Undo)
+            .unwrap();
+        project
+            .edit_document_layer("B", &b.layer, |draft| {
+                draft.set_width(800.0)?;
+                Ok(())
+            })
+            .unwrap();
+        let before_conflict = project.document_snapshot();
+        let revision = project.document_revision();
+        assert!(matches!(
+            project.replay_document_edit_history_group(group, HistoryDirection::Redo),
+            Err(DocumentEditTransactionError::HistoryConflict { address, .. }) if address == b
+        ));
+        assert_eq!(project.document_snapshot(), before_conflict);
+        assert_eq!(project.document_revision(), revision);
+        assert_eq!(
+            project.document_edit_history_group_state(group),
+            Some(EditHistoryGroupState::Undone)
+        );
     }
 
     fn point_and_anchor(project: &Project, address: &GlyphLayerAddress) -> (PointId, AnchorId) {

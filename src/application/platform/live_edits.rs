@@ -21,7 +21,7 @@ use runebender::font::project::CanonicalDocumentEditTransaction;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::application::workspace::Workspace;
+use crate::application::workspace::{DocumentGroupScope, Workspace};
 
 pub(crate) const MAX_ACTORS: usize = 8;
 pub(crate) const RECEIPTS_PER_ACTOR: usize = 256;
@@ -268,7 +268,7 @@ impl Workspace {
                 ..
             } = applied.receipt().outcome()
         {
-            self.record_agent_group(*history_group, change);
+            self.record_document_group(*history_group, change, DocumentGroupScope::Contextual);
         }
         serde_json::to_value(AgentApplyResponse::from_engine(
             applied.receipt(),
@@ -327,7 +327,7 @@ impl Workspace {
             ReplayDirection::Undo => HistoryDirection::Undo,
             ReplayDirection::Redo => HistoryDirection::Redo,
         };
-        match self.replay_agent_group(group, direction) {
+        match self.replay_document_group(group, direction) {
             Ok(replay) => serde_json::to_value(AgentHistoryResponse::from_engine(
                 &receipt,
                 &self.font.project,
