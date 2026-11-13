@@ -467,7 +467,6 @@ impl Workspace {
                 MetadataEdit::Unicode { glyph, .. }
                 | MetadataEdit::SourceMetadata { glyph, .. }
                 | MetadataEdit::Interpolation { glyph, .. }
-                | MetadataEdit::SourceStructure { glyph, .. }
                 | MetadataEdit::DocumentLayer { glyph, .. } => glyph,
                 MetadataEdit::DocumentGroup { .. } => return false,
             };
@@ -500,9 +499,6 @@ impl Workspace {
                 glyph, undo_depth, ..
             }
             | MetadataEdit::Interpolation {
-                glyph, undo_depth, ..
-            }
-            | MetadataEdit::SourceStructure {
                 glyph, undo_depth, ..
             } => (glyph, *undo_depth),
             MetadataEdit::DocumentLayer {
@@ -666,48 +662,6 @@ impl Workspace {
                 self.modified = true;
                 format!("{} {label}", if redo { "Redid" } else { "Undid" })
             }
-            MetadataEdit::SourceStructure {
-                glyph,
-                label,
-                before,
-                after,
-                ..
-            } => {
-                let expected = if redo {
-                    before.as_ref()
-                } else {
-                    after.as_ref()
-                };
-                let replacement = if redo {
-                    after.as_ref()
-                } else {
-                    before.as_ref()
-                };
-                if self.font.project.document_snapshot() != *expected
-                    || self.font.project.undo_sources(redo) != Ok(true)
-                {
-                    return false;
-                }
-                debug_assert_eq!(
-                    self.font.project.document_snapshot(),
-                    *replacement,
-                    "guarded source history must restore the recorded replacement"
-                );
-                self.font.rebuild_cache();
-                if let Some(address) = self.font.active_layer_address(glyph) {
-                    for tab in &mut self.tabs {
-                        if tab.session.canonical_address() == Some(&address) {
-                            let _ = Arc::make_mut(&mut tab.session)
-                                .reload_from_project(&self.font.project, &address);
-                        }
-                    }
-                    if self.session.canonical_address() == Some(&address) {
-                        let _ = self.reload_canonical_layer(&address);
-                    }
-                }
-                self.modified = true;
-                format!("{} {label}", if redo { "Redid" } else { "Undid" })
-            }
         };
         let edit = if redo {
             self.metadata_redo.remove(index)
@@ -755,9 +709,6 @@ impl Workspace {
                 glyph, undo_depth, ..
             }
             | MetadataEdit::Interpolation {
-                glyph, undo_depth, ..
-            }
-            | MetadataEdit::SourceStructure {
                 glyph, undo_depth, ..
             } => (glyph, *undo_depth),
             MetadataEdit::DocumentLayer {
@@ -816,21 +767,8 @@ impl Workspace {
             }
             _ => true,
         };
-        let source_structure_available = match edit {
-            MetadataEdit::SourceStructure { before, after, .. } => {
-                self.font.project.has_source_history(redo)
-                    && self.font.project.document_snapshot()
-                        == *(if redo {
-                            before.as_ref()
-                        } else {
-                            after.as_ref()
-                        })
-            }
-            _ => true,
-        };
         source_metadata_available
             && document_layer_available
-            && source_structure_available
             && (!matches!(self.mode, Mode::Editor(_)) || current_name == Some(expected.as_str()))
             && self.font.index_of(expected).is_some()
             && self.font.history_depth(expected, HistoryDirection::Undo) == undo_depth

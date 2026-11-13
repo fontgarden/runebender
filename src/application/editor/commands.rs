@@ -1393,147 +1393,81 @@ impl Workspace {
         if !matches!(self.mode, Mode::Editor(_)) {
             return;
         }
-        let name = self.session.glyph_name.clone();
-        if self.font.index_of(&name).is_none() {
-            return;
-        }
-        let Some(address) = self.font.active_layer_address(&name) else {
+        let Some(address) = self.font.active_layer_address(&self.session.glyph_name) else {
             return;
         };
-        let undo_depth = self
-            .font
-            .history_depth(&name, runebender::font::history::HistoryDirection::Undo);
-        let before = self.font.project.document_snapshot();
         match self
             .font
             .project
             .copy_document_layer_to_background(&address)
         {
-            Ok(true) => {}
-            Ok(false) => {
+            Ok(Some((group, change))) => {
+                self.record_document_group(group, &change, DocumentGroupScope::Contextual);
+                self.show_background = true;
+                self.modified = true;
+                self.note = "sent to background".into();
+            }
+            Ok(None) => {
                 self.show_background = true;
                 self.note = "background is already current".into();
-                return;
             }
-            Err(error) => {
-                self.note = format!("Background: {error}");
-                return;
-            }
+            Err(error) => self.note = format!("Background: {error}"),
         }
-        self.metadata_undo.push(MetadataEdit::SourceStructure {
-            revision: self.font.project.document_revision(),
-            glyph: name,
-            label: "send to background".into(),
-            before: Box::new(before),
-            after: Box::new(self.font.project.document_snapshot()),
-            undo_depth,
-        });
-        self.metadata_redo.clear();
-        self.overview_redo.clear();
-        self.show_background = true;
-        self.modified = true;
-        self.note = "sent to background".into();
     }
 
-    /// Exchange the outline with the background layer's copy.
+    /// Exchange foreground and background contours through the shared grouped history.
     pub(crate) fn swap_background(&mut self) {
         if !matches!(self.mode, Mode::Editor(_)) {
             return;
         }
-        let name = self.session.glyph_name.clone();
-        if self.font.index_of(&name).is_none() {
-            return;
-        }
-        let Some(address) = self.font.active_layer_address(&name) else {
+        let Some(address) = self.font.active_layer_address(&self.session.glyph_name) else {
             return;
         };
-        let source = address.layer.source;
         if self
             .font
             .project
-            .document_background_layer(&name, source)
+            .document_background_layer(&address.glyph, address.layer.source)
             .is_none()
         {
             self.note = "no background to swap".into();
             return;
         }
-        let undo_depth = self
-            .font
-            .history_depth(&name, runebender::font::history::HistoryDirection::Undo);
-        let before = self.font.project.document_snapshot();
         match self
             .font
             .project
             .swap_document_layer_with_background(&address)
         {
-            Ok(true) => {}
-            Ok(false) => {
-                self.note = "foreground and background are unchanged".into();
-                return;
+            Ok(Some((group, change))) => {
+                self.record_document_group(group, &change, DocumentGroupScope::Contextual);
+                self.modified = true;
+                self.note = "swapped with background".into();
             }
-            Err(error) => {
-                self.note = format!("Background: {error}");
-                return;
-            }
+            Ok(None) => self.note = "foreground and background are unchanged".into(),
+            Err(error) => self.note = format!("Background: {error}"),
         }
-        self.metadata_undo.push(MetadataEdit::SourceStructure {
-            revision: self.font.project.document_revision(),
-            glyph: name.clone(),
-            label: "swap background".into(),
-            before: Box::new(before),
-            after: Box::new(self.font.project.document_snapshot()),
-            undo_depth,
-        });
-        self.metadata_redo.clear();
-        self.overview_redo.clear();
-        self.font.rebuild_cache();
-        if !self.reload_canonical_layer(&address) {
-            self.note = "The swapped foreground could not be reloaded".into();
-            return;
-        }
-        self.modified = true;
-        self.note = "swapped with background".into();
     }
 
-    /// Empty the open glyph's background layer.
+    /// Remove the open glyph's background without retaining unrelated document state.
     pub(crate) fn clear_background(&mut self) {
         if !matches!(self.mode, Mode::Editor(_)) {
-            return;
-        }
-        let name = self.session.glyph_name.clone();
-        if self.font.index_of(&name).is_none() {
             return;
         }
         let Some(source) = self.font.project.source_id(self.font.active()) else {
             return;
         };
-        let undo_depth = self
+        match self
             .font
-            .history_depth(&name, runebender::font::history::HistoryDirection::Undo);
-        let before = self.font.project.document_snapshot();
-        match self.font.project.clear_document_background(&name, source) {
-            Ok(true) => {}
-            Ok(false) => {
-                self.note = "no background to clear".into();
-                return;
+            .project
+            .clear_document_background(&self.session.glyph_name, source)
+        {
+            Ok(Some((group, change))) => {
+                self.record_document_group(group, &change, DocumentGroupScope::Contextual);
+                self.modified = true;
+                self.note = "cleared background".into();
             }
-            Err(error) => {
-                self.note = format!("Background: {error}");
-                return;
-            }
+            Ok(None) => self.note = "no background to clear".into(),
+            Err(error) => self.note = format!("Background: {error}"),
         }
-        self.metadata_undo.push(MetadataEdit::SourceStructure {
-            revision: self.font.project.document_revision(),
-            glyph: name,
-            label: "clear background".into(),
-            before: Box::new(before),
-            after: Box::new(self.font.project.document_snapshot()),
-            undo_depth,
-        });
-        self.metadata_redo.clear();
-        self.overview_redo.clear();
-        self.modified = true;
-        self.note = "cleared background".into();
     }
 
     pub(crate) fn apply_op(&mut self, f: impl FnOnce(&mut Session) -> bool) {
@@ -1782,7 +1716,7 @@ mod tests {
     }
 
     #[test]
-    fn background_actions_use_atomic_canonical_source_history() {
+    fn background_actions_use_atomic_canonical_group_history() {
         let path = std::env::temp_dir().join(format!(
             "runebender-canonical-background-{}-{}.ufo",
             std::process::id(),

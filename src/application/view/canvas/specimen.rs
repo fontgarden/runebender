@@ -282,7 +282,12 @@ fn build(app: &Workspace) -> Specimen {
         }
         let shift = Affine::translate((-start, 0.0));
         Some(Run {
-            paths: placed.into_iter().map(|sort| shift * sort.path).collect(),
+            paths: placed
+                .into_iter()
+                .map(|sort| {
+                    (shift * Affine::translate(sort.origin.to_vec2())) * (*sort.outline).clone()
+                })
+                .collect(),
             width: end - start,
             rtl: text
                 .chars()
@@ -409,7 +414,7 @@ fn layout(
                 };
                 let t = Affine::new([*scale, 0.0, 0.0, -scale, x, baseline]);
                 for path in &run.paths {
-                    painter.fill(&(t * path.clone()), *ink).draw();
+                    painter.fill(path, *ink).transform(t).draw();
                 }
             }
             y += line;

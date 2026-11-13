@@ -44,7 +44,7 @@ impl SourceFrame {
     }
 
     fn matches(&self, project: &Project) -> bool {
-        self == &Self::capture(project)
+        project.variable.source_structure_matches(&self.canonical)
     }
 
     fn restore_if_current(&self, project: &mut Project, expected: &Self) -> Result<(), String> {
@@ -697,84 +697,45 @@ impl Project {
 
     /// Copy one foreground layer's contours and exact width into the canonical background.
     ///
-    /// The conventional background layer and glyph are created when absent.
-    /// An identical copy is a no-op that retains existing stable identities and redo history.
+    /// Returns the shared history group and invalidation scope, or `None` for an identical copy.
+    /// Only the consulted and edited layers are retained. Creating a background also records its
+    /// container, so Undo removes that container only if no later edit has reused or changed it.
     pub fn copy_document_layer_to_background(
         &mut self,
         address: &GlyphLayerAddress,
-    ) -> Result<bool, String> {
-        let before = SourceFrame::capture(self);
-        let base = self.variable.source_structure_snapshot();
-        let mut replacement = base.clone();
-        let (_, changed) = replacement.copy_layer_to_background(&address.glyph, &address.layer)?;
-        if !changed {
-            return Ok(false);
-        }
-        self.commit_background_structure(before, base, replacement, address)
+    ) -> Result<Option<(EditHistoryGroupId, DocumentChange)>, String> {
+        let Some(edit) = self.variable.copy_layer_to_background(address)? else {
+            return Ok(None);
+        };
+        self.commit_background_group(edit)
     }
 
-    /// Atomically exchange foreground and background contours.
+    /// Atomically exchange foreground and background contours as one layer-local history group.
     ///
     /// The foreground retains its width and non-outline metadata. The background receives the
-    /// foreground width, matching the existing editor command while retaining its other metadata.
+    /// foreground width. An unchanged exchange returns `None` without affecting any history.
     pub fn swap_document_layer_with_background(
         &mut self,
         address: &GlyphLayerAddress,
-    ) -> Result<bool, String> {
-        let before = SourceFrame::capture(self);
-        let base = self.variable.source_structure_snapshot();
-        let mut replacement = base.clone();
-        let (_, changed) =
-            replacement.swap_layer_with_background(&address.glyph, &address.layer)?;
-        if !changed {
-            return Ok(false);
-        }
-        self.commit_background_structure(before, base, replacement, address)
+    ) -> Result<Option<(EditHistoryGroupId, DocumentChange)>, String> {
+        let Some(edit) = self.variable.swap_layer_with_background(address)? else {
+            return Ok(None);
+        };
+        self.commit_background_group(edit)
     }
 
-    /// Remove this glyph from its canonical background layer, retaining the layer container.
+    /// Remove this glyph's background, retaining its layer container and unrelated glyphs.
+    ///
+    /// Returns the shared history group and invalidation scope, or `None` when already absent.
     pub fn clear_document_background(
         &mut self,
         glyph: &str,
         source: SourceId,
-    ) -> Result<bool, String> {
-        let before = SourceFrame::capture(self);
-        let base = self.variable.source_structure_snapshot();
-        let mut replacement = base.clone();
-        let (_, changed) = replacement.clear_background_layer(glyph, source)?;
-        if !changed {
-            return Ok(false);
-        }
-        let address = GlyphLayerAddress {
-            glyph: glyph.into(),
-            layer: self
-                .variable
-                .background_layer_id(source)
-                .ok_or("unknown source")?,
+    ) -> Result<Option<(EditHistoryGroupId, DocumentChange)>, String> {
+        let Some(edit) = self.variable.clear_background_layer(glyph, source)? else {
+            return Ok(None);
         };
-        self.commit_background_structure(before, base, replacement, &address)
-    }
-
-    fn commit_background_structure(
-        &mut self,
-        before: SourceFrame,
-        base: CanonicalSourceStructureSnapshot,
-        replacement: CanonicalSourceStructureSnapshot,
-        address: &GlyphLayerAddress,
-    ) -> Result<bool, String> {
-        let changed = self
-            .variable
-            .restore_source_structure_if_current(&base, replacement)
-            .map_err(|_| "canonical source structure changed after background staging")?;
-        if !changed {
-            return Ok(false);
-        }
-        let index = self
-            .source_index(address.layer.source)
-            .ok_or("background source disappeared")?;
-        self.sources[index].dirty = true;
-        self.record_canonical_source_change(before);
-        Ok(true)
+        self.commit_background_group(edit)
     }
 
     /// Duplicate one glyph into an auxiliary UFO layer, creating that layer if needed.

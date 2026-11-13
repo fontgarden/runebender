@@ -141,14 +141,6 @@ pub(crate) enum MetadataEdit {
             Option<runebender::font::ComponentId>,
         ),
     },
-    SourceStructure {
-        revision: u64,
-        glyph: String,
-        label: String,
-        before: Box<runebender::font::variable::DocumentSnapshot>,
-        after: Box<runebender::font::variable::DocumentSnapshot>,
-        undo_depth: usize,
-    },
 }
 
 impl MetadataEdit {
@@ -160,8 +152,7 @@ impl MetadataEdit {
             | Self::Rename { revision, .. }
             | Self::Unicode { revision, .. }
             | Self::SourceMetadata { revision, .. }
-            | Self::DocumentLayer { revision, .. }
-            | Self::SourceStructure { revision, .. } => *revision,
+            | Self::DocumentLayer { revision, .. } => *revision,
         }
     }
 }

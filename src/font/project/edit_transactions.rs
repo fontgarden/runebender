@@ -11,6 +11,7 @@ use super::*;
 use crate::font::generated::{GeneratedContour, MAX_GENERATED_CONTOURS, MAX_GENERATED_POINTS};
 use crate::font::history::HistoryDirection;
 use crate::font::variable::GlyphId;
+use crate::font::variable::background::BackgroundEdit;
 use crate::font::{AnchorId, CanonicalLayerSnapshot, ContourId, DocumentEditError, PointId};
 
 const MAX_EDIT_LAYERS: usize = 64;
@@ -366,8 +367,14 @@ pub struct DocumentEditHistoryReplayOutcome {
 struct EditHistoryEntry {
     id: EditHistoryGroupId,
     name: String,
-    edits: Vec<SnapshotEdit>,
+    contents: EditHistoryContents,
     state: EditHistoryGroupState,
+}
+
+#[derive(Clone, Debug)]
+enum EditHistoryContents {
+    Layers(Vec<SnapshotEdit>),
+    Background(Box<BackgroundEdit>),
 }
 
 #[derive(Clone, Debug)]
@@ -394,12 +401,20 @@ impl Default for EditTransactionHistory {
 
 impl EditTransactionHistory {
     fn record(&mut self, name: String, edits: Vec<SnapshotEdit>) -> EditHistoryGroupId {
+        self.record_contents(name, EditHistoryContents::Layers(edits))
+    }
+
+    fn record_contents(
+        &mut self,
+        name: String,
+        contents: EditHistoryContents,
+    ) -> EditHistoryGroupId {
         let id = EditHistoryGroupId(self.next_id);
         self.next_id = self.next_id.wrapping_add(1).max(1);
         self.groups.push_back(EditHistoryEntry {
             id,
             name,
-            edits,
+            contents,
             state: EditHistoryGroupState::Applied,
         });
         if self.groups.len() > MAX_HISTORY_GROUPS {
@@ -417,9 +432,20 @@ impl EditTransactionHistory {
         id: EditHistoryGroupId,
         direction: HistoryDirection,
     ) -> Result<&EditHistoryEntry, DocumentEditTransactionError> {
-        let entry = self
-            .entry(id)
+        Ok(&self.groups[self.replay_index(id, direction)?])
+    }
+
+    fn replay_index(
+        &self,
+        id: EditHistoryGroupId,
+        direction: HistoryDirection,
+    ) -> Result<usize, DocumentEditTransactionError> {
+        let index = self
+            .groups
+            .iter()
+            .position(|entry| entry.id == id)
             .ok_or(DocumentEditTransactionError::UnknownHistoryGroup(id))?;
+        let entry = &self.groups[index];
         let valid = matches!(
             (entry.state, direction),
             (EditHistoryGroupState::Applied, HistoryDirection::Undo)
@@ -432,27 +458,21 @@ impl EditTransactionHistory {
                 direction,
             });
         }
-        Ok(entry)
+        Ok(index)
     }
 
-    fn replay_plan(
-        &self,
-        id: EditHistoryGroupId,
-        direction: HistoryDirection,
-    ) -> Result<ReplayPlan, DocumentEditTransactionError> {
-        let entry = self.replay_entry(id, direction)?;
-        let (expected, replacements) = entry
-            .edits
+    fn replay_plan(edits: &[SnapshotEdit], direction: HistoryDirection) -> ReplayPlan {
+        let (expected, replacements) = edits
             .iter()
             .map(|edit| match direction {
                 HistoryDirection::Undo => (edit.after.clone(), edit.before.clone()),
                 HistoryDirection::Redo => (edit.before.clone(), edit.after.clone()),
             })
             .unzip();
-        Ok(ReplayPlan {
+        ReplayPlan {
             expected,
             replacements,
-        })
+        }
     }
 
     fn finish_replay(&mut self, id: EditHistoryGroupId, direction: HistoryDirection) {
@@ -469,6 +489,79 @@ impl EditTransactionHistory {
 }
 
 impl Project {
+    pub(super) fn commit_background_group(
+        &mut self,
+        mut edit: BackgroundEdit,
+    ) -> Result<Option<(EditHistoryGroupId, DocumentChange)>, String> {
+        let change = self.publish_background_edit(&mut edit, true)?;
+        for address in edit
+            .reads
+            .iter()
+            .map(CanonicalLayerSnapshot::address)
+            .chain(edit.writes.iter().map(|write| &write.address))
+        {
+            self.document_history.clear_redo(address);
+        }
+        let group = self.edit_transaction_history.record_contents(
+            edit.label.into(),
+            EditHistoryContents::Background(Box::new(edit)),
+        );
+        Ok(Some((group, change)))
+    }
+
+    fn publish_background_edit(
+        &mut self,
+        edit: &mut BackgroundEdit,
+        forward: bool,
+    ) -> Result<DocumentChange, String> {
+        self.variable.apply_background_edit(edit, forward)?;
+        let index = self
+            .source_index(edit.background.source)
+            .expect("validated background source");
+        self.sources[index].dirty = true;
+        let foreground_changed = edit.writes.iter().any(|write| {
+            self.variable.default_layer_name(write.address.layer.source)
+                == Some(write.address.layer.name.as_str())
+        });
+        if foreground_changed {
+            self.recheck_compat(&edit.glyph);
+        }
+        let mut geometry = false;
+        let mut metrics = false;
+        let mut metadata = false;
+        for write in &edit.writes {
+            if let (Some(before), Some(after)) = (&write.before, &write.after) {
+                let delta = after
+                    .delta_from(before)
+                    .expect("background snapshots retain their address");
+                geometry |= delta.geometry;
+                metrics |= delta.metrics;
+                metadata |= delta.metadata;
+            } else {
+                geometry = true;
+                metrics = true;
+                metadata = true;
+            }
+        }
+        Ok(DocumentChange {
+            affected_layers: edit
+                .writes
+                .iter()
+                .map(|write| write.address.clone())
+                .collect(),
+            dependent_layers: if foreground_changed {
+                self.variable.dependent_component_layers(&edit.glyph)
+            } else {
+                Vec::new()
+            },
+            source_metadata: Vec::new(),
+            geometry,
+            metrics,
+            metadata,
+            compilation: true,
+        })
+    }
+
     /// Publish owned layer drafts across sources as one atomic, named history group.
     ///
     /// Every captured base is checked before any layer is changed. Unchanged drafts still act as
@@ -860,14 +953,25 @@ impl Project {
         let entry = self
             .edit_transaction_history
             .replay_entry(group, direction)?;
-        // Menu availability needs only guarded reads, not cloned replacement geometry.
-        self.validate_history_group_snapshots(
-            group,
-            entry.edits.iter().map(|edit| match direction {
-                HistoryDirection::Undo => &edit.after,
-                HistoryDirection::Redo => &edit.before,
-            }),
-        )
+        match &entry.contents {
+            EditHistoryContents::Layers(edits) => self.validate_history_group_snapshots(
+                group,
+                edits.iter().map(|edit| match direction {
+                    HistoryDirection::Undo => &edit.after,
+                    HistoryDirection::Redo => &edit.before,
+                }),
+            ),
+            EditHistoryContents::Background(edit) => self
+                .variable
+                .check_background_edit(edit, direction == HistoryDirection::Redo)
+                .map_err(|_| DocumentEditTransactionError::HistoryConflict {
+                    group,
+                    address: GlyphLayerAddress {
+                        glyph: edit.glyph.clone(),
+                        layer: edit.background.clone(),
+                    },
+                }),
+        }
     }
 
     fn validate_history_group_snapshots<'a>(
@@ -898,10 +1002,25 @@ impl Project {
     ) -> Result<DocumentEditHistoryReplayOutcome, DocumentEditTransactionError> {
         let mut history = std::mem::take(&mut self.edit_transaction_history);
         let result = (|| {
-            let plan = history.replay_plan(group, direction)?;
-            self.validate_history_group_snapshots(group, &plan.expected)?;
+            let index = history.replay_index(group, direction)?;
+            let entry = &mut history.groups[index];
             let before_revision = self.variable.revision;
-            let change = self.commit_edit_replacements(&plan.replacements)?;
+            let change = match &mut entry.contents {
+                EditHistoryContents::Layers(edits) => {
+                    let plan = EditTransactionHistory::replay_plan(edits, direction);
+                    self.validate_history_group_snapshots(group, &plan.expected)?;
+                    self.commit_edit_replacements(&plan.replacements)?
+                }
+                EditHistoryContents::Background(edit) => self
+                    .publish_background_edit(edit, direction == HistoryDirection::Redo)
+                    .map_err(|_| DocumentEditTransactionError::HistoryConflict {
+                        group,
+                        address: GlyphLayerAddress {
+                            glyph: edit.glyph.clone(),
+                            layer: edit.background.clone(),
+                        },
+                    })?,
+            };
             history.finish_replay(group, direction);
             let state = match direction {
                 HistoryDirection::Undo => EditHistoryGroupState::Undone,
@@ -923,10 +1042,11 @@ impl Project {
         expected: &CanonicalLayerSnapshot,
     ) -> Result<(), DocumentEditTransactionError> {
         let address = expected.address();
-        let current = self
-            .capture_document_layer(address)
+        let matches = self
+            .variable
+            .layer_matches_snapshot(expected)
             .ok_or_else(|| DocumentEditTransactionError::MissingLayer(address.clone()))?;
-        if &current != expected {
+        if !matches {
             return Err(DocumentEditTransactionError::StaleLayer(address.clone()));
         }
         Ok(())
@@ -937,12 +1057,12 @@ impl Project {
         replacements: &[CanonicalLayerSnapshot],
     ) -> Result<DocumentChange, DocumentEditTransactionError> {
         for replacement in replacements {
-            let Some(current) = self.capture_document_layer(replacement.address()) else {
+            let Some(matches) = self.variable.layer_matches_snapshot(replacement) else {
                 return Err(DocumentEditTransactionError::MissingLayer(
                     replacement.address().clone(),
                 ));
             };
-            if current == *replacement {
+            if matches {
                 return Err(DocumentEditTransactionError::Invalid(format!(
                     "replacement for {} at {} is unchanged",
                     replacement.address().glyph,

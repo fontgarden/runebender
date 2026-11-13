@@ -2006,7 +2006,8 @@ impl Widget for EditorWidget {
             } else if let Some(text) = &self.text {
                 for sort in text.placed() {
                     painter
-                        .fill(&(view_affine * sort.path), pal.editor_ink())
+                        .fill(&*sort.outline, pal.editor_ink())
+                        .transform(view_affine * Affine::translate(sort.origin.to_vec2()))
                         .draw();
                 }
             } else if let Some(interp) = &self.interp {
@@ -2046,9 +2047,9 @@ impl Widget for EditorWidget {
             let sort_height_px = ((sort_top - sort_bottom) * self.session.viewport.zoom).abs();
             let mark = (sort_height_px * 0.05).clamp(1.5, 24.0);
             let metric_ys = text_sort_metric_ys(m);
-            let mut placed = text.placed();
+            let placed = text.placed();
             let rule = Stroke::new(DesignStroke::Hairline.px());
-            for sort in &mut placed {
+            for sort in &placed {
                 let box_ = Rect::from_points(
                     view_affine * Point::new(sort.origin.x, sort_bottom + sort.origin.y),
                     view_affine
@@ -2075,7 +2076,8 @@ impl Widget for EditorWidget {
                 }
                 if !sort.active || self.tool == Tool::Text {
                     painter
-                        .fill(&(view_affine * std::mem::take(&mut sort.path)), ink)
+                        .fill(&*sort.outline, ink)
+                        .transform(view_affine * Affine::translate(sort.origin.to_vec2()))
                         .draw();
                 }
             }

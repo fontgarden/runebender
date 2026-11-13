@@ -455,6 +455,15 @@ impl CanonicalLayerSnapshot {
         &self.address
     }
 
+    pub(super) fn matches_layer(&self, layer: &Layer, preserved: &LayerPreservation) -> bool {
+        self.layer == *layer && self.preserved == *preserved
+    }
+
+    pub(super) fn contours_only_at(&self, address: super::variable::GlyphLayerAddress) -> Self {
+        let (layer, preserved) = copy_contours_only(&self.layer, &self.preserved, &address.layer);
+        Self::new(address, layer, preserved)
+    }
+
     /// Read immutable canonical geometry and stable object identities from this snapshot.
     pub fn view(&self) -> LayerView<'_> {
         LayerView::new(&self.layer, &self.preserved)

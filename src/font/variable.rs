@@ -10,7 +10,7 @@
 //! and precision outside Babelfont's schema; saving materializes its geometry
 //! through the preserving adapter rather than its lossy UFO converter.
 
-mod background;
+pub(super) mod background;
 mod constructors;
 mod glyph_transactions;
 mod proposal_transactions;
@@ -527,6 +527,24 @@ impl VariableData {
         ))
     }
 
+    pub(super) fn layer_matches_snapshot(
+        &self,
+        expected: &super::CanonicalLayerSnapshot,
+    ) -> Option<bool> {
+        let address = expected.address();
+        let preserved = self
+            .glyphs
+            .get(&address.glyph)?
+            .layers
+            .get(&address.layer)?;
+        let layer = self
+            .font
+            .glyphs
+            .get(&address.glyph)?
+            .get_layer(&super::babelfont::layer_key(&address.layer))?;
+        Some(expected.matches_layer(layer, preserved))
+    }
+
     pub(super) fn feature_text(&self, source: SourceId) -> Option<&str> {
         Some(&self.source_metadata.get(&source)?.feature_text)
     }
@@ -801,25 +819,32 @@ impl VariableData {
     }
 
     pub(super) fn dependent_component_layers(&self, name: &str) -> Vec<GlyphLayerAddress> {
-        self.glyphs
-            .iter()
-            .flat_map(|(glyph_name, glyph)| {
-                glyph.layers.keys().filter_map(move |id| {
-                    let layer = self
-                        .font
-                        .glyphs
-                        .get(glyph_name)?
-                        .get_layer(&super::babelfont::layer_key(id))?;
-                    layer
-                        .components()
-                        .any(|component| component.reference.as_str() == name)
-                        .then(|| GlyphLayerAddress {
-                            glyph: glyph_name.clone(),
-                            layer: id.clone(),
-                        })
-                })
-            })
-            .collect()
+        let mut dependents = Vec::new();
+        for geometry in self.font.glyphs.iter() {
+            for layer in &geometry.layers {
+                if !layer
+                    .components()
+                    .any(|component| component.reference.as_str() == name)
+                {
+                    continue;
+                }
+                let Some((glyph_name, glyph)) = self.glyphs.get_key_value(geometry.name.as_str())
+                else {
+                    continue;
+                };
+                if let Some(id) = glyph.layers.keys().find(|id| {
+                    layer.id.as_deref() == Some(super::babelfont::layer_key(id).as_str())
+                }) {
+                    dependents.push(GlyphLayerAddress {
+                        glyph: glyph_name.clone(),
+                        layer: id.clone(),
+                    });
+                }
+            }
+        }
+        // Geometry order can differ from canonical glyph and layer order.
+        dependents.sort_unstable();
+        dependents
     }
 }
 
@@ -828,6 +853,47 @@ mod tests {
     use norad::{Font, Glyph};
 
     use super::*;
+
+    #[test]
+    fn component_dependents_are_direct_unique_layers_in_canonical_order() {
+        let composite = |name: &str, base: &str| {
+            let mut glyph = Glyph::new(name);
+            glyph.components.push(norad::Component::new(
+                norad::Name::new(base).unwrap(),
+                norad::AffineTransform::default(),
+                None,
+            ));
+            glyph
+        };
+        let mut font = Font::new();
+        font.default_layer_mut().insert_glyph(Glyph::new("A"));
+        let mut repeated = composite("B", "A");
+        repeated.components.push(repeated.components[0].clone());
+        font.default_layer_mut().insert_glyph(repeated);
+        font.default_layer_mut().insert_glyph(composite("C", "A"));
+        font.default_layer_mut().insert_glyph(composite("D", "C"));
+        let auxiliary = font.layers.new_layer("a.reference").unwrap();
+        auxiliary.insert_glyph(composite("B", "A"));
+        auxiliary.insert_glyph(composite("C", "A"));
+        let mut data = crate::font::persistence::ufo_codec::decode_source(&font).unwrap();
+        data.font.glyphs.reverse();
+        let address = |glyph: &str, layer: &str| GlyphLayerAddress {
+            glyph: glyph.into(),
+            layer: LayerId {
+                source: SourceId(0),
+                name: layer.into(),
+            },
+        };
+        assert_eq!(
+            data.dependent_component_layers("A"),
+            [
+                address("B", "a.reference"),
+                address("B", "public.default"),
+                address("C", "a.reference"),
+                address("C", "public.default"),
+            ]
+        );
+    }
 
     #[test]
     fn structural_restore_is_guarded_and_preserves_allocator() {

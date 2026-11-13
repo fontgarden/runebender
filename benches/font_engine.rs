@@ -10,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use kurbo::Affine;
 use norad::{Anchor, Component, Contour, ContourPoint, Font, Glyph, Name, PointType};
+use runebender::font::history::HistoryDirection;
 use runebender::font::persistence::memory::designspace_from_str;
 use runebender::font::project::{DocumentEditOutcome, Project, SourceInput};
 use runebender::font::var_model::Location;
@@ -17,6 +18,17 @@ use runebender::font::variable::GlyphLayerAddress;
 
 const WARMUPS: usize = 3;
 const SAMPLES: usize = 15;
+
+#[derive(Clone, Copy)]
+enum BackgroundWorkload {
+    Copy,
+    CopyNoop,
+    Swap,
+    Clear,
+    ClearNoop,
+    Undo,
+    Redo,
+}
 const DESIGNSPACE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <designspace format="5.0">
   <axes><axis name="Weight" tag="wght" minimum="0" default="0" maximum="1"/></axes>
@@ -327,6 +339,94 @@ fn benchmark_size(label: &str, glyph_count: u32, root: &Path) {
                     "benchmark must commit a real change"
                 );
                 outcome
+            },
+        );
+    }
+
+    use BackgroundWorkload as B;
+    for (name, workload) in [
+        ("background_copy", B::Copy),
+        ("background_copy_noop", B::CopyNoop),
+        ("background_swap", B::Swap),
+        ("background_clear", B::Clear),
+        ("background_clear_noop", B::ClearNoop),
+        ("background_undo", B::Undo),
+        ("background_redo", B::Redo),
+    ] {
+        measure(
+            name,
+            1,
+            "command",
+            || {
+                let mut project = project(&font, &path);
+                let address = GlyphLayerAddress {
+                    glyph: format!("glyph{:05}", glyph_count / 2),
+                    layer: project
+                        .document_source(project.source_id(0).expect("default source identity"))
+                        .expect("default source")
+                        .default_layer(),
+                };
+                let group = if matches!(workload, B::Copy | B::ClearNoop) {
+                    None
+                } else {
+                    Some(
+                        project
+                            .copy_document_layer_to_background(&address)
+                            .expect("valid background copy")
+                            .expect("first copy changes the layer")
+                            .0,
+                    )
+                };
+                if matches!(workload, B::Swap) {
+                    project
+                        .edit_document_layer(&address.glyph, &address.layer, |draft| {
+                            draft.transform_points(&[], Affine::translate((10.0, -10.0)))?;
+                            Ok(())
+                        })
+                        .expect("prepare different foreground geometry");
+                }
+                if matches!(workload, B::Redo) {
+                    project
+                        .replay_document_edit_history_group(
+                            group.expect("copy history"),
+                            HistoryDirection::Undo,
+                        )
+                        .expect("prepare redo");
+                }
+                (project, address, group)
+            },
+            |(project, address, group)| {
+                let changed = match workload {
+                    B::Copy | B::CopyNoop => project
+                        .copy_document_layer_to_background(black_box(address))
+                        .expect("valid background copy"),
+                    B::Swap => project
+                        .swap_document_layer_with_background(black_box(address))
+                        .expect("valid background swap"),
+                    B::Clear | B::ClearNoop => project
+                        .clear_document_background(black_box(&address.glyph), address.layer.source)
+                        .expect("valid background clear"),
+                    B::Undo | B::Redo => {
+                        let group = group.expect("retained background history");
+                        let replay = project
+                            .replay_document_edit_history_group(
+                                group,
+                                if matches!(workload, B::Redo) {
+                                    HistoryDirection::Redo
+                                } else {
+                                    HistoryDirection::Undo
+                                },
+                            )
+                            .expect("current background history");
+                        Some((group, replay.change))
+                    }
+                };
+                assert_eq!(
+                    changed.is_some(),
+                    !matches!(workload, B::CopyNoop | B::ClearNoop),
+                    "background workload must exercise its named changed or unchanged path"
+                );
+                changed.map(|(_, change)| change)
             },
         );
     }

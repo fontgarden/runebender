@@ -20,6 +20,14 @@ pub(in crate::font) struct SourceFormatData {
     images: norad::datastore::ImageStore,
 }
 
+/// The one new, glyph-free layer container owned by a background history group.
+#[derive(Clone, Debug)]
+pub(in crate::font) struct LayerContainerCreation {
+    before: Vec<(String, PathBuf)>,
+    name: String,
+    created: Option<norad::Layer>,
+}
+
 impl Default for SourceFormatData {
     fn default() -> Self {
         Self::from_ufo(&norad::Font::new())
@@ -83,6 +91,81 @@ impl SourceFormatData {
         self.layers.names().map(norad::Name::as_str)
     }
 
+    pub(in crate::font) fn prepare_layer_creation(
+        &self,
+        name: &str,
+    ) -> Result<Option<LayerContainerCreation>, String> {
+        if self.contains_layer(name) {
+            return Ok(None);
+        }
+        norad::Name::new(name).map_err(|error| error.to_string())?;
+        Ok(Some(LayerContainerCreation {
+            before: self
+                .layers
+                .iter()
+                .map(|layer| (layer.name().to_string(), layer.path().to_owned()))
+                .collect(),
+            name: name.into(),
+            created: None,
+        }))
+    }
+
+    pub(in crate::font) fn matches_layer_creation(
+        &self,
+        creation: &LayerContainerCreation,
+        forward: bool,
+    ) -> bool {
+        let mut current = self.layers.iter();
+        for (name, path) in &creation.before {
+            if !current
+                .next()
+                .is_some_and(|layer| layer.name().as_str() == name.as_str() && layer.path() == path)
+            {
+                return false;
+            }
+        }
+        if !forward {
+            let Some(created) = &creation.created else {
+                return false;
+            };
+            if current.next() != Some(created) {
+                return false;
+            }
+        }
+        current.next().is_none()
+    }
+
+    pub(in crate::font) fn install_layer_creation(
+        &mut self,
+        creation: &mut LayerContainerCreation,
+        forward: bool,
+    ) -> Result<(), String> {
+        if !self.matches_layer_creation(creation, forward) {
+            return Err("background layer container changed after history capture".into());
+        }
+        // Norad validates before inserting. Do not clone all empty layers: their cleared glyph
+        // filename hash tables can still retain capacity proportional to the imported font.
+        if forward {
+            let created = self
+                .layers
+                .new_layer(&creation.name)
+                .map_err(|error| error.to_string())?;
+            if let Some(expected) = &creation.created {
+                if &*created != expected {
+                    self.layers.remove(&creation.name);
+                    return Err("background layer path changed after history capture".into());
+                }
+            } else {
+                creation.created = Some(created.clone());
+            }
+        } else {
+            self.layers
+                .remove(&creation.name)
+                .expect("guarded created container remains present");
+        }
+        Ok(())
+    }
+
     pub(in crate::font) fn ensure_layer(&mut self, name: &str) -> Result<(), String> {
         self.layers
             .get_or_create_layer(name)
@@ -142,6 +225,44 @@ mod tests {
 
     use super::SourceFormatData;
     use crate::formats::metadata::lib_keys::{GLYPH_ORDER_KEY, PSNAMES_KEY};
+
+    #[test]
+    fn created_container_metadata_blocks_removal_without_losing_the_change() {
+        let mut format = SourceFormatData::default();
+        let mut creation = format
+            .prepare_layer_creation("public.background")
+            .unwrap()
+            .unwrap();
+        format.install_layer_creation(&mut creation, true).unwrap();
+        format
+            .layers
+            .get_mut("public.background")
+            .unwrap()
+            .lib
+            .insert("owner".into(), plist::Value::String("later edit".into()));
+        let before = format.clone();
+        assert!(!format.matches_layer_creation(&creation, false));
+        assert!(format.install_layer_creation(&mut creation, false).is_err());
+        assert_eq!(format, before);
+    }
+
+    #[test]
+    fn creation_replay_rolls_back_when_reserved_paths_changed() {
+        let mut format = SourceFormatData::default();
+        format.layers.new_layer("public.background").unwrap();
+        // Norad retain leaves removed paths reserved even though the visible layout is empty.
+        format.layers.retain(|_| false);
+        let mut creation = format
+            .prepare_layer_creation("public.background")
+            .unwrap()
+            .unwrap();
+        format.install_layer_creation(&mut creation, true).unwrap();
+        format.install_layer_creation(&mut creation, false).unwrap();
+        format.layers = norad::LayerContents::default();
+        let before = format.clone();
+        assert!(format.install_layer_creation(&mut creation, true).is_err());
+        assert_eq!(format, before);
+    }
 
     fn format_with_references() -> SourceFormatData {
         let mut format = SourceFormatData::default();

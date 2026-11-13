@@ -177,7 +177,10 @@ fn outline_strip(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
             .map(|sort| sort.origin.x + sort.advance)
             .fold(0.0, f64::max);
         (
-            placed.into_iter().map(|sort| sort.path).collect::<Vec<_>>(),
+            placed
+                .into_iter()
+                .map(|sort| Affine::translate(sort.origin.to_vec2()) * (*sort.outline).clone())
+                .collect::<Vec<_>>(),
             advance,
         )
     };
@@ -217,7 +220,7 @@ fn outline_strip(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
                 }
             }
             for path in &preview_paths {
-                p.fill(&(t * path), fill).draw();
+                p.fill(path, fill).transform(t).draw();
             }
         }
     });

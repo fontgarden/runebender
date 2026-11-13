@@ -119,9 +119,6 @@ impl Workspace {
             self.refresh_metric_bufs();
             self.refresh_coord_bufs();
         }
-        if !names.is_empty() {
-            self.cells = Arc::new(cells_of(&self.font, &self.palette));
-        }
         self.modified |= self.font.project.is_modified();
     }
 

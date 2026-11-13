@@ -528,10 +528,7 @@ mod tests {
         let placed = TextState::new(&inputs).placed();
         assert_eq!(placed.len(), 2);
         for sort in placed {
-            assert_eq!(
-                sort.path,
-                kurbo::Affine::translate(sort.origin.to_vec2()) * (*live).clone()
-            );
+            assert_eq!(sort.outline.as_ref(), live.as_ref());
         }
         app.finish_metaball_slider(false);
         assert_eq!(app.font.project.document_revision(), revision + 1);

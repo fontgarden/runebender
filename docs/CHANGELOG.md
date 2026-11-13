@@ -15,6 +15,14 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
 ### Changed
 
 - Feature generation, live measurements, and compiler category inference use fewer temporary allocations without changing their results.
+- Background Copy, Swap, Clear and their Undo/Redo use layer-local staging and the shared grouped history instead of whole-document snapshots.
+  History retains only touched or consulted layers and any newly created layer container.
+  Replay preserves unrelated glyph edits and rejects changed layers, glyph identities, layer ordering or reused containers before publication.
+  The Rust background-command APIs return an optional history group and invalidation scope; replay uses `replay_document_edit_history_group`, not source-structure history.
+- Component dependency invalidation traverses stored glyphs directly instead of repeatedly searching the glyph list, while retaining canonical layer order.
+- Guarded edit checks compare borrowed layer data rather than cloning snapshots; identity and exact metadata conflicts still reject.
+- Text compositions share cached outlines and apply placement transforms at paint time.
+  Retained proof and specimen paths are drawn without extra transformed copies on every repaint.
 - Overview Undo and Redo follow chronological order across geometry and metadata edits, and new edits clear both redo branches.
   Update Metrics and Bake Masks publish all affected glyphs and masters as one guarded, undoable command.
 - Disk-graph progress and completion stay with the graph snapshot that started the run.

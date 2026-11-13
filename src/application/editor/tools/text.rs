@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use masonry::kurbo::{Affine, BezPath, Point};
+use masonry::kurbo::{BezPath, Point};
 use runebender::text::buffer::{TextBuffer, TextDirection, TextGlyphInventory, TextKerningModel};
 
 use crate::application::font_model::FontModel;
@@ -442,7 +442,7 @@ impl TextState {
         changed
     }
 
-    /// Every sort to draw, as a path already placed on the line.
+    /// Every sort to draw, sharing its untransformed outline and carrying its line origin.
     ///
     /// Absorbed sorts (a character folded into a ligature drawn by an
     /// earlier sort) contribute nothing, which is what `is_absorbed` is
@@ -475,7 +475,6 @@ impl TextState {
                 }
                 let name = sort.glyph_name()?;
                 let outline = self.outline(name)?;
-                let placed = Affine::translate((item.x, item.y)) * (**outline).clone();
                 let cluster_end = ((item.index + 1)..buffer.len())
                     .find(|index| !buffer.sort(*index).is_some_and(|sort| sort.is_absorbed()))
                     .unwrap_or(buffer.len());
@@ -483,7 +482,7 @@ impl TextState {
                     .as_ref()
                     .is_some_and(|range| range.start < cluster_end && range.end > item.index);
                 Some(PlacedSort {
-                    path: placed,
+                    outline: outline.clone(),
                     origin: Point::new(item.x, item.y),
                     advance: item.advance_width,
                     active: active == Some(item.index),
@@ -562,7 +561,7 @@ impl TextState {
 
 /// One sort, ready to draw.
 pub(crate) struct PlacedSort {
-    pub path: BezPath,
+    pub outline: Arc<BezPath>,
     pub origin: Point,
     pub advance: f64,
     pub active: bool,
@@ -739,7 +738,7 @@ mod tests {
             "the absorbed alef remains logical text but is not painted twice"
         );
         assert!(placed.iter().all(|sort| {
-            let bounds = sort.path.bounding_box();
+            let bounds = sort.outline.bounding_box();
             bounds.x0.is_finite()
                 && bounds.y0.is_finite()
                 && bounds.x1.is_finite()

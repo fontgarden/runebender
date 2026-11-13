@@ -7972,20 +7972,23 @@ fn background_copy_swap_clear_are_atomic_undoable_and_persistable() {
     let original_foreground = project.encode_ufo_layer("A", &foreground_layer).unwrap();
     assert!(project.document_background_layer("A", source).is_none());
 
-    assert!(
-        project
-            .copy_document_layer_to_background(&foreground_address)
-            .unwrap()
-    );
+    let (copy_group, _) = project
+        .copy_document_layer_to_background(&foreground_address)
+        .unwrap()
+        .unwrap();
     let (background_layer, background) = project.document_background_layer("A", source).unwrap();
     assert_eq!(background_layer.name, "public.background");
     assert_eq!(background.width(), 500.25);
     assert_eq!(background.contours().count(), 1);
     assert_eq!(background.components().count(), 0);
     assert_eq!(background.anchors().count(), 0);
-    assert!(project.undo_sources(false).unwrap());
+    project
+        .replay_document_edit_history_group(copy_group, HistoryDirection::Undo)
+        .unwrap();
     assert!(project.document_background_layer("A", source).is_none());
-    assert!(project.undo_sources(true).unwrap());
+    project
+        .replay_document_edit_history_group(copy_group, HistoryDirection::Redo)
+        .unwrap();
     assert_eq!(
         project
             .document_background_layer("A", source)
@@ -7997,12 +8000,44 @@ fn background_copy_swap_clear_are_atomic_undoable_and_persistable() {
     let copied_snapshot = project.document_snapshot();
     let copied_revision = project.document_revision();
     assert!(
-        !project
+        project
             .copy_document_layer_to_background(&foreground_address)
             .unwrap()
+            .is_none()
     );
     assert_eq!(project.document_snapshot(), copied_snapshot);
     assert_eq!(project.document_revision(), copied_revision);
+
+    // An unchanged command must not discard the redo branch of a background edit.
+    let (clear_group, _) = project
+        .clear_document_background("A", source)
+        .unwrap()
+        .unwrap();
+    project
+        .replay_document_edit_history_group(clear_group, HistoryDirection::Undo)
+        .unwrap();
+    let revision = project.document_revision();
+    assert!(
+        project
+            .copy_document_layer_to_background(&foreground_address)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        project
+            .swap_document_layer_with_background(&foreground_address)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(project.document_snapshot(), copied_snapshot);
+    assert_eq!(project.document_revision(), revision);
+    project
+        .replay_document_edit_history_group(clear_group, HistoryDirection::Redo)
+        .unwrap();
+    assert!(project.document_background_layer("A", source).is_none());
+    project
+        .replay_document_edit_history_group(clear_group, HistoryDirection::Undo)
+        .unwrap();
 
     let replacement = contour(250.0);
     let replacement_payload =
@@ -8014,11 +8049,10 @@ fn background_copy_swap_clear_are_atomic_undoable_and_persistable() {
             Ok(())
         })
         .unwrap();
-    assert!(
-        project
-            .swap_document_layer_with_background(&foreground_address)
-            .unwrap()
-    );
+    let (swap_group, _) = project
+        .swap_document_layer_with_background(&foreground_address)
+        .unwrap()
+        .unwrap();
     let swapped_foreground = project.encode_ufo_layer("A", &foreground_layer).unwrap();
     let swapped_background = project.encode_ufo_layer("A", &background_layer).unwrap();
     assert_eq!(swapped_foreground.contours, original_foreground.contours);
@@ -8034,7 +8068,9 @@ fn background_copy_swap_clear_are_atomic_undoable_and_persistable() {
     );
     assert_eq!(swapped_background.width, 620.75);
 
-    assert!(project.undo_sources(false).unwrap());
+    project
+        .replay_document_edit_history_group(swap_group, HistoryDirection::Undo)
+        .unwrap();
     assert_eq!(
         project
             .encode_ufo_layer("A", &foreground_layer)
@@ -8050,7 +8086,9 @@ fn background_copy_swap_clear_are_atomic_undoable_and_persistable() {
             .contours,
         original_foreground.contours
     );
-    assert!(project.undo_sources(true).unwrap());
+    project
+        .replay_document_edit_history_group(swap_group, HistoryDirection::Redo)
+        .unwrap();
     assert_eq!(
         project
             .encode_ufo_layer("A", &foreground_layer)
@@ -8059,12 +8097,22 @@ fn background_copy_swap_clear_are_atomic_undoable_and_persistable() {
         original_foreground.contours
     );
 
-    assert!(project.clear_document_background("A", source).unwrap());
+    let (clear_group, _) = project
+        .clear_document_background("A", source)
+        .unwrap()
+        .unwrap();
     assert!(project.document_background_layer("A", source).is_none());
     let cleared_revision = project.document_revision();
-    assert!(!project.clear_document_background("A", source).unwrap());
+    assert!(
+        project
+            .clear_document_background("A", source)
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(project.document_revision(), cleared_revision);
-    assert!(project.undo_sources(false).unwrap());
+    project
+        .replay_document_edit_history_group(clear_group, HistoryDirection::Undo)
+        .unwrap();
     assert!(project.document_background_layer("A", source).is_some());
 
     project.save().unwrap();
@@ -8096,7 +8144,7 @@ fn background_copy_swap_clear_are_atomic_undoable_and_persistable() {
 }
 
 #[test]
-fn variable_background_transaction_replays_through_source_history() {
+fn variable_background_transaction_replays_through_shared_group_history() {
     let (_scratch, mut project) = fixture();
     let source = project.document_sources().next().unwrap().id();
     let foreground = project.document_source(source).unwrap().default_layer();
@@ -8105,11 +8153,18 @@ fn variable_background_transaction_replays_through_source_history() {
         layer: foreground,
     };
 
-    assert!(project.copy_document_layer_to_background(&address).unwrap());
+    let (group, _) = project
+        .copy_document_layer_to_background(&address)
+        .unwrap()
+        .unwrap();
     assert!(project.document_background_layer("A", source).is_some());
-    assert!(project.undo_sources(false).unwrap());
+    project
+        .replay_document_edit_history_group(group, HistoryDirection::Undo)
+        .unwrap();
     assert!(project.document_background_layer("A", source).is_none());
-    assert!(project.undo_sources(true).unwrap());
+    project
+        .replay_document_edit_history_group(group, HistoryDirection::Redo)
+        .unwrap();
     assert!(project.document_background_layer("A", source).is_some());
 }
 
@@ -8155,7 +8210,12 @@ fn background_copy_transfers_object_metadata_and_swap_retains_shape_order() {
         glyph: "A".into(),
         layer: foreground_layer.clone(),
     };
-    assert!(project.copy_document_layer_to_background(&address).unwrap());
+    assert!(
+        project
+            .copy_document_layer_to_background(&address)
+            .unwrap()
+            .is_some()
+    );
     let (background_layer, _) = project.document_background_layer("A", source).unwrap();
     assert_eq!(
         project
@@ -8166,7 +8226,12 @@ fn background_copy_transfers_object_metadata_and_swap_retains_shape_order() {
             .unwrap()["test.label"],
         plist::Value::String("foreground".into())
     );
-    assert!(!project.copy_document_layer_to_background(&address).unwrap());
+    assert!(
+        project
+            .copy_document_layer_to_background(&address)
+            .unwrap()
+            .is_none()
+    );
 
     let second = contour(50.0, "second", "second-contour");
     let second_payload =
@@ -8187,7 +8252,12 @@ fn background_copy_transfers_object_metadata_and_swap_retains_shape_order() {
             .collect::<Vec<_>>()
     };
     assert_eq!(shape_order(&project), [true, false, true]);
-    assert!(project.copy_document_layer_to_background(&address).unwrap());
+    assert!(
+        project
+            .copy_document_layer_to_background(&address)
+            .unwrap()
+            .is_some()
+    );
     let mut changed_background = project
         .encode_ufo_layer("A", &background_layer)
         .unwrap()
@@ -8205,6 +8275,234 @@ fn background_copy_transfers_object_metadata_and_swap_retains_shape_order() {
         project
             .swap_document_layer_with_background(&address)
             .unwrap()
+            .is_some()
     );
     assert_eq!(shape_order(&project), [true, false, true]);
+}
+
+fn small_background_project() -> (Project, GlyphLayerAddress) {
+    let mut font = Font::new();
+    for name in ["A", "B"] {
+        let mut glyph = Glyph::new(name);
+        glyph.width = 600.0;
+        font.default_layer_mut().insert_glyph(glyph);
+    }
+    let project =
+        Project::from_source(SourceInput::from_font(font, "Background.ufo".into())).unwrap();
+    let address = GlyphLayerAddress {
+        glyph: "A".into(),
+        layer: project.document_sources().next().unwrap().default_layer(),
+    };
+    (project, address)
+}
+
+#[test]
+fn background_history_preserves_unrelated_edits_and_rejects_layer_conflicts() {
+    let (mut project, address) = small_background_project();
+    let (group, _) = project
+        .copy_document_layer_to_background(&address)
+        .unwrap()
+        .unwrap();
+    let background = project
+        .document_background_layer("A", address.layer.source)
+        .unwrap()
+        .0;
+    project
+        .edit_document_layer("B", &address.layer, |draft| {
+            draft.set_width(900.0)?;
+            Ok(())
+        })
+        .unwrap();
+    project
+        .replay_document_edit_history_group(group, HistoryDirection::Undo)
+        .unwrap();
+    assert!(
+        project
+            .document_background_layer("A", address.layer.source)
+            .is_none()
+    );
+    assert_eq!(
+        project.document_layer("B", &address.layer).unwrap().width(),
+        900.0
+    );
+    project
+        .replay_document_edit_history_group(group, HistoryDirection::Redo)
+        .unwrap();
+
+    project
+        .edit_document_layer("A", &background, |draft| {
+            draft.set_height(42.0)?;
+            Ok(())
+        })
+        .unwrap();
+    let before = project.document_snapshot();
+    let revision = project.document_revision();
+    assert!(
+        project
+            .check_document_edit_history_group(group, HistoryDirection::Undo)
+            .is_err()
+    );
+    assert!(
+        project
+            .replay_document_edit_history_group(group, HistoryDirection::Undo)
+            .is_err()
+    );
+    assert_eq!(project.document_snapshot(), before);
+    assert_eq!(project.document_revision(), revision);
+    project
+        .edit_document_layer("A", &background, |draft| {
+            draft.set_height(0.0)?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        project
+            .check_document_edit_history_group(group, HistoryDirection::Undo)
+            .is_ok()
+    );
+    project
+        .edit_document_layer("A", &address.layer, |draft| {
+            draft.set_height(12.0)?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        project
+            .check_document_edit_history_group(group, HistoryDirection::Undo)
+            .is_err()
+    );
+}
+
+#[test]
+fn background_creation_cannot_remove_a_container_adopted_by_another_glyph() {
+    let (mut project, address) = small_background_project();
+    let (first, _) = project
+        .copy_document_layer_to_background(&address)
+        .unwrap()
+        .unwrap();
+    let other = GlyphLayerAddress {
+        glyph: "B".into(),
+        layer: address.layer.clone(),
+    };
+    let (second, _) = project
+        .copy_document_layer_to_background(&other)
+        .unwrap()
+        .unwrap();
+    let before = project.document_snapshot();
+    let revision = project.document_revision();
+    assert!(
+        project
+            .check_document_edit_history_group(first, HistoryDirection::Undo)
+            .is_err()
+    );
+    assert!(
+        project
+            .replay_document_edit_history_group(first, HistoryDirection::Undo)
+            .is_err()
+    );
+    assert_eq!(project.document_snapshot(), before);
+    assert_eq!(project.document_revision(), revision);
+    project
+        .replay_document_edit_history_group(second, HistoryDirection::Undo)
+        .unwrap();
+    project
+        .replay_document_edit_history_group(first, HistoryDirection::Undo)
+        .unwrap();
+    assert!(
+        project
+            .encode_ufo_source(address.layer.source)
+            .unwrap()
+            .layers
+            .get("public.background")
+            .is_none()
+    );
+    project
+        .replay_document_edit_history_group(first, HistoryDirection::Redo)
+        .unwrap();
+    project
+        .replay_document_edit_history_group(second, HistoryDirection::Redo)
+        .unwrap();
+    assert!(
+        project
+            .document_background_layer("B", address.layer.source)
+            .is_some()
+    );
+}
+
+#[test]
+fn background_clear_replay_restores_exact_layer_order_and_retains_later_containers() {
+    let (mut project, address) = small_background_project();
+    project
+        .add_glyph_layer("A", &address.layer, "before")
+        .unwrap();
+    project
+        .copy_document_layer_to_background(&address)
+        .unwrap()
+        .unwrap();
+    project
+        .add_glyph_layer("A", &address.layer, "after")
+        .unwrap();
+    let before = project.document_snapshot();
+    let (group, _) = project
+        .clear_document_background("A", address.layer.source)
+        .unwrap()
+        .unwrap();
+    let cleared = project.document_snapshot();
+    project
+        .replay_document_edit_history_group(group, HistoryDirection::Undo)
+        .unwrap();
+    assert_eq!(project.document_snapshot(), before);
+    project
+        .replay_document_edit_history_group(group, HistoryDirection::Redo)
+        .unwrap();
+    assert_eq!(project.document_snapshot(), cleared);
+}
+
+#[test]
+fn rejected_background_commands_preserve_the_redoable_group() {
+    let (mut project, address) = small_background_project();
+    let (group, _) = project
+        .copy_document_layer_to_background(&address)
+        .unwrap()
+        .unwrap();
+    let background = project
+        .document_background_layer("A", address.layer.source)
+        .unwrap()
+        .0;
+    project
+        .replay_document_edit_history_group(group, HistoryDirection::Undo)
+        .unwrap();
+    let before = project.document_snapshot();
+    let revision = project.document_revision();
+    let self_copy = GlyphLayerAddress {
+        glyph: "A".into(),
+        layer: background,
+    };
+    assert!(
+        project
+            .copy_document_layer_to_background(&self_copy)
+            .is_err()
+    );
+    let missing_source = GlyphLayerAddress {
+        glyph: "A".into(),
+        layer: LayerId {
+            source: SourceId(99),
+            name: "public.default".into(),
+        },
+    };
+    assert!(
+        project
+            .copy_document_layer_to_background(&missing_source)
+            .is_err()
+    );
+    assert_eq!(project.document_snapshot(), before);
+    assert_eq!(project.document_revision(), revision);
+    project
+        .replay_document_edit_history_group(group, HistoryDirection::Redo)
+        .unwrap();
+    assert!(
+        project
+            .document_background_layer("A", address.layer.source)
+            .is_some()
+    );
 }
