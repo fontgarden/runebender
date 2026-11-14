@@ -14,6 +14,8 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
 
 ### Changed
 
+- Purple marks a machine draft that the designer has not reviewed, as in the Font.Garden source repositories.
+  The Weight debt block marks installed drafts purple instead of orange, only green glyphs are frozen references, and `flag_glyph` refuses a purple draft.
 - Feature generation, live measurements, and compiler category inference use fewer temporary allocations without changing their results.
 - Background Copy, Swap, Clear and their Undo/Redo use layer-local staging and the shared grouped history instead of whole-document snapshots.
   History retains only touched or consulted layers and any newly created layer container.
