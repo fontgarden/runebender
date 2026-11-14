@@ -184,7 +184,7 @@ pub fn report(project: &Project, light: SourceId, heavy: SourceId) -> Result<Deb
         });
         if canonical_outline(light_glyph) == canonical_outline(heavy_glyph) {
             // A frozen copy is deliberate, not owed.
-            if !matches!(entry.mark_label(), Some("green" | "purple")) {
+            if entry.mark_label() != Some("green") {
                 group.pending.push(name.to_owned());
             }
         } else if compatible(light_glyph, heavy_glyph) {

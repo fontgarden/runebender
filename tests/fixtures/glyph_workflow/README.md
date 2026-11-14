@@ -22,7 +22,7 @@ Consumers must keep the five evidence classes separate.
 - `human_grade` is the sole approval record; only a human can set `green`.
 
 `grade_legend` includes every status relevant to selection.
-Green is an approved reference, purple is protected, blue awaits human review, yellow and orange are explicitly selected refinement work, red is eligible work, and unknown is never an automatic target.
+Green is an approved reference, purple is a machine draft that is not reviewed, blue awaits human review, yellow and orange are explicitly selected refinement work, red is eligible work, and unknown is never an automatic target.
 All candidates remain detached until a selected candidate passes its revision guard and is applied as one undoable edit.
 
 Arabic fixtures require a built-font shaped RTL proof that resolves the named occurrence and checks joining, anchors, dots, and marks in two contexts.

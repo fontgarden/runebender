@@ -136,7 +136,7 @@ pub fn tools() -> Vec<agent::Tool> {
     });
     result.push(agent::Tool {
         name: "flag_glyph".into(),
-        description: "Mark one live glyph pink with a dated note so the designer looks at it: the agent's needs-eyes flag. Refuses glyphs marked green, purple or yellow, which only the designer grades, and never clears a mark. The note is appended to the glyph's UFO note and stays with the font until the designer removes it. Give one reason with a number, such as 'kink at 312,640' or 'stem 136 against a median of 192'.".into(),
+        description: "Mark one live glyph pink with a dated note so the designer looks at it: the agent's needs-eyes flag. Refuses glyphs marked green or yellow, which only the designer grades, and purple drafts, which wait for the designer's review, and never clears a mark. The note is appended to the glyph's UFO note and stays with the font until the designer removes it. Give one reason with a number, such as 'kink at 312,640' or 'stem 136 against a median of 192'.".into(),
         parameters: json!({"type":"object", "properties":{
             "glyph":{"type":"string","minLength":1},
             "reason":{"type":"string","minLength":3,"maxLength":400},
@@ -886,8 +886,13 @@ fn handle(project: &mut Project, name: &str, args: &Value) -> Result<Value, Stri
                     layer.note().map(str::to_owned),
                 )
             };
+            if previous.as_deref() == Some("purple") {
+                return Err(format!(
+                    "{glyph} is a purple draft that waits for the designer's review; report it in words instead"
+                ));
+            }
             if let Some(label) = previous.as_deref()
-                && matches!(label, "green" | "purple" | "yellow")
+                && matches!(label, "green" | "yellow")
             {
                 return Err(format!(
                     "{glyph} is marked {label}, a grade only the designer changes; report it in words instead"

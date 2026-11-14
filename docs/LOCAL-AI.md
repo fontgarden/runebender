@@ -171,7 +171,7 @@ Rail tab Local AI. Source: `src/application/view/panels/local_ai.rs`,
 | --- | --- |
 | Model | Model picker, Strength slider from 0 to 3 |
 | Tasks | "This Glyph" and "Every Glyph" buttons for each task in `font-ml tasks --json`, Cancel |
-| Weight Debt | Draft by offset, Draft with the model, Mark installed drafts orange, Measure |
+| Weight Debt | Draft by offset, Draft with the model, Mark installed drafts purple, Measure |
 | Proposals | Compare, Install, Discard, Undo Install |
 | Graph | Graph file picker |
 
@@ -316,7 +316,8 @@ compiled into the binary by `src/automation/prompts.rs`. Each declares
 - Each open document has one epoch. A request with a stale epoch is refused.
 - `proposal_install`, `experiment_apply`, `experiment_undo_apply`, `agent_history`
   and `graph_apply` require `authorization: "user-approved"`.
-- Red marks permit outline replacement. Green and purple glyphs are frozen.
+- Red marks permit outline replacement. Green glyphs are frozen and are the only references.
+  Purple marks a machine draft that the designer has not reviewed.
   `flag_glyph` sets pink only. Source: `src/automation/glyph_grading.rs`.
 - Receipts are keyed by actor, operation key and payload hash. An exact retry
   returns the first result. Receipts are in memory and end with the document.

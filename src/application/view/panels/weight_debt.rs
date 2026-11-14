@@ -105,7 +105,7 @@ pub(crate) fn rows(app: &Workspace) -> Option<Vec<Row>> {
 
     if !app.debt.unmarked.is_empty() {
         rows.push(Row::Secondary {
-            text: format!("Mark {} installed drafts orange", app.debt.unmarked.len()),
+            text: format!("Mark {} installed drafts purple", app.debt.unmarked.len()),
             on_click: click(|app: &mut Workspace| app.mark_debt_drafts()),
         });
     }

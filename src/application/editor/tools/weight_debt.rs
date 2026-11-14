@@ -8,7 +8,7 @@
 //! no-model offset. This module owns the cache, the batch, the font-ml
 //! measurement that scores the model the same way, and the commands.
 //! Every draft is a proposal: the user installs or discards it in the
-//! panel, and marks what was installed orange in one more step, so the
+//! panel, and marks what was installed purple in one more step, so the
 //! Undo install bookkeeping stays exact.
 
 use std::collections::BTreeMap;
@@ -368,8 +368,8 @@ impl Workspace {
         }
     }
 
-    /// Mark every installed, unmarked draft orange: a machine drawing
-    /// worth keeping that needs a human's eyes. One transaction per
+    /// Mark every installed, unmarked draft purple: a machine drawing
+    /// the designer has not reviewed. One transaction per
     /// glyph, after Undo install has had its chance.
     pub(crate) fn mark_debt_drafts(&mut self) {
         let names = std::mem::take(&mut self.debt.unmarked);
@@ -379,7 +379,7 @@ impl Workspace {
         let Some(layer) = weight_debt::default_layer(&self.font.project, source) else {
             return;
         };
-        let (label, color) = semantic_mark(Some("orange"));
+        let (label, color) = semantic_mark(Some("purple"));
         let mut changed = Vec::new();
         for name in names {
             let address = GlyphLayerAddress {
@@ -412,7 +412,7 @@ impl Workspace {
             self.cells = Arc::new(cells_of(&self.font, &self.palette));
         }
         self.modified = true;
-        self.note = format!("Marked {} drafts orange", changed.len());
+        self.note = format!("Marked {} drafts purple", changed.len());
     }
 }
 
@@ -666,7 +666,7 @@ mod tests {
             .into_iter()
             .find(|entry| entry.name() == first)
             .unwrap();
-        assert_eq!(entry.mark_label(), Some("orange"));
+        assert_eq!(entry.mark_label(), Some("purple"));
         // The debt shrank by what was installed.
         let again = workspace.weight_debt().unwrap();
         assert!(
