@@ -136,8 +136,12 @@ Sources: `src/application/view/canvas/proof.rs`, `src/application/editor/tools/r
   Other axis locations show an explanation instead of comparing a master drawing with an interpolated instance.
 - Waterfall and Text show compiled font specimens with native shaping, wrapping, selection, and Cmd+C (Ctrl+C on Linux).
   Waterfall uses 72/48/36/24/18/12 px rows; Text has a size field and slider.
-  Choose Glyph, Spacing, Alphabet, or Custom in Sample; Custom accepts multiline Unicode text.
-  The spacing preset is a Latin context starter; use Custom for script-specific review strings.
+  Sample offers Glyph, the proof samples for the script of the glyph, Alphabet, and Custom; Custom accepts multiline Unicode text.
+  The proof samples are the defaults in `assets/data/proof-samples.toml` and the `sample` tables of `sources/proof-samples.toml` at the project root, the file that the Font.Garden web proof reads; outside Git, `proof-samples.toml` next to the font.
+  A sample with the key of a default replaces it, and `defaults = false` removes the defaults.
+  `{glyph}` in a sample text is the character of the open glyph; the defaults use it for a spacing sample in Latin, Hebrew, and Arabic context.
+  The script comes from the Unicode value of the glyph, or of its base glyph for an unencoded form; a glyph of no Latin, Hebrew, or Arabic character gets every sample.
+  The proof opens on the first sample of the script, and an error in the file is shown on the page while the defaults stay in use.
 - Capturing Before also keeps an immutable full-font snapshot for reading proofs.
   That full-font snapshot remains available across glyph selections in the same document; the outline comparison still requires a matching glyph and source.
   Working recompiles as the document changes; selecting a proposal compares Working with a private compiled replacement, without applying it.
@@ -147,7 +151,8 @@ Sources: `src/application/view/canvas/proof.rs`, `src/application/editor/tools/r
   References come from the project's `reference-fonts/` directory and appear in all four modes; References hides or shows them.
   The folder is at the nearest Git root, or next to the opened font outside Git.
   Files are grouped by family, width and slope, with real weight selection and no synthetic bold.
-  Samples and proof settings are session-only; reference choices persist as the files in that folder.
+  The sample file is read again within a second of a change, as the reference folder is.
+  Proof settings are session-only; reference choices persist as the files in that folder.
   See [Proof reference fonts](PROOF-REFERENCES.md) for the shared native/live-web convention.
 - Agents and local Chat can call `review_proof` after reading `editor_context`.
   It captures the same Before/Working or selected proposal and reference drawings, with a shared fit and explicit source/glyph/revision guards.
@@ -159,10 +164,15 @@ Sources: `src/application/view/canvas/proof.rs`, `src/application/editor/tools/r
   The separate Text tool and editor preview strip remain available.
 - `RUNEBENDER_PROOF_VIEW=1` opens Compare; `toggle` opens Toggle on the right-hand revision, and `before` opens Toggle on the left-hand revision.
   `waterfall` and `text` open the reading modes.
-  `RUNEBENDER_PROOF_TEXT` sets a custom screenshot sample (up to 4096 characters).
+  `RUNEBENDER_PROOF_TEXT` sets a custom screenshot sample (up to 4096 characters), and `RUNEBENDER_PROOF_MENU=1` opens the sample menu.
   Headless screenshots use the same project reference directory as the interactive editor.
   `RUNEBENDER_PROOF_DARK=1` opens the proof page in dark mode.
   With `RUNEBENDER_GLYPH=<name>`, `RUNEBENDER_PROOF_SAMPLE=1` creates and selects an in-memory sample proposal for headless screenshots.
+
+The Proof section of the editor panel shows the open glyph in a proof sample of its script, shaped from the live outline, so it follows each edit before the font is saved.
+It sets the sample on one line, or on two lines when one line would be too small, and its Sample pills choose among the same samples as the proof view.
+`RUNEBENDER_EXPAND=Proof` opens it in a headless capture.
+Source: `src/application/view/panels/live_proof.rs`.
 
 To test the review loop, open a glyph, open Proof view to pin Before, return to the canvas and edit it, then reopen Proof view and switch between Compare and Toggle.
 Test a different glyph or source as well: it must not inherit another glyph's baseline.

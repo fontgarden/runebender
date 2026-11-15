@@ -12,6 +12,10 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
 - Thickness overlay in the Curves section: the local thickness field of the ink (Hildebrand and Rüegsegger), filled as a smooth gradient on the warm end of the theme's mark ramp around the glyph's median thickness.
   `RUNEBENDER_VIEW=thickness` turns it on in a headless capture.
 
+- Proof samples from the project: the proof view reads the `sample` tables of `sources/proof-samples.toml`, the file of the Font.Garden web proof, and offers the samples for the script of the glyph.
+  The default samples cover Latin, Hebrew, and Arabic, each with a spacing sample of the glyph in its own script.
+- A Proof section in the editor panel shows the open glyph in a sample of its script, shaped from the live outline as you edit.
+
 ### Changed
 
 - Purple marks a machine draft that the designer has not reviewed, as in the Font.Garden source repositories.

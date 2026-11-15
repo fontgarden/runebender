@@ -229,6 +229,8 @@ pub(crate) fn info_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
             (editing && app.tool == Tool::Sketch)
                 .then(|| recipes::panel_group(pal, super::sketch::panel(app))),
             editing.then(|| recipes::panel_group(pal, coordinates_section(app))),
+            (editing && !app.font.project.is_neural())
+                .then(|| recipes::panel_group(pal, super::live_proof::section(app))),
         )),
         editing.then(|| recipes::panel_group(pal, transformations_section(app))),
         editing.then(|| recipes::panel_group(pal, curves_section(app))),

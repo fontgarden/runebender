@@ -268,31 +268,7 @@ fn build(app: &Workspace) -> Specimen {
         {
             return None;
         }
-        let placed = text_tool::TextState::new(&inputs.clone().with_text(text)).placed();
-        let start = placed
-            .iter()
-            .map(|sort| sort.origin.x)
-            .fold(f64::INFINITY, f64::min);
-        let end = placed
-            .iter()
-            .map(|sort| sort.origin.x + sort.advance)
-            .fold(f64::NEG_INFINITY, f64::max);
-        if !start.is_finite() || end <= start {
-            return None;
-        }
-        let shift = Affine::translate((-start, 0.0));
-        Some(Run {
-            paths: placed
-                .into_iter()
-                .map(|sort| {
-                    (shift * Affine::translate(sort.origin.to_vec2())) * (*sort.outline).clone()
-                })
-                .collect(),
-            width: end - start,
-            rtl: text
-                .chars()
-                .any(|c| matches!(script_of(c), Script::Arabic | Script::Hebrew)),
-        })
+        shape_line(&inputs, text)
     };
 
     let mut blocks = Vec::new();
@@ -348,6 +324,99 @@ fn build(app: &Workspace) -> Specimen {
         ascender: app.font.ascender(),
         descender: app.font.descender(),
     }
+}
+
+/// Shape one line of `text`, moved to start at x = 0.
+fn shape_line(inputs: &text_tool::TextInputs, text: &str) -> Option<Run> {
+    let placed = text_tool::TextState::new(&inputs.clone().with_text(text)).placed();
+    let start = placed
+        .iter()
+        .map(|sort| sort.origin.x)
+        .fold(f64::INFINITY, f64::min);
+    let end = placed
+        .iter()
+        .map(|sort| sort.origin.x + sort.advance)
+        .fold(f64::NEG_INFINITY, f64::max);
+    if !start.is_finite() || end <= start {
+        return None;
+    }
+    let shift = Affine::translate((-start, 0.0));
+    Some(Run {
+        paths: placed
+            .into_iter()
+            .map(|sort| {
+                (shift * Affine::translate(sort.origin.to_vec2())) * (*sort.outline).clone()
+            })
+            .collect(),
+        width: end - start,
+        rtl: text
+            .chars()
+            .any(|c| matches!(script_of(c), Script::Arabic | Script::Hebrew)),
+    })
+}
+
+/// Below this em size in the panel, a sample is set on two lines.
+const LIVE_SINGLE_LINE_MIN_EM: f64 = 28.0;
+/// The largest em size of the Proof section.
+const LIVE_MAX_EM: f64 = 64.0;
+
+/// `text` shaped from the live outline of the open glyph, for the Proof section of the editor
+/// panel: one line, or two when one line would be smaller than [`LIVE_SINGLE_LINE_MIN_EM`].
+/// The shaping options of the Shaping section apply. `None` when nothing has ink or advance.
+pub(crate) fn live_block(app: &Workspace, text: &str) -> Option<(Block, f64, f64)> {
+    let inputs = text_tool::TextInputs::new(&app.font)
+        .with_location(&app.font, &app.axis_values)
+        .with_shaping_options(
+            &app.text_features_disabled,
+            app.text_script.as_deref(),
+            app.text_language.as_deref(),
+        );
+    // Off a master, the interpolated font is what the designer reads.
+    let inputs = if app.on_active_master() {
+        let mut live = app.session.outline();
+        live.extend(app.session.components.clone());
+        inputs.with_live_outline(&app.session.glyph_name, Arc::new(live))
+    } else {
+        inputs
+    };
+    let ascender = app.font.ascender();
+    let descender = app.font.descender();
+    let em = (ascender - descender).max(1.0);
+    let measure = design::DOCK_WIDTH - 2.0 * design::PANEL_SECTION_INSET.px();
+    let one = shape_line(&inputs, text.trim())?;
+    let mut lines = vec![one];
+    if measure / lines[0].width * em < LIVE_SINGLE_LINE_MIN_EM
+        && let Some((first, second)) = split_in_two(text.trim())
+        && let (Some(first), Some(second)) =
+            (shape_line(&inputs, first), shape_line(&inputs, second))
+    {
+        lines = vec![first, second];
+    }
+    Some((
+        Block {
+            key: "Proof",
+            caption: String::new(),
+            lines,
+            setting: Setting::Even {
+                max_em: LIVE_MAX_EM,
+            },
+        },
+        ascender,
+        descender,
+    ))
+}
+
+/// Split `text` at the space nearest to its middle, by characters.
+fn split_in_two(text: &str) -> Option<(&str, &str)> {
+    let middle = text.chars().count() / 2;
+    let (at, _) = text
+        .char_indices()
+        .enumerate()
+        .filter(|(_, (_, c))| *c == ' ')
+        .min_by_key(|(index, _)| index.abs_diff(middle))
+        .map(|(_, at)| at)?;
+    let (first, second) = (text[..at].trim(), text[at..].trim());
+    (!first.is_empty() && !second.is_empty()).then_some((first, second))
 }
 
 /// The smallest waterfall line, in pixels of em.
@@ -526,6 +595,37 @@ mod tests {
         assert!(scales.windows(2).all(|pair| pair[1] < pair[0]));
         assert!(scales.iter().all(|scale| scale * 1000.0 >= SMALLEST_EM));
         assert!(scales.len() < 8);
+    }
+
+    #[test]
+    fn the_panel_proof_follows_the_live_outline() {
+        use crate::application::view::render::panel_resize_tests_support::workspace_for_layout;
+        use masonry::kurbo::Shape as _;
+        let mut app = workspace_for_layout();
+        let top = |app: &Workspace| {
+            let (block, _, _) = live_block(app, "A A").expect("A has ink");
+            block.lines[0]
+                .paths
+                .iter()
+                .map(|path| path.bounding_box().y1)
+                .fold(f64::MIN, f64::max)
+        };
+        let before = top(&app);
+        let mut session = (*app.session).clone();
+        session.select_all();
+        assert!(session.nudge(0.0, 40.0));
+        app.session = Arc::new(session);
+        assert!((top(&app) - before - 40.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_long_sample_splits_at_the_space_nearest_the_middle() {
+        assert_eq!(split_in_two("aa bb cc dd"), Some(("aa bb", "cc dd")));
+        assert_eq!(
+            split_in_two("בבב הבה ובו נבנ"),
+            Some(("בבב הבה", "ובו נבנ"))
+        );
+        assert_eq!(split_in_two("Hamburgefontsiv"), None);
     }
 
     #[test]

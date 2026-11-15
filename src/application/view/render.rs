@@ -459,7 +459,11 @@ pub(crate) fn app_logic(app: &mut Workspace) -> impl WidgetView<Workspace> + use
                                                     .boxed(),
                                                 app.font.project.preview_pending()
                                                     || app.review_compile_pending(),
-                                                app.proof_view,
+                                                app.proof_view
+                                                    || (matches!(app.mode, Mode::Editor(_))
+                                                        && !app.collapsed.contains(
+                                                            crate::application::view::panels::live_proof::KEY,
+                                                        )),
                                             )
                                             .boxed(),
                                             app.graph.job.clone(),
@@ -836,12 +840,13 @@ fn graph_pump<V: WidgetView<Workspace>>(
     )
 }
 
-/// Poll the preview queue until its latest revision has finished compiling.
+/// Poll the preview queue until its latest revision has finished compiling, and check the
+/// reference fonts and proof samples of the project once a second while a proof shows.
 #[cfg(not(target_arch = "wasm32"))]
 fn preview_pump<V: WidgetView<Workspace>>(
     view: V,
     pending: bool,
-    references: bool,
+    proof_files: bool,
 ) -> impl WidgetView<Workspace> + use<V> {
     use xilem::core::{MessageProxy, fork};
     use xilem::view::task;
@@ -865,7 +870,7 @@ fn preview_pump<V: WidgetView<Workspace>>(
     );
     fork(
         view,
-        references.then(|| {
+        proof_files.then(|| {
             task(
                 |proxy: MessageProxy<()>, _: &mut Workspace| async move {
                     loop {
@@ -875,7 +880,7 @@ fn preview_pump<V: WidgetView<Workspace>>(
                         }
                     }
                 },
-                |app: &mut Workspace, ()| app.refresh_review_references(),
+                |app: &mut Workspace, ()| app.refresh_proof_files(),
             )
         }),
     )
@@ -2416,7 +2421,7 @@ pub(crate) mod panel_resize_tests_support {
 
     /// A workspace on the repository-owned two-master fixture with A open.
     /// Missing or invalid fixtures fail the layout tests instead of skipping them.
-    pub(super) fn workspace_for_layout() -> Workspace {
+    pub(crate) fn workspace_for_layout() -> Workspace {
         let designspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/core/Core.designspace");
         let project = Project::load(&designspace).expect("core designspace loads");
