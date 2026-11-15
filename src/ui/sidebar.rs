@@ -551,7 +551,30 @@ pub fn language_groups() -> &'static [LanguageGroup] {
                 });
             }
         }
+        // A filter is listed under its script, so its label leaves out the script's name.
+        for group in &mut groups {
+            for filter in &mut group.filters {
+                filter.label = label_within_group(&group.label, &filter.label);
+            }
+        }
         groups
+    })
+}
+
+/// A filter label shown under the group `group`: the group's name removed wherever it is a
+/// whole word, with the first letter capitalized. A label that is only the group's name stays.
+fn label_within_group(group: &str, label: &str) -> String {
+    let words: Vec<&str> = label
+        .split_whitespace()
+        .filter(|word| *word != group)
+        .collect();
+    if words.is_empty() {
+        return label.to_owned();
+    }
+    let joined = words.join(" ");
+    let mut chars = joined.chars();
+    chars.next().map_or(joined.clone(), |first| {
+        first.to_uppercase().chain(chars).collect()
     })
 }
 
@@ -758,6 +781,32 @@ pub fn glyph_matches_subfilter(name: &str, codepoints: &[u32], subfilter: &str) 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn filter_labels_leave_out_their_script_name() {
+        assert_eq!(label_within_group("Hebrew", "Hebrew letters"), "Letters");
+        assert_eq!(
+            label_within_group("Hebrew", "Google Fonts Hebrew"),
+            "Google Fonts"
+        );
+        assert_eq!(
+            label_within_group("Hebrew", "Hebrew points and marks"),
+            "Points and marks"
+        );
+        assert_eq!(label_within_group("Latin", "GF Latin Core"), "GF Core");
+        assert_eq!(label_within_group("Devanagari", "Devanagari"), "Devanagari");
+        assert_eq!(label_within_group("Japanese", "Kana + Han"), "Kana + Han");
+        let hebrew = language_groups()
+            .iter()
+            .find(|group| group.label == "Hebrew")
+            .unwrap();
+        assert!(
+            hebrew
+                .filters
+                .iter()
+                .all(|filter| !filter.label.contains("Hebrew"))
+        );
+    }
+
     use super::*;
 
     #[cfg(feature = "integration-fonts")]
