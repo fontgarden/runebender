@@ -92,7 +92,7 @@ fn piece_strip(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
         let t = proof_transform(bounds, 0.0, size);
         for letter in &placed {
             match &letter.ink {
-                Some(ink) => p.fill(&(t * ink.clone()), fill).draw(),
+                Some(ink) => p.fill(ink, fill).transform(t).draw(),
                 None => p
                     .stroke(
                         t.transform_rect_bbox(letter.frame).to_path(0.1),
@@ -332,7 +332,7 @@ pub(crate) fn glyph_preview(app: &Workspace) -> impl WidgetView<Workspace> + use
             if neural {
                 let ink = pal.proof_ink();
                 for t in stacked_transforms(bounds, size) {
-                    p.fill(&(t * (**outline).clone()), ink).draw();
+                    p.fill(&**outline, ink).transform(t).draw();
                 }
                 return;
             }

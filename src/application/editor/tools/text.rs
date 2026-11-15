@@ -334,9 +334,7 @@ impl TextState {
             Some(direction) => buffer.set_direction(direction),
             None => buffer.set_auto_direction(),
         }
-        for character in inputs.initial.chars() {
-            buffer.insert_character(character);
-        }
+        buffer.insert_characters(&inputs.initial);
         if let Some((name, codepoint, advance)) = &inputs.active_glyph {
             let existing = {
                 buffer
@@ -350,11 +348,11 @@ impl TextState {
                 None if buffer.is_empty() => {
                     // An empty line still needs the open glyph as an edit target.
                     buffer.insert_glyph(name.clone(), *codepoint, *advance);
+                    buffer.shape_arabic_if_rtl();
                 }
                 None => {} // Preserve a supplied line without the open glyph.
             }
         }
-        buffer.shape_arabic_if_rtl();
         if let Some((start, end)) = inputs.initial_selection {
             buffer.select_range(start, end);
         }

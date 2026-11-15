@@ -105,17 +105,17 @@ impl TextBuffer {
         built
     }
 
-    /// Shape every line through the font's own rules. Returns false when
-    /// there is no usable font, so the caller can fall back.
+    /// Shape every line through the font's own rules.
+    /// Returns `Some(changed)` on success, or `None` when the caller must fall back.
     ///
     /// Lines are split into runs first. A line mixing Latin and Arabic
     /// has to be shaped a run at a time: handed the whole line, the
     /// shaper takes its script from the first character, and the Arabic
     /// features, including the lam-alef ligature, never run.
-    pub(super) fn shape_with_font(&mut self) -> bool {
+    pub(super) fn shape_with_font(&mut self) -> Option<bool> {
         let Some(font) = self.shaping_font() else {
             self.shaped_offsets.0.clear();
-            return false;
+            return None;
         };
 
         let mut updates: Vec<(usize, String, f64)> = Vec::new();
@@ -162,7 +162,7 @@ impl TextBuffer {
                         self.language_override.as_deref(),
                     ) else {
                         self.shaped_offsets.0.clear();
-                        return false;
+                        return None;
                     };
 
                     // Clusters are byte offsets into the run. A ligature
@@ -219,7 +219,7 @@ impl TextBuffer {
                 absorbed_changed = true;
             }
         }
-        changed || absorbed_changed
+        Some(changed || absorbed_changed)
     }
 
     /// Rebuild every glyph sort from the current Unicode inventory, then shape
@@ -264,8 +264,8 @@ impl TextBuffer {
         // The font's own GSUB first: it gives ligatures and contextual
         // rules the joining table below cannot express. Falls through
         // when there is no features.fea or it does not compile.
-        if self.shape_with_font() {
-            return true;
+        if let Some(changed) = self.shape_with_font() {
+            return changed;
         }
         // The joining table places nothing; marks sit on the pen.
         self.shaped_offsets.0.clear();
@@ -296,8 +296,8 @@ impl TextBuffer {
     /// With a shaping font the direction gate does not apply: the font's
     /// rules cover every script it supports, not just Arabic.
     pub fn shape_arabic_if_rtl(&mut self) -> bool {
-        if self.shape_with_font() {
-            return true;
+        if let Some(changed) = self.shape_with_font() {
+            return changed;
         }
         let has_rtl_line = (0..self.line_count())
             .any(|line| self.resolved_line_direction(line) == TextDirection::RightToLeft);
@@ -313,8 +313,8 @@ impl TextBuffer {
         // Reshaping the whole buffer through the font is cheap at editor
         // sizes, and a ligature can appear or break several sorts away
         // from the one that changed.
-        if self.shape_with_font() {
-            return true;
+        if let Some(changed) = self.shape_with_font() {
+            return changed;
         }
         let line = self.line_number_for_sort(position);
         if self.resolved_line_direction(line) != TextDirection::RightToLeft {

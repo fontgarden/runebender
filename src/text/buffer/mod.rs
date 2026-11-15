@@ -928,6 +928,25 @@ impl TextBuffer {
         self.insert_character_with_active_advance(char, None)
     }
 
+    /// Insert the inventory-mapped characters at the cursor and shape the finished text once.
+    ///
+    /// Returns the number inserted.
+    /// Unmapped characters are skipped, just as with [`Self::insert_character`]; this does not
+    /// synthesize line breaks.
+    /// The first mapped character replaces any selection, and existing active sorts keep their
+    /// identity as their indices shift.
+    /// Empty or entirely unmapped text leaves the buffer unchanged.
+    pub fn insert_characters(&mut self, text: &str) -> usize {
+        let mut inserted = 0;
+        for character in text.chars() {
+            inserted += usize::from(self.insert_character_unshaped(character, None));
+        }
+        if inserted != 0 {
+            self.shape_arabic_if_rtl();
+        }
+        inserted
+    }
+
     /// Insert the glyph mapped to `char` at the cursor as an inactive sort and advance the cursor.
     /// `active_advance_width` is the live width of the glyph being edited and wins over the inventory width, except for Arabic characters on an RTL line, which shaping will resize anyway.
     /// Reshapes around the insertion point. Returns false when the inventory has no glyph for the character.
@@ -936,19 +955,25 @@ impl TextBuffer {
         char: char,
         active_advance_width: Option<f64>,
     ) -> bool {
+        if !self.insert_character_unshaped(char, active_advance_width) {
+            return false;
+        }
+        self.shape_arabic_around_if_rtl(self.cursor - 1);
+        true
+    }
+
+    fn insert_character_unshaped(&mut self, char: char, active_advance_width: Option<f64>) -> bool {
         let Some(glyph_name) = self.glyph_inventory.unicode.get(&(char as u32)).cloned() else {
             return false;
         };
         self.delete_selected_sorts();
-        let use_active_advance =
-            self.cursor_direction() != TextDirection::RightToLeft || !joining::is_arabic(char);
         let advance_width = active_advance_width
-            .filter(|_| use_active_advance)
+            .filter(|_| {
+                self.cursor_direction() != TextDirection::RightToLeft || !joining::is_arabic(char)
+            })
             .or_else(|| self.glyph_inventory.widths.get(&glyph_name).copied())
             .unwrap_or(500.0);
-        let position = self.cursor;
         self.insert_inactive_glyph(glyph_name, Some(char), advance_width);
-        self.shape_arabic_around_if_rtl(position);
         true
     }
 

@@ -125,3 +125,48 @@ It dropped returned invalidation data before measuring net retained bytes, which
 Changed Swap followed a foreground width edit; the timing harness instead swaps genuinely translated outlines.
 The negative Redo Clear delta releases the live layer restored by Undo; it is not a negative allocation request or a reduction in the retained history group.
 These measurements establish the fixed-payload scaling result, not a permanent CI memory threshold or a claim about total application RSS.
+
+## Editor responsiveness
+
+Run the optimized native point-drag probe without opening a window:
+
+```sh
+RUNEBENDER_TEST_FONTS=assets/font-sources/variable-fonts/VirtuaGrotesk \
+cargo test --profile fast --locked --features integration-fonts --bin runebender \
+  frame_budget_report -- --ignored --nocapture --test-threads=1
+```
+
+The probe records input handling and scene construction separately over 240 point moves.
+It does not rasterize or present those scenes, so its paint measurements cannot establish native frame rate.
+Its test-only preview compilation is synchronous; the native window compiles that preview on a worker.
+Use `RUNEBENDER_FRAME_STATS=1` in an agreed native interactive session to observe display cadence, and use the browser checks in [web/README.md](../web/README.md) for browser input and rendering.
+Browser `renderMs` excludes pointer handling before rendering and is not an input-to-display latency measurement.
+
+### Grid and initial-text follow-up
+
+Local optimized probes on the same M4 Pro / 48 GiB host compared the layout helpers from `91f1ee0` with the cached implementation and compared incremental insertion with `TextBuffer::insert_characters`.
+No builds or other benchmarks ran during these measurements.
+Each case used three warmups and fifteen measured samples; the values below are medians, not frame-rate guarantees.
+
+| Workload | Uncached or incremental | Cached or batched |
+| --- | ---: | ---: |
+| Grid geometry, 1,024 encoded cells | 0.033500 ms | 0.001417 ms |
+| Grid geometry, 1,024 unencoded cells | 28.520000 ms | 0.001708 ms |
+| Initial compiled text, 32 Latin characters | 0.509458 ms | 0.030708 ms |
+| Initial compiled text, 128 Latin characters | 2.954750 ms | 0.051417 ms |
+| Initial compiled text, 512 Latin characters | 37.300708 ms | 0.188375 ms |
+
+The grid probe extracted the actual layout helpers into a standalone optimized Rust executable and exercised the paint path's geometry queries without drawing.
+It used a 1000 × 700 viewport, 100-unit target cells, 8-unit insets, equal advances/aspect ratios, and captions without detail lines.
+The cached measurements represent unchanged layout inputs; first layout, changed cells, caption/metric changes and resizing still repack the rows.
+Encoding is determined once per layout, and the cache retains its cell identity so replacing cells cannot accidentally reuse an old key.
+
+The text probe used the repository's Virtua Grotesk designspace and its compiled preview, with font compilation and inventory setup outside the timer.
+Timed samples inserted repeated `a` characters and included shaping.
+The probe also checked final sorts, layout and repeat-shaping stability for mixed Latin/Arabic, combining marks, ligatures and unmapped input.
+The regression suite covers selection replacement, active-sort identity, fallback shaping, grid size changes, scrolling, and updated cell hit geometry.
+
+The native drag probe after these changes recorded medians of 0.0458 ms for move handling and 0.1526 ms for scene construction on glyph `a` with 51 points.
+The normal small-glyph drag was already fast; the large gains above address repeated grid layout and long initial text, not GPU rendering.
+For a 60 Hz responsiveness target, measure complete frames during representative scrolling, dragging, zooming and long-text editing at Retina resolution.
+Aim for p95 at or below 16.7 ms, inspect p99 stalls separately, and retain zero unnecessary idle repaints.

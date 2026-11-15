@@ -263,6 +263,87 @@ fn insert_character_uses_glyph_inventory() {
 }
 
 #[test]
+fn batch_characters_preserve_selection_and_active_sort_identity() {
+    let mut buffer = TextBuffer::new();
+    buffer.set_glyph_inventory(
+        serde_json::from_str(r#"{"unicode":{"65":"A","86":"V"},"widths":{"A":600,"V":620}}"#)
+            .unwrap(),
+    );
+    buffer.insert_inactive_glyph("A", Some('A'), 600.0);
+    buffer.insert_inactive_glyph("A", Some('A'), 600.0);
+    buffer.insert_glyph("V", Some('V'), 620.0);
+    buffer.select_range(0, 1);
+    let before = buffer.clone();
+    assert_eq!(buffer.insert_characters(""), 0);
+    assert_eq!(buffer.insert_characters("\u{10FFFF}\n"), 0);
+    assert_eq!(
+        buffer, before,
+        "unmapped text must not delete the selection"
+    );
+
+    assert_eq!(buffer.insert_characters("\u{10FFFF}VA"), 2);
+    assert_eq!(buffer.text(), "VAAV");
+    assert_eq!(buffer.cursor(), 2);
+    assert_eq!(buffer.selection_range(), None);
+    assert_eq!(buffer.active_sort(), Some(3));
+    assert_eq!(buffer.sort(3).unwrap().glyph_name(), Some("V"));
+    assert_eq!(buffer.layout(1000.0).items[1].x, 620.0);
+}
+
+#[test]
+fn batch_characters_match_incremental_shaping_and_bidi_layout() {
+    let inventory: TextGlyphInventory = serde_json::from_str(
+        r#"{
+            "unicode":{"32":"space","65":"A","102":"f","105":"i","1576":"beh-ar","1605":"meem-ar"},
+            "widths":{"space":250,"A":600,"f":300,"i":200,"fi":450,
+                      "beh-ar":500,"beh-ar.init":480,"meem-ar":520,"meem-ar.fina":490}
+        }"#,
+    )
+    .unwrap();
+    for features in ["", "feature liga { sub f i by fi; } liga;"] {
+        for direction in [
+            None,
+            Some(TextDirection::LeftToRight),
+            Some(TextDirection::RightToLeft),
+        ] {
+            for text in ["fi A بم", "بم fi", "A\u{10FFFF}fi"] {
+                let mut original = TextBuffer::new();
+                let mut inventory = inventory.clone();
+                inventory.features = features.into();
+                original.set_glyph_inventory(inventory);
+                if let Some(direction) = direction {
+                    original.set_direction(direction);
+                }
+                let mut batch = original.clone();
+                let mut inserted = 0;
+                for character in text.chars() {
+                    inserted += usize::from(original.insert_character(character));
+                }
+                original.shape_arabic_if_rtl();
+                assert_eq!(batch.insert_characters(text), inserted);
+                assert_eq!(batch.sorts, original.sorts, "{text}");
+                assert_eq!(batch.cursor(), original.cursor());
+                assert_eq!(batch.layout(1000.0), original.layout(1000.0), "{text}");
+                if !features.is_empty() {
+                    assert!(batch.iter().any(|sort| sort.glyph_name() == Some("fi")));
+                    assert!(
+                        !batch.shape_arabic_if_rtl(),
+                        "unchanged shaping must not fall back"
+                    );
+                    assert!(!batch.shape_arabic());
+                    assert!(!batch.shape_arabic_around_if_rtl(0));
+                    assert_eq!(
+                        batch.sorts, original.sorts,
+                        "repeated shaping preserves ligatures"
+                    );
+                    assert_eq!(batch.layout(1000.0), original.layout(1000.0));
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn insert_character_missing_width_uses_xilem_shaper_fallback() {
     let mut buffer = TextBuffer::new();
     buffer.set_glyph_inventory(

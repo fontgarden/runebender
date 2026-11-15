@@ -2480,114 +2480,112 @@ impl Widget for EditorWidget {
             if point_chrome && self.view.components {
                 self.paint_part_points(painter, sort_affine);
             }
-            for line in self
-                .session
-                .handle_lines()
-                .into_iter()
-                .filter(|_| point_chrome)
-            {
-                painter
-                    .stroke(affine * line, &handle, pal.handle_line)
-                    .draw();
+            if point_chrome {
+                for line in self.session.handle_lines() {
+                    painter
+                        .stroke(affine * line, &handle, pal.handle_line)
+                        .draw();
+                }
             }
 
             let marker_scale = point_marker_scale(self.session.viewport.zoom);
             let ring_width = (POINT_RING_WIDTH * marker_scale).max(DesignStroke::Hairline.px());
             let halo_width = ring_width + POINT_HALO_EXTRA;
-            let start_markers = self.start_markers();
-            for (id, sp, on_curve, smooth, _) in
-                self.screen_points().into_iter().filter(|_| point_chrome)
-            {
-                let selected = self.session.selection.contains(&id);
-                let hue = if !on_curve {
-                    pal.role("pointOffcurve")
-                } else if smooth {
-                    pal.role("pointSmooth")
-                } else {
-                    pal.role("pointCorner")
-                };
-                // The hue is the ring or the interior, by the theme's
-                // recipe: a ring on a dark interior where the ground
-                // is far from mid grey, a hue fill with one keyline
-                // where it is not (the mark cells' treatment).
-                let (fill, interior) = if selected {
-                    (
-                        pal.point_outline.unwrap_or(pal.text),
-                        pal.role("pointSelected"),
-                    )
-                } else if pal.points_filled {
-                    (pal.point_outline.unwrap_or(pal.text), hue)
-                } else {
-                    (hue, pal.canvas)
-                };
-                // A point is a dark window with a coloured ring, shared with
-                // the web editor: a
-                // halo so the point keeps an edge over the outline, an
-                // interior that masks what runs under it, then a
-                // constant-width ring. A solid dot loses its shape against
-                // the curve it sits on.
-                let square = on_curve && !smooth;
-                let radius = if square {
-                    POINT_CORNER_RADIUS
-                } else {
-                    POINT_CURVE_RADIUS
-                };
-                let r = (radius + if selected { POINT_SELECTED_GROW } else { 0.0 }) * marker_scale;
-                let shape = start_markers
-                    .iter()
-                    .find(|(start_id, _, _)| *start_id == id)
-                    .and_then(|(_, from, to)| direction_marker_shape(*from, *to, r, smooth))
-                    .unwrap_or_else(|| point_marker_shape(sp, r, square));
-                let halo = pal.point_halo_fill();
-                let ring = Stroke::new(ring_width);
-                if pal.point_halo {
-                    painter
-                        .stroke(&shape, &Stroke::new(halo_width), halo)
-                        .draw();
-                }
-                painter.fill(&shape, interior).draw();
-
-                // A point is also a window onto the design grid. GPUI
-                // redraws the dots or line chords which fall inside the
-                // marker after its interior and before its ring. This makes
-                // exact grid alignment readable without weakening the point.
-                let (coarse_alpha, fine_alpha) = grid_alphas(self.session.viewport.zoom);
-                let (coarse_dot, fine_dot) = point_grid_dot_sizes(self.session.viewport.zoom);
-                let grid_color = if selected || pal.points_filled {
-                    fill
-                } else {
-                    hue
-                };
-                for (spacing, alpha, dot_size, line_width) in [
-                    (8.0, coarse_alpha, coarse_dot, POINT_GRID_COARSE_LINE_WIDTH),
-                    (2.0, fine_alpha, fine_dot, POINT_GRID_FINE_LINE_WIDTH),
-                ] {
-                    if alpha <= 0.0 {
-                        continue;
-                    }
-                    let marks = point_grid_marks(
-                        affine,
-                        sp,
-                        r,
-                        square,
-                        spacing,
-                        dot_size,
-                        self.view.grid_lines,
-                    );
-                    if marks.is_empty() {
-                        continue;
-                    }
-                    let color =
-                        grid_color.with_alpha(crate::application::view::render::px32(alpha));
-                    if self.view.grid_lines {
-                        painter
-                            .stroke(&marks, &Stroke::new(line_width), color)
-                            .draw();
+            if point_chrome {
+                let start_markers = self.start_markers();
+                for (id, sp, on_curve, smooth, _) in self.screen_points() {
+                    let selected = self.session.selection.contains(&id);
+                    let hue = if !on_curve {
+                        pal.role("pointOffcurve")
+                    } else if smooth {
+                        pal.role("pointSmooth")
                     } else {
-                        painter.fill(&marks, color).draw();
+                        pal.role("pointCorner")
+                    };
+                    // The hue is the ring or the interior, by the theme's
+                    // recipe: a ring on a dark interior where the ground
+                    // is far from mid grey, a hue fill with one keyline
+                    // where it is not (the mark cells' treatment).
+                    let (fill, interior) = if selected {
+                        (
+                            pal.point_outline.unwrap_or(pal.text),
+                            pal.role("pointSelected"),
+                        )
+                    } else if pal.points_filled {
+                        (pal.point_outline.unwrap_or(pal.text), hue)
+                    } else {
+                        (hue, pal.canvas)
+                    };
+                    // A point is a dark window with a coloured ring, shared with
+                    // the web editor: a
+                    // halo so the point keeps an edge over the outline, an
+                    // interior that masks what runs under it, then a
+                    // constant-width ring. A solid dot loses its shape against
+                    // the curve it sits on.
+                    let square = on_curve && !smooth;
+                    let radius = if square {
+                        POINT_CORNER_RADIUS
+                    } else {
+                        POINT_CURVE_RADIUS
+                    };
+                    let r =
+                        (radius + if selected { POINT_SELECTED_GROW } else { 0.0 }) * marker_scale;
+                    let shape = start_markers
+                        .iter()
+                        .find(|(start_id, _, _)| *start_id == id)
+                        .and_then(|(_, from, to)| direction_marker_shape(*from, *to, r, smooth))
+                        .unwrap_or_else(|| point_marker_shape(sp, r, square));
+                    let halo = pal.point_halo_fill();
+                    let ring = Stroke::new(ring_width);
+                    if pal.point_halo {
+                        painter
+                            .stroke(&shape, &Stroke::new(halo_width), halo)
+                            .draw();
                     }
+                    painter.fill(&shape, interior).draw();
+
+                    // A point is also a window onto the design grid. GPUI
+                    // redraws the dots or line chords which fall inside the
+                    // marker after its interior and before its ring. This makes
+                    // exact grid alignment readable without weakening the point.
+                    let (coarse_alpha, fine_alpha) = grid_alphas(self.session.viewport.zoom);
+                    let (coarse_dot, fine_dot) = point_grid_dot_sizes(self.session.viewport.zoom);
+                    let grid_color = if selected || pal.points_filled {
+                        fill
+                    } else {
+                        hue
+                    };
+                    for (spacing, alpha, dot_size, line_width) in [
+                        (8.0, coarse_alpha, coarse_dot, POINT_GRID_COARSE_LINE_WIDTH),
+                        (2.0, fine_alpha, fine_dot, POINT_GRID_FINE_LINE_WIDTH),
+                    ] {
+                        if alpha <= 0.0 {
+                            continue;
+                        }
+                        let marks = point_grid_marks(
+                            affine,
+                            sp,
+                            r,
+                            square,
+                            spacing,
+                            dot_size,
+                            self.view.grid_lines,
+                        );
+                        if marks.is_empty() {
+                            continue;
+                        }
+                        let color =
+                            grid_color.with_alpha(crate::application::view::render::px32(alpha));
+                        if self.view.grid_lines {
+                            painter
+                                .stroke(&marks, &Stroke::new(line_width), color)
+                                .draw();
+                        } else {
+                            painter.fill(&marks, color).draw();
+                        }
+                    }
+                    painter.stroke(&shape, &ring, fill).draw();
                 }
-                painter.stroke(&shape, &ring, fill).draw();
             }
 
             // The ordinary pen's initial incoming and current outgoing

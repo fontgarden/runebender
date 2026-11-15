@@ -20,6 +20,17 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
 
 - Purple marks a machine draft that the designer has not reviewed, as in the Font.Garden source repositories.
   The Weight debt block marks installed drafts purple instead of orange, only green glyphs are frozen references, and `flag_glyph` refuses a purple draft.
+- The macOS renderer uses a [revision-pinned `block` compatibility fix](https://github.com/vaimeai/rust-block/commit/b88ec0fad1ed2a675bef651e8e23d49b649ba0be) instead of the crates.io 0.1.6 source.
+  The private Objective-C class marker is now inhabited, fixing Rust's `uninhabited_static` future-compatibility warning without changing the block API or upgrading Metal/wgpu.
+  Production-source review against the published crate found only that marker change and documentation-link formatting; remove the patch when the renderer drops `block` or a compatible upstream release fixes the declaration.
+- Glyph grids reuse packed rows and encoding/layout decisions until their cells, metrics or viewport change.
+  Painting, scrolling and hit testing share the same cached geometry.
+- Initial text compositions insert mapped characters as a batch and shape the completed buffer instead of reshaping every prefix.
+  Empty and unmapped input preserve selections, and ordinary single-character editing remains incremental.
+- Grid thumbnails and filled piece/neural previews borrow outlines and apply painter transforms rather than copying transformed paths on every repaint.
+  Stroke widths and point-marker sizing are unchanged; Label mode skips construction of hidden point and handle geometry.
+- Successful, unchanged font shaping no longer invokes the Arabic fallback.
+  Repeated shaping preserves compiled ligatures, positioning and absorbed-sort identities instead of overwriting them.
 - Feature generation, live measurements, and compiler category inference use fewer temporary allocations without changing their results.
 - Background Copy, Swap, Clear and their Undo/Redo use layer-local staging and the shared grouped history instead of whole-document snapshots.
   History retains only touched or consulted layers and any newly created layer container.

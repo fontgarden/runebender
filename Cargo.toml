@@ -125,6 +125,12 @@ objc2-app-kit = { version = "0.3.2", optional = true, default-features = false, 
 masonry_testing = { git = "https://github.com/eliheuer/xilem", rev = "0b0b5e754ed7e024b92e246bc65d4ad8accbf0bf" }
 syn = { version = "2.0.119", features = ["full", "visit"] }
 
+[patch.crates-io]
+# Metal/wgpu still require block 0.1.6. This reviewed fork replaces its uninhabited
+# extern-static type with an inhabited repr(C) marker (rust-lang/rust#74840).
+# Remove when the renderer drops block or a compatible upstream release fixes it.
+block = { git = "https://github.com/vaimeai/rust-block", rev = "b88ec0fad1ed2a675bef651e8e23d49b649ba0be" }
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
