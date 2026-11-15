@@ -26,13 +26,35 @@ pub(crate) struct Card {
     pub(crate) error: Option<String>,
 }
 
+/// The reference faces to show for a character: the ones that cover it. A
+/// Hebrew glyph then gets the Hebrew references and not empty cards for the
+/// Arabic ones. If no face covers the character, every face is returned, so
+/// that the cards say why they are empty.
+pub(crate) fn faces(
+    app: &Workspace,
+    character: Option<char>,
+) -> Vec<&runebender::font::reference::ReferenceFace> {
+    let selected = app
+        .review
+        .reading
+        .references
+        .selected(app.review_reference_weight());
+    let covering: Vec<_> = selected
+        .iter()
+        .copied()
+        .filter(|face| character.is_some_and(|character| face.covers(character)))
+        .collect();
+    if covering.is_empty() {
+        selected
+    } else {
+        covering
+    }
+}
+
 /// The exact reference drawings shared by the native page and agent proof capture.
 pub(crate) fn cards(app: &Workspace, character: Option<char>) -> Vec<Card> {
     let weight = app.review_reference_weight();
-    app.review
-        .reading
-        .references
-        .selected(weight)
+    faces(app, character)
         .into_iter()
         .map(|face| {
             let result = character

@@ -105,11 +105,7 @@ impl Workspace {
             return failure("reference_offset exceeds the reference count");
         }
         let weight = self.review_reference_weight();
-        let identities: Vec<_> = self
-            .review
-            .reading
-            .references
-            .selected(weight)
+        let identities: Vec<_> = references::faces(self, character)
             .into_iter()
             .skip(request.reference_offset)
             .take(4)

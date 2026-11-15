@@ -101,6 +101,13 @@ impl ReferenceFace {
             .collect::<Vec<_>>()
             .join(", ")
     }
+    /// Whether the face has a glyph for the character.
+    pub fn covers(&self, character: char) -> bool {
+        skrifa::FontRef::new(&self.bytes)
+            .ok()
+            .and_then(|font| font.charmap().map(character))
+            .is_some_and(|id| id.to_u32() != 0)
+    }
     /// Draw an encoded character at the selected weight in the document's em units.
     pub fn drawing(
         &self,

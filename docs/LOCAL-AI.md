@@ -87,6 +87,12 @@ Microphone button in Chat. Source: `src/application/editor/tools/voice.rs`,
 
 ### 2.3 Proof view
 
+The reference cards come from the `reference-fonts/` folder at the root of the
+Git repository of the font, and its subfolders. This is the layout of a
+Font.Garden project, where `make reference-fonts` fills the folder. The view
+shows the faces that cover the character of the glyph. If no face covers it,
+each card gives the reason.
+
 The existing toolbar Brush remains in the edit view. Agent Proof provides its
 own Red pencil, Undo ink and Clear ink buttons, without adding an edit-toolbar
 icon or group. These annotations are session-only and disappear on quit;
