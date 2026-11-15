@@ -458,7 +458,7 @@ fn handle(project: &mut Project, name: &str, args: &Value) -> Result<Value, Stri
             "precedence":"A later layer wins where it disagrees with an earlier one: font over personal over default.",
             "files": crate::automation::context::to_json(&files),
             "documentation":["https://runebender.org/docs/type-design.html", "https://runebender.org/docs/mcp.html", "https://runebender.org/llms-full.txt"],
-            "workflow":["Read the project DESIGN.md with your file tools and the official type-design guide with your web tools.",
+            "workflow":["Read the font's design rules with design_context and the official type-design guide with your web tools.",
                 "Confirm stable source identities, Unicode mapping, mark meanings, reference glyphs and target glyphs. Missing and empty are different.",
                 "Read references and targets, then inspect actual proof images. If your client does not deliver images, stop visual judgments and report the limitation.",
                 "Draft explicit contours or point edits with foreground revisions. Keep green references unchanged unless asked. For multiple masters preserve compatible point structure or report incompatibility.",

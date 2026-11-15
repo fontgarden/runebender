@@ -16,7 +16,8 @@
 //!    first parent with a `.git` entry). They state that font's own rules.
 //!
 //! A context file is any `*.context.md` file; the part before
-//! `.context.md` is its name. This is the same arrangement as themes:
+//! `.context.md` is its name. A file named just `context.md` is also read,
+//! with the name `context`: the plain name for a font repository's own rules. This is the same arrangement as themes:
 //! built-in files in `assets/`, the designer's own in the config folder.
 
 use std::path::{Path, PathBuf};
@@ -73,6 +74,8 @@ const DEFAULTS: &[(&str, &str)] = &[
 const MAX_FILE_BYTES: u64 = 256 * 1024;
 
 const SUFFIX: &str = ".context.md";
+/// The plain file name of a font's own context file.
+const PLAIN: &str = "context.md";
 
 /// Every context file that applies to `font` (a designspace, UFO, or
 /// folder; `None` for no font), defaults first and the font's own last.
@@ -161,14 +164,21 @@ fn read_dir(dir: &Path, layer: Layer) -> Vec<ContextFile> {
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.ends_with(SUFFIX) && name.len() > SUFFIX.len())
+                .is_some_and(|name| {
+                    name == PLAIN || (name.ends_with(SUFFIX) && name.len() > SUFFIX.len())
+                })
         })
         .collect();
     paths.sort();
     paths
         .into_iter()
         .filter_map(|path| {
-            let name = path.file_name()?.to_str()?.strip_suffix(SUFFIX)?.to_owned();
+            let file_name = path.file_name()?.to_str()?;
+            let name = if file_name == PLAIN {
+                "context".to_owned()
+            } else {
+                file_name.strip_suffix(SUFFIX)?.to_owned()
+            };
             let text = match std::fs::metadata(&path) {
                 Ok(meta) if meta.len() > MAX_FILE_BYTES => format!(
                     "(skipped: {} is {} bytes, over the {} byte limit for context files)",
@@ -288,6 +298,7 @@ mod tests {
         std::fs::create_dir_all(repo.join("sources")).unwrap();
         std::fs::write(repo.join("type-design.context.md"), "root rules").unwrap();
         std::fs::write(repo.join("sources/spacing.context.md"), "near rules").unwrap();
+        std::fs::write(repo.join("sources/context.md"), "plain rules").unwrap();
         // A parent above the repository is never read.
         std::fs::write(repo.parent().unwrap().join("stray.context.md"), "stray").ok();
         let font = repo.join("sources/Family.designspace");
@@ -300,7 +311,11 @@ mod tests {
             .collect();
         assert_eq!(
             font_files,
-            [("type-design", "root rules"), ("spacing", "near rules")]
+            [
+                ("type-design", "root rules"),
+                ("context", "plain rules"),
+                ("spacing", "near rules")
+            ]
         );
         let text = merged(&files, None);
         let default_at = text.find("## default context: type-design").unwrap();
