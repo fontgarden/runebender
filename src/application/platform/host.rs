@@ -417,6 +417,8 @@ impl Workspace {
                 Ok("1" | "toggle" | "before" | "waterfall" | "text")
             ),
             review: crate::application::editor::tools::review::ReviewState::default(),
+            proof_samples: crate::application::platform::proof_samples::ProofSamples::default(),
+            panel_sample: None,
             search_mode: 0,
             search_case: false,
             reference_layers: std::collections::HashSet::new(),

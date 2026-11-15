@@ -343,6 +343,10 @@ pub(crate) struct Workspace {
     pub(crate) proof_view: bool,
     /// Pinned drawing and explicit comparison preferences for the proof view.
     pub(crate) review: crate::application::editor::tools::review::ReviewState,
+    /// The proof samples of the project of the font: the defaults and its sample file.
+    pub(crate) proof_samples: crate::application::platform::proof_samples::ProofSamples,
+    /// The key of the sample of the Proof section; `None` is the first sample of the glyph.
+    pub(crate) panel_sample: Option<String>,
     /// What the proof strip shows for a neural source: the outline, or the labeled pieces.
     pub(crate) preview_view: crate::application::pieces::PreviewView,
     /// The labeled pieces of every sample, for the piece view.

@@ -122,7 +122,7 @@ impl Workspace {
     /// Open review with an initial Before, or return to editing without losing that snapshot.
     pub(crate) fn toggle_proof_view(&mut self) {
         self.proof_view = !self.proof_view;
-        self.refresh_review_references();
+        self.refresh_proof_files();
         if self.proof_view
             && self
                 .review

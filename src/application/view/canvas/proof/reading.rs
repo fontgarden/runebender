@@ -150,6 +150,7 @@ pub(super) fn reading_view(app: &Workspace) -> impl WidgetView<Workspace> + use<
                         page::band(sample_controls(app, pal)),
                         (!app.font.axes.is_empty()).then(|| page::band(axis_controls(app, pal))),
                         reference_errors(app, pal).map(page::band),
+                        app.proof_samples.error.clone().map(|error| page::band(recipes::prose(pal, error))),
                         apply.map(page::band),
                         comparison.proposal_task.as_ref().map(|_| page::band(recipes::prose(
                             pal,
@@ -174,30 +175,32 @@ fn sample_controls(
     app: &Workspace,
     pal: &crate::application::design::theme::Palette,
 ) -> impl WidgetView<Workspace> + use<> {
-    let choices = [
-        ("Glyph", Sample::Glyph),
-        ("Spacing", Sample::Spacing),
-        ("Alphabet", Sample::Alphabet),
-        ("Custom", Sample::Custom),
-    ];
+    // The proof samples for the script of the glyph, between Glyph and the whole repertoire.
+    let shown = app.review_proof_sample().map(|sample| sample.key.clone());
+    let mut choices = vec![("Glyph".to_string(), Sample::Glyph, false)];
+    choices.extend(app.glyph_proof_samples().into_iter().map(|sample| {
+        (
+            sample.label.clone(),
+            Sample::Named(sample.key.clone()),
+            shown.as_ref() == Some(&sample.key),
+        )
+    }));
+    choices.push(("Alphabet".into(), Sample::Alphabet, false));
+    choices.push(("Custom".into(), Sample::Custom, false));
+    for (_, sample, chosen) in &mut choices {
+        *chosen |= *sample == app.review.reading.sample;
+    }
     let title = choices
         .iter()
-        .find(|(_, sample)| *sample == app.review.reading.sample)
-        .expect("sample label")
-        .0;
+        .find(|(_, _, chosen)| *chosen)
+        .map_or_else(|| "Sample".into(), |(name, _, _)| name.clone());
     let menu = app.review.reading.sample_menu_open.then(|| {
         let buttons: Vec<_> = choices
             .into_iter()
-            .map(|(name, sample)| {
-                page::action(
-                    pal,
-                    name.into(),
-                    sample == app.review.reading.sample,
-                    false,
-                    move |app| {
-                        app.select_review_sample(sample);
-                    },
-                )
+            .map(|(name, sample, chosen)| {
+                page::action(pal, name, chosen, false, move |app| {
+                    app.select_review_sample(sample.clone());
+                })
             })
             .collect();
         column(Region::List, buttons).gap(Length::px(design::COMPACT_GAP))
@@ -227,14 +230,9 @@ fn sample_controls(
         Region::List,
         (
             recipes::prose(pal, "Sample".into()),
-            page::selector(
-                pal,
-                title.into(),
-                app.review.reading.sample_menu_open,
-                |app| {
-                    app.review.reading.sample_menu_open = !app.review.reading.sample_menu_open;
-                },
-            ),
+            page::selector(pal, title, app.review.reading.sample_menu_open, |app| {
+                app.review.reading.sample_menu_open = !app.review.reading.sample_menu_open;
+            }),
             menu,
             custom,
             (app.review.mode == ReviewMode::Text).then(|| {

@@ -100,7 +100,10 @@ pub(crate) fn run(
             workspace.review.reading.sample =
                 crate::application::editor::tools::review_reading::Sample::Custom;
         }
-        workspace.refresh_review_references();
+        // RUNEBENDER_PROOF_MENU=1 opens the sample menu of the reading proof for a capture.
+        workspace.review.reading.sample_menu_open =
+            std::env::var("RUNEBENDER_PROOF_MENU").as_deref() == Ok("1");
+        workspace.refresh_proof_files();
     }
     // Headless: render one frame and exit. No window, no event loop.
     if let Ok(path) = std::env::var("RUNEBENDER_SCREENSHOT") {
