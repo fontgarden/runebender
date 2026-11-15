@@ -1,0 +1,73 @@
+# The default text samples of the Runebender proof view and the Proof section.
+#
+# The `sample` tables use the format of `sources/proof-samples.toml` in a Font.Garden project,
+# which the web proof of fontgarden-tools also reads.
+# The texts of the word, joining and mark samples are the default samples of that web proof.
+# A project file adds samples, replaces a sample with the same key, or removes these defaults
+# with `defaults = false`.
+#
+# `{glyph}` in a text is the character of the open glyph.
+# A sample with `{glyph}` is not offered for a glyph without a character.
+# The first sample of the script of the glyph opens first.
+
+[sample.latin-glyph-spacing]
+label = "Latin glyph spacing"
+scripts = ["Latin"]
+text = "{glyph}{glyph}{glyph} n{glyph}n o{glyph}o H{glyph}H O{glyph}O"
+
+[sample.latin-words]
+label = "Latin words"
+scripts = ["Latin"]
+text = "Hamburgefontsiv"
+
+[sample.latin-spacing]
+label = "Latin spacing"
+scripts = ["Latin"]
+text = "HOHOH nonon"
+
+[sample.hebrew-glyph-spacing]
+label = "Hebrew glyph spacing"
+scripts = ["Hebrew"]
+text = "{glyph}{glyph}{glyph} ה{glyph}ה ו{glyph}ו נ{glyph}נ ס{glyph}ס"
+
+[sample.hebrew-words]
+label = "Hebrew words"
+scripts = ["Hebrew"]
+text = "היה חיה תחיה"
+
+[sample.hebrew-marks]
+label = "Hebrew marks"
+scripts = ["Hebrew"]
+text = "הָ חַ תֵ הּ חִ תַ"
+
+[sample.latin-hebrew]
+label = "Latin and Hebrew"
+scripts = ["Latin", "Hebrew"]
+text = "no HO החת"
+
+# The letter alone and repeated, then between a dual-joining letter and beside two letters
+# that do not join to the left.
+[sample.arabic-glyph-spacing]
+label = "Arabic glyph spacing"
+scripts = ["Arabic"]
+text = "{glyph}{glyph}{glyph} {glyph} ب{glyph}ب س{glyph}س ا{glyph}ا د{glyph}د"
+
+[sample.arabic-words]
+label = "Arabic words"
+scripts = ["Arabic"]
+text = "باب كتاب سبب"
+
+[sample.arabic-joining]
+label = "Arabic joining"
+scripts = ["Arabic"]
+text = "ببب ب سسس س"
+
+[sample.arabic-marks]
+label = "Arabic marks"
+scripts = ["Arabic"]
+text = "بَ بِ بُ بّ بْ"
+
+[sample.latin-arabic]
+label = "Latin and Arabic"
+scripts = ["Latin", "Arabic"]
+text = "no HO باب"
