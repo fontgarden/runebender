@@ -136,6 +136,59 @@ lto = "fat"
 codegen-units = 1
 # Symbol names are about 9 MB of the binary and are not used when the editor runs.
 strip = true
+# Compile for size; the crates below stay at full speed.
+# Measured on the edit canvas: dragging a point is unchanged, drawing a frame is 2% slower,
+# and the binary is about 4.5 MB smaller.
+opt-level = "s"
+
+# Rasterizing, text shaping, font reading, curve math, image decoding and the widget core
+# run every frame or on large inputs, so they keep full optimization.
+[profile.release.package.kurbo]
+opt-level = 3
+[profile.release.package.vello_cpu]
+opt-level = 3
+[profile.release.package.vello_common]
+opt-level = 3
+[profile.release.package.vello]
+opt-level = 3
+[profile.release.package.vello_encoding]
+opt-level = 3
+[profile.release.package.peniko]
+opt-level = 3
+[profile.release.package.color]
+opt-level = 3
+[profile.release.package.parley]
+opt-level = 3
+[profile.release.package.harfrust]
+opt-level = 3
+[profile.release.package.skrifa]
+opt-level = 3
+[profile.release.package.read-fonts]
+opt-level = 3
+[profile.release.package.fontique]
+opt-level = 3
+[profile.release.package.linesweeper]
+opt-level = 3
+[profile.release.package.img2bez]
+opt-level = 3
+[profile.release.package.image]
+opt-level = 3
+[profile.release.package.png]
+opt-level = 3
+[profile.release.package.zune-jpeg]
+opt-level = 3
+[profile.release.package.fearless_simd]
+opt-level = 3
+[profile.release.package.imaging]
+opt-level = 3
+[profile.release.package.imaging_vello]
+opt-level = 3
+[profile.release.package.imaging_vello_cpu]
+opt-level = 3
+[profile.release.package.masonry_core]
+opt-level = 3
+[profile.release.package.masonry]
+opt-level = 3
 
 # Development builds: dependencies are optimized once and cached, and the workspace's own
 # crates use a light optimization level so the editor is responsive and rebuilds stay short.
