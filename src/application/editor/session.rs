@@ -214,7 +214,14 @@ impl Session {
 
     /// Build an editor session with metrics from the canonical active source.
     pub(crate) fn new_from_model(font: &FontModel, name: &str) -> Option<Self> {
-        Self::new_from_project(&font.project, name, Metrics::of_canonical(font.font_info()))
+        // The Layers panel may have chosen another layer of this glyph to edit.
+        let layer = font.active_layer_address(name).map(|address| address.layer);
+        Self::new_from_project(
+            &font.project,
+            name,
+            Metrics::of_canonical(font.font_info()),
+            layer,
+        )
     }
 
     fn inactive_with_metrics(metrics: Metrics) -> Self {
@@ -263,16 +270,20 @@ impl Session {
             ),
         )
         .expect("valid source fixture");
-        Self::new_from_project(&project, name, Metrics::of(font))
+        Self::new_from_project(&project, name, Metrics::of(font), None)
     }
 
     fn new_from_project(
         project: &runebender::font::project::Project,
         name: &str,
         metrics: Metrics,
+        layer: Option<runebender::font::variable::LayerId>,
     ) -> Option<Self> {
         let source = project.source_id(project.active)?;
-        let layer_id = project.document_source(source)?.default_layer();
+        let layer_id = match layer {
+            Some(layer) => layer,
+            None => project.document_source(source)?.default_layer(),
+        };
         project.document_layer(name, &layer_id)?;
         let address = runebender::font::variable::GlyphLayerAddress {
             glyph: name.to_owned(),
@@ -3616,6 +3627,7 @@ mod tests {
             &project,
             "composite",
             Metrics::of_canonical(project.document_font_info(source.id()).unwrap()),
+            None,
         )
         .expect("composite exists");
         let before_bounds = session.components.bounding_box();

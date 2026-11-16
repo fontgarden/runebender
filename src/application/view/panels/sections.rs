@@ -25,108 +25,137 @@ use xilem::style::Style;
 use xilem::view::FlexExt as _;
 use xilem::view::{FlexSpacer, sized_box};
 
-/// Reference underlays, distinct from document masters. GPUI keeps this
-/// section folded in the overview, so the inspector stays a concise map of
-/// the document until someone needs to compare outlines.
+/// The glyph's layers, as in the Glyphs Layers panel: the master's own layer, its backup layers
+/// and the other masters. Clicking a layer of the active master edits it; an eye draws a
+/// layer's outline behind the layer being edited; plus copies the edited layer into a new
+/// backup layer, and minus deletes the edited backup layer.
 pub(crate) fn layers_section(app: &Workspace) -> Option<impl WidgetView<Workspace> + use<>> {
     if app.font.master_names().len() < 2 && !app.can_manage_glyph_layers() {
         return None;
     }
     let pal = &app.palette;
+    let editor = app.can_manage_glyph_layers();
+    let mut rows: Vec<Box<xilem::AnyWidgetView<Workspace>>> = Vec::new();
+    if editor {
+        for row in app.glyph_layer_rows() {
+            let (eye_layer, edit_layer) = (row.layer.clone(), row.layer);
+            rows.push(layer_row(
+                pal,
+                row.name,
+                row.editing,
+                row.visible,
+                Box::new(move |app| app.toggle_glyph_layer_visible(&eye_layer)),
+                Box::new(move |app| app.edit_glyph_layer(&edit_layer)),
+            ));
+        }
+    }
     let active = app.font.active();
-    let rows: Vec<_> = app
-        .font
-        .short_master_names()
-        .into_iter()
-        .enumerate()
-        .filter(|(i, _)| *i != active)
-        .map(|(i, name)| {
-            let shown = app.reference_layers.contains(&i);
-            let style = ControlStyle::new(pal, ControlKind::Row).selected(pal, shown);
-            // The bullet keeps the reference color, so the row says how the layer draws.
-            let bullet = if shown {
-                pal.role("reference")
-            } else {
-                style.secondary_ink(pal)
-            };
-            sized_box(
-                button(
-                    style,
-                    xrow(
-                        Region::Inline,
-                        (
-                            recipes::marker(recipes::Marker::Bullet, bullet),
-                            label(name)
-                                .text_size(TextSize::Body.px())
-                                .color(style.ink()),
-                        ),
-                    ),
-                    move |app: &mut Workspace| {
-                        if !app.reference_layers.remove(&i) {
-                            app.reference_layers.insert(i);
-                        }
-                    },
+    for (index, name) in app.font.short_master_names().into_iter().enumerate() {
+        if index == active {
+            continue;
+        }
+        let toggle = move |app: &mut Workspace| {
+            if !app.reference_layers.remove(&index) {
+                app.reference_layers.insert(index);
+            }
+        };
+        rows.push(layer_row(
+            pal,
+            name,
+            false,
+            app.reference_layers.contains(&index),
+            Box::new(toggle),
+            Box::new(toggle),
+        ));
+    }
+    let backup = editor && app.editing_backup_layer();
+    let footer = editor.then(|| {
+        xrow(
+            Region::Inline,
+            (
+                icon_button::icon_button(
+                    ControlStyle::new(pal, ControlKind::Bare),
+                    "plus",
+                    "Copy this layer to a new layer",
+                    |app: &mut Workspace| app.duplicate_glyph_layer(),
                 )
-                .padding(masonry::properties::Padding::horizontal(Length::px(
-                    design::SIDEBAR_ROW_INSET,
-                ))),
-            )
-            .dims(Dimensions::new(
-                Dim::Stretch,
-                Dim::from(ControlSize::Control),
-            ))
-        })
-        .collect();
+                .icon_size(design::STATUS_ICON_SIZE)
+                .tile_size(design::STATUS_ICON_SIZE),
+                // Only a backup layer can be deleted; a master layer has no minus.
+                backup.then(|| {
+                    icon_button::icon_button(
+                        ControlStyle::new(pal, ControlKind::Bare),
+                        "minus",
+                        "Delete this layer",
+                        |app: &mut Workspace| app.remove_glyph_layer(),
+                    )
+                    .icon_size(design::STATUS_ICON_SIZE)
+                    .tile_size(design::STATUS_ICON_SIZE)
+                }),
+            ),
+        )
+    });
     Some(recipes::section(
         app,
         "Layers",
         "Layers",
-        xcolumn(
-            Region::List,
-            (
-                xcolumn(Region::List, rows),
-                app.can_manage_glyph_layers()
-                    .then(|| glyph_layer_controls(app)),
-            ),
-        ),
+        xcolumn(Region::List, (xcolumn(Region::List, rows), footer)),
     ))
 }
 
-fn glyph_layer_controls(app: &Workspace) -> Box<xilem::AnyWidgetView<Workspace>> {
-    let pal = &app.palette;
-    xcolumn(
-        Region::List,
-        (
-            label("Glyph layer name")
-                .text_size(TextSize::Body.px())
-                .color(pal.text_muted),
-            input_typography::input_typography(
-                text_input(app.layer_name_buf.clone(), |app: &mut Workspace, value| {
-                    app.layer_name_buf = value;
-                })
-                .text_color(pal.text),
-                pal.text,
+type LayerClick = Box<dyn Fn(&mut Workspace) + Send + Sync + 'static>;
+
+/// One layer: its eye, then its name. `editing` marks the layer the canvas edits.
+fn layer_row(
+    pal: &Palette,
+    name: String,
+    editing: bool,
+    visible: bool,
+    on_eye: LayerClick,
+    on_name: LayerClick,
+) -> Box<xilem::AnyWidgetView<Workspace>> {
+    let style = ControlStyle::new(pal, ControlKind::Row).selected(pal, editing);
+    sized_box(
+        xrow(
+            Region::Inline,
+            (
+                icon_button::icon_button(
+                    ControlStyle::new(pal, ControlKind::Bare),
+                    if visible { "eye-open" } else { "eye-closed" },
+                    "Show this layer behind the edited layer",
+                    move |app: &mut Workspace| on_eye(app),
+                )
+                .icon_size(design::STATUS_ICON_SIZE)
+                .tile_size(design::STATUS_ICON_SIZE),
+                sized_box(button(
+                    style,
+                    // A row keeps its name at the left edge, as sidebar rows do.
+                    xrow(
+                        Region::Inline,
+                        (
+                            label(name)
+                                .text_size(TextSize::Body.px())
+                                .color(style.ink()),
+                            FlexSpacer::Flex(1.0),
+                        ),
+                    ),
+                    move |app: &mut Workspace| on_name(app),
+                ))
+                .dims(Dimensions::new(
+                    Dim::Stretch,
+                    Dim::from(ControlSize::Control),
+                ))
+                .flex(1.0),
             ),
-            xrow(
-                Region::Inline,
-                (
-                    recipes::action(pal, "Copy to layer".into(), |app| {
-                        app.change_sources("layer-add");
-                    }),
-                    recipes::action(pal, "Remove layer".into(), |app| {
-                        app.change_sources("layer-remove");
-                    }),
-                ),
-            ),
-            xrow(
-                Region::Inline,
-                (
-                    recipes::action(pal, "Undo layers".into(), |app| app.change_sources("undo")),
-                    recipes::action(pal, "Redo".into(), |app| app.change_sources("redo")),
-                ),
-            ),
-        ),
+        )
+        .padding(masonry::properties::Padding::horizontal(Length::px(
+            design::SIDEBAR_ROW_INSET,
+        ))),
     )
+    .dims(Dimensions::new(
+        Dim::Stretch,
+        Dim::from(ControlSize::Control),
+    ))
     .boxed()
 }
 

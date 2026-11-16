@@ -159,6 +159,9 @@ headerMutedInk = "baseUi.08"
 [roles]
 # Dark Agent Proof page; independent of the glyph fill.
 proofDarkBackground = "baseUi.01"
+# Outlines of other layers and masters behind the layer being edited. Dark blue, so they
+# stand apart from both the mid-gray canvas and the near-black outline being edited.
+layerOutline = "rainbow.blue.deep"
 # Red pencil strokes drawn over a review proof; brighter than the red mark.
 proofPencil = "#E6282D"
 # The save state beside the file name: lighter than the marks, so it reads like the

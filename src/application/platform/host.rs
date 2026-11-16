@@ -422,6 +422,7 @@ impl Workspace {
             search_mode: 0,
             search_case: false,
             reference_layers: std::collections::HashSet::new(),
+            visible_layers: std::collections::BTreeSet::new(),
             show_all_masters: false,
             sample_index: 0,
             graph: graph::GraphState::default(),

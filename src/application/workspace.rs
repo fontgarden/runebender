@@ -360,6 +360,10 @@ pub(crate) struct Workspace {
     /// Masters drawn as ghost outlines under the active one. The Layers
     /// section toggles these, one per thumbnail click.
     pub(crate) reference_layers: std::collections::HashSet<usize>,
+    /// Glyph layers drawn as outlines behind the layer being edited: the eyes of the
+    /// Layers panel.
+    pub(crate) visible_layers:
+        std::collections::BTreeSet<runebender::font::variable::GlyphLayerAddress>,
     /// Whether every non-active master is shown as a reference outline.
     pub(crate) show_all_masters: bool,
     /// Current built-in proof string selected from the View menu.

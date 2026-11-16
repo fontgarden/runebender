@@ -60,6 +60,9 @@ pub(crate) struct FontModel {
     pub glyphs: Vec<GlyphEntry>,
     /// Constant-time lookup into the display-ordered canonical entries.
     name_map: HashMap<String, usize>,
+    /// The layer being edited for a glyph, when it is not the active master's own layer.
+    /// An entry for another source, or for a layer the glyph no longer has, is ignored.
+    pub(crate) edit_layers: HashMap<String, runebender::font::variable::LayerId>,
     pub axes: Vec<Axis>,
     /// The text inputs last read from this model, reused while nothing they read has changed.
     pub(crate) text_inputs:
@@ -139,13 +142,28 @@ impl FontModel {
             .and_then(|source| self.project.document_font_info(source))
     }
 
-    /// Stable address of one glyph's active default layer.
+    /// Stable address of the layer being edited for one glyph: the layer chosen in the Layers
+    /// panel when it belongs to the active source, else the active master's own layer.
     pub(crate) fn active_layer_address(
         &self,
         glyph: &str,
     ) -> Option<runebender::font::variable::GlyphLayerAddress> {
         let source = self.project.source_id(self.active())?;
-        let layer = self.project.document_source(source)?.default_layer();
+        let layer = self
+            .edit_layers
+            .get(glyph)
+            .filter(|layer| {
+                layer.source == source && self.project.document_layer(glyph, layer).is_some()
+            })
+            .cloned()
+            .map_or_else(
+                || {
+                    self.project
+                        .document_source(source)
+                        .map(|s| s.default_layer())
+                },
+                Some,
+            )?;
         self.project.document_layer(glyph, &layer).map(|_| {
             runebender::font::variable::GlyphLayerAddress {
                 glyph: glyph.to_owned(),
@@ -199,6 +217,7 @@ impl FontModel {
             glyphs: Vec::new(),
             name_map: HashMap::new(),
             axes,
+            edit_layers: HashMap::new(),
             text_inputs: std::sync::Mutex::new(None),
             text_location: std::sync::Mutex::new(None),
             readouts: std::sync::Mutex::new(Readouts::default()),
@@ -519,6 +538,51 @@ impl FontModel {
                     .map(|glyph| glyph.outline().clone())
             })
             .collect()
+    }
+
+    /// The layers of `glyph` in the active source that the Layers panel lists: the master's own
+    /// layer first, then the glyph's other layers in the source's layer order. The background
+    /// and proposal layers have their own panels and are left out.
+    pub(crate) fn glyph_layers(&self, glyph: &str) -> Vec<runebender::font::variable::LayerId> {
+        let Some(source) = self.project.source_id(self.active()) else {
+            return Vec::new();
+        };
+        let Some(master) = self
+            .project
+            .document_source(source)
+            .map(|s| s.default_layer())
+        else {
+            return Vec::new();
+        };
+        let mut layers = vec![master.clone()];
+        for name in self
+            .project
+            .document_source_layer_names(source)
+            .unwrap_or_default()
+        {
+            let hidden = name == "public.background"
+                || name.eq_ignore_ascii_case("background")
+                || name.starts_with("com.runebender.proposal.");
+            let layer = runebender::font::variable::LayerId {
+                source,
+                name: name.to_owned(),
+            };
+            if !hidden && layer != master && self.project.document_layer(glyph, &layer).is_some() {
+                layers.push(layer);
+            }
+        }
+        layers
+    }
+
+    /// One layer's own contours as a path, for drawing it behind the layer being edited.
+    pub(crate) fn layer_outline(
+        &self,
+        glyph: &str,
+        layer: &runebender::font::variable::LayerId,
+    ) -> Option<Arc<BezPath>> {
+        self.project
+            .document_layer(glyph, layer)
+            .map(|view| Arc::new(glyph_paths::ordinary_layer_contours_to_bezpath(view)))
     }
 
     /// The glyph's outline in the background layer, as a path.

@@ -587,6 +587,7 @@ const OPTIONAL_ROLES: &[&str] = &[
     "proofDarkBackground",
     "proofInk",
     "proofPencil",
+    "layerOutline",
     "headerActiveInk",
     "toolActiveInk",
     "toolInactiveInk",

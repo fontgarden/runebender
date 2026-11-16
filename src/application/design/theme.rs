@@ -579,6 +579,15 @@ impl Palette {
     }
 
     /// Proof type can have its own ink without recoloring outlines in the editing canvas.
+    /// Outlines of other layers and masters drawn behind the layer being edited:
+    /// `layerOutline`, else the reference color.
+    pub(crate) fn layer_outline(&self) -> Color {
+        self.roles
+            .get("layerOutline")
+            .copied()
+            .unwrap_or_else(|| self.role("reference"))
+    }
+
     /// Correction strokes drawn over a proof: `proofPencil`, else the theme's red mark.
     pub(crate) fn proof_pencil_ink(&self) -> Color {
         self.roles

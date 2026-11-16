@@ -31,10 +31,11 @@ pub(crate) fn overview(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
 }
 
 pub(crate) fn editor_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
-    let ghosts = Arc::new(
-        app.font
-            .reference_outlines(&app.session.glyph_name, &app.reference_layers),
-    );
+    let mut ghosts = app
+        .font
+        .reference_outlines(&app.session.glyph_name, &app.reference_layers);
+    ghosts.extend(app.visible_layer_outlines());
+    let ghosts = Arc::new(ghosts);
     let interp = if app.interpolation_is_active() {
         None
     } else {

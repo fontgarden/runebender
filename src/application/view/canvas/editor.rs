@@ -2236,13 +2236,13 @@ impl Widget for EditorWidget {
                 .draw();
         }
 
-        // Interpolation ghosts: the other masters' outlines, faint.
+        // Other layers and masters whose eye is on, as outlines behind the edited layer.
         for ghost in self.ghosts.iter() {
             painter
                 .stroke(
                     &(affine * (**ghost).clone()),
                     &Stroke::new(pal.stroke),
-                    pal.role("reference").with_alpha(0.55),
+                    pal.layer_outline(),
                 )
                 .draw();
         }
