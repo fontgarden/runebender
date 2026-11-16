@@ -132,7 +132,7 @@ syn = { version = "2.0.119", features = ["full", "visit"] }
 block = { git = "https://github.com/vaimeai/rust-block", rev = "b88ec0fad1ed2a675bef651e8e23d49b649ba0be" }
 
 [profile.release]
-lto = "thin"
+lto = "fat"
 codegen-units = 1
 # Symbol names are about 9 MB of the binary and are not used when the editor runs.
 strip = true
