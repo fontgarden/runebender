@@ -56,6 +56,8 @@ cargo run --locked -- path/to/Font.designspace
 ```
 
 Cargo builds when needed, then launches the editor with the supplied font.
+
+With a nightly toolchain installed, `make run FONT=path/to/Font.designspace` does the same with the compiler's parallel frontend.
 Use `cargo build --release --locked` for final release builds and performance comparisons.
 
 ## macOS application packages
