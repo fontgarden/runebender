@@ -110,6 +110,14 @@ pub(crate) enum AppAction {
     PreviousMaster,
     NextSampleString,
     PreviousSampleString,
+    /// Go to the next glyph with the purple mark, a draft the designer has not graded.
+    NextDraft,
+    PreviousDraft,
+    /// Give the open glyph a grade, then go to the next draft.
+    GradeRed,
+    GradeOrange,
+    GradeYellow,
+    GradeGreen,
     GridDots,
     GridLines,
     MeasureColorize,

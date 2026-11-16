@@ -1154,6 +1154,12 @@ impl Workspace {
                 self.preview_text = SAMPLE_STRINGS[self.sample_index].into();
                 self.note = format!("Sample: {}", self.preview_text);
             }
+            A::NextDraft => self.step_draft(true),
+            A::PreviousDraft => self.step_draft(false),
+            A::GradeRed => self.grade_draft("red"),
+            A::GradeOrange => self.grade_draft("orange"),
+            A::GradeYellow => self.grade_draft("yellow"),
+            A::GradeGreen => self.grade_draft("green"),
             A::MeasureColorize => self.view.colorize = !self.view.colorize,
             A::MeasureHandles => self.view.handles = !self.view.handles,
             A::MeasureSegments => self.view.segments = !self.view.segments,

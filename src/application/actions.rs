@@ -76,6 +76,7 @@ impl Entry {
                     | A::NextMaster
                     | A::ShowAllMasters
                     | A::NextSampleString
+                    | A::NextDraft
                     | A::GridDots
                     | A::MeasureColorize
                     | A::Theme(_)
@@ -199,6 +200,13 @@ impl Entry {
             A::Reinterpolate => app.selected.is_some() && app.font.master_count() > 1,
             A::NextMaster | A::PreviousMaster => app.font.master_count() > 1,
             A::ShowAllMasters | A::NextSampleString | A::PreviousSampleString => editor,
+            // The plain keys 1 to 4 and the brackets grade only on the proof page.
+            A::NextDraft
+            | A::PreviousDraft
+            | A::GradeRed
+            | A::GradeOrange
+            | A::GradeYellow
+            | A::GradeGreen => editor && app.proof_view,
             A::GraphSave => app.graph.open.is_some(),
             _ => true,
         }
@@ -447,6 +455,42 @@ pub(crate) const ACTIONS: &[Entry] = &[
         title: "Remove Image",
         accelerator: None,
         action: AppAction::RemoveImage,
+    },
+    Entry {
+        menu: "Glyph",
+        title: "Next Draft",
+        accelerator: Some("]"),
+        action: AppAction::NextDraft,
+    },
+    Entry {
+        menu: "Glyph",
+        title: "Previous Draft",
+        accelerator: Some("["),
+        action: AppAction::PreviousDraft,
+    },
+    Entry {
+        menu: "Glyph",
+        title: "Grade Red",
+        accelerator: Some("1"),
+        action: AppAction::GradeRed,
+    },
+    Entry {
+        menu: "Glyph",
+        title: "Grade Orange",
+        accelerator: Some("2"),
+        action: AppAction::GradeOrange,
+    },
+    Entry {
+        menu: "Glyph",
+        title: "Grade Yellow",
+        accelerator: Some("3"),
+        action: AppAction::GradeYellow,
+    },
+    Entry {
+        menu: "Glyph",
+        title: "Grade Green",
+        accelerator: Some("4"),
+        action: AppAction::GradeGreen,
     },
     Entry {
         menu: "Path",
@@ -1056,6 +1100,12 @@ mod tests {
                 "Place Image…",
                 "Import SVG…",
                 "Remove Image",
+                "Next Draft",
+                "Previous Draft",
+                "Grade Red",
+                "Grade Orange",
+                "Grade Yellow",
+                "Grade Green",
             ]
         );
 
@@ -1277,6 +1327,14 @@ mod platform {
                 | AppAction::Copy
                 | AppAction::Paste
                 | AppAction::SelectAll
+                // Digits and brackets are typed into fields, so a focused field
+                // gets them first.
+                | AppAction::NextDraft
+                | AppAction::PreviousDraft
+                | AppAction::GradeRed
+                | AppAction::GradeOrange
+                | AppAction::GradeYellow
+                | AppAction::GradeGreen
         ) {
             None
         } else {

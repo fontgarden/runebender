@@ -484,6 +484,12 @@ pub(crate) fn command_allowed(action: crate::application::widgets::shortcuts::Ap
             | A::PreviousMaster
             | A::NextSampleString
             | A::PreviousSampleString
+            | A::NextDraft
+            | A::PreviousDraft
+            | A::GradeRed
+            | A::GradeOrange
+            | A::GradeYellow
+            | A::GradeGreen
             | A::GridDots
             | A::GridLines
             | A::MeasureColorize
