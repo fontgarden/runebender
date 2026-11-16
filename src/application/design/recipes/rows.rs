@@ -147,6 +147,16 @@ pub(crate) enum Row {
         reason = "the vocabulary is closed: a row nothing uses yet is still part of it"
     )]
     Details { key: &'static str, rows: Vec<Self> },
+    /// One of many, in one row: the caption and the chosen name. Clicking the row opens the
+    /// list under it, and picking closes it again. For a choice too long to keep on screen.
+    Dropdown {
+        /// The collapse key that holds whether the list is open.
+        key: &'static str,
+        caption: String,
+        choices: Vec<String>,
+        chosen: Option<usize>,
+        on_pick: Pick,
+    },
     /// A value on a range, with its caption and current reading.
     Slider {
         caption: String,
@@ -304,6 +314,13 @@ fn row_view(app: &Workspace, row: Row) -> Box<AnyWidgetView<Workspace>> {
         .gap(Space::None)
         .boxed(),
         Row::Details { key, rows } => details(app, key, rows).boxed(),
+        Row::Dropdown {
+            key,
+            caption,
+            choices,
+            chosen,
+            on_pick,
+        } => dropdown(app, key, caption, choices, chosen, on_pick).boxed(),
         Row::Slider {
             caption,
             min,
@@ -549,6 +566,79 @@ fn details(
     rows: Vec<Row>,
 ) -> impl WidgetView<Workspace> + use<> {
     details_view(app, key, rows)
+}
+
+/// The closed row of a [`Row::Dropdown`] and, while it is open, its list of choices.
+fn dropdown(
+    app: &Workspace,
+    key: &'static str,
+    caption_text: String,
+    choices: Vec<String>,
+    chosen: Option<usize>,
+    on_pick: Pick,
+) -> impl WidgetView<Workspace> + use<> {
+    let pal = &app.palette;
+    // Like details, a dropdown starts closed, so the key's presence means open.
+    let open = app.collapsed.contains(key);
+    let style = ControlStyle::new(pal, ControlKind::Secondary);
+    let current = chosen
+        .and_then(|index| choices.get(index).cloned())
+        .unwrap_or_default();
+    let list = open.then(|| {
+        picker(
+            pal,
+            choices,
+            chosen,
+            Arc::new(move |app: &mut Workspace, index| {
+                app.collapsed.remove(key);
+                on_pick(app, index);
+            }),
+        )
+    });
+    column(
+        Region::List,
+        (
+            row(
+                Region::Inline,
+                (
+                    label(caption_text)
+                        .text_size(TextSize::Body.px())
+                        .color(pal.text_muted),
+                    sized_box(
+                        button(
+                            style,
+                            row(
+                                Region::Inline,
+                                (
+                                    label(current)
+                                        .text_size(TextSize::Body.px())
+                                        .color(style.ink()),
+                                    FlexSpacer::Flex(1.0),
+                                    marker(
+                                        if open { Marker::Open } else { Marker::Closed },
+                                        style.ink(),
+                                    ),
+                                ),
+                            ),
+                            move |app: &mut Workspace| {
+                                if !app.collapsed.remove(key) {
+                                    app.collapsed.insert(key);
+                                }
+                            },
+                        )
+                        .padding(Space::Md),
+                    )
+                    .dims(Dimensions::new(
+                        Dim::Stretch,
+                        Dim::from(ControlSize::Control),
+                    ))
+                    .flex(1.0),
+                ),
+            ),
+            list,
+        ),
+    )
+    .gap(Space::Sm)
 }
 
 /// The collapse key of a section's details: one leaked string per distinct

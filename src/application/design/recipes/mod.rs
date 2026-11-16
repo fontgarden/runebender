@@ -774,4 +774,6 @@ where
 }
 
 pub(crate) mod rows;
-pub(crate) use rows::{Group, Row, Tile, chip, click, picker, section_of, section_with_details};
+pub(crate) use rows::{
+    Group, Row, Tile, body_of, chip, click, picker, section_of, section_with_details,
+};

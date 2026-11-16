@@ -357,6 +357,8 @@ pub(crate) struct Workspace {
     pub(crate) proof_samples: crate::application::platform::proof_samples::ProofSamples,
     /// The key of the sample of the Proof section; `None` is the first sample of the glyph.
     pub(crate) panel_sample: Option<String>,
+    /// The em size of the Proof section's sample, in pixels.
+    pub(crate) panel_proof_size: f64,
     /// What the proof strip shows for a neural source: the outline, or the labeled pieces.
     pub(crate) preview_view: crate::application::pieces::PreviewView,
     /// The labeled pieces of every sample, for the piece view.

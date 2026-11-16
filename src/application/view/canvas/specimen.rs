@@ -355,15 +355,17 @@ fn shape_line(inputs: &text_tool::TextInputs, text: &str) -> Option<Run> {
     })
 }
 
-/// Below this em size in the panel, a sample is set on two lines.
-const LIVE_SINGLE_LINE_MIN_EM: f64 = 28.0;
-/// The largest em size of the Proof section.
-const LIVE_MAX_EM: f64 = 64.0;
+/// The most lines the live proof sets; later words are left out.
+const LIVE_MAX_LINES: usize = 8;
+/// The live proof's em size range and default, in pixels.
+pub(crate) const LIVE_EM_RANGE: (f64, f64) = (16.0, 120.0);
+/// The size a proof starts at.
+pub(crate) const LIVE_EM_DEFAULT: f64 = 40.0;
 
 /// `text` shaped from the live outline of the open glyph, for the Proof section of the editor
-/// panel: one line, or two when one line would be smaller than [`LIVE_SINGLE_LINE_MIN_EM`].
+/// panel, set at `size` pixels of em and wrapped at spaces to the panel's width.
 /// The shaping options of the Shaping section apply. `None` when nothing has ink or advance.
-pub(crate) fn live_block(app: &Workspace, text: &str) -> Option<(Block, f64, f64)> {
+pub(crate) fn live_block(app: &Workspace, text: &str, size: f64) -> Option<(Block, f64, f64)> {
     let inputs = text_tool::TextInputs::new(&app.font)
         .with_location(&app.font, &app.axis_values)
         .with_shaping_options(
@@ -383,40 +385,46 @@ pub(crate) fn live_block(app: &Workspace, text: &str) -> Option<(Block, f64, f64
     let descender = app.font.descender();
     let em = (ascender - descender).max(1.0);
     let measure = design::DOCK_WIDTH - 2.0 * design::PANEL_SECTION_INSET.px();
-    let one = shape_line(&inputs, text.trim())?;
-    let mut lines = vec![one];
-    if measure / lines[0].width * em < LIVE_SINGLE_LINE_MIN_EM
-        && let Some((first, second)) = split_in_two(text.trim())
-        && let (Some(first), Some(second)) =
-            (shape_line(&inputs, first), shape_line(&inputs, second))
-    {
-        lines = vec![first, second];
+    // Words fill each line at `size` pixels of em; a word wider than the panel has its own
+    // line and makes every line smaller.
+    let fits = |run: &Run| run.width * size / em <= measure;
+    let mut lines: Vec<Run> = Vec::new();
+    let mut line = String::new();
+    let mut shaped: Option<Run> = None;
+    for word in text.split_whitespace() {
+        let candidate = if line.is_empty() {
+            word.to_owned()
+        } else {
+            format!("{line} {word}")
+        };
+        let run = shape_line(&inputs, &candidate);
+        if line.is_empty() || run.as_ref().is_some_and(&fits) {
+            (line, shaped) = (candidate, run);
+        } else {
+            lines.extend(shaped.take());
+            shaped = shape_line(&inputs, word);
+            line = word.to_owned();
+        }
+        if lines.len() >= LIVE_MAX_LINES {
+            break;
+        }
+    }
+    if lines.len() < LIVE_MAX_LINES {
+        lines.extend(shaped);
+    }
+    if lines.is_empty() {
+        return None;
     }
     Some((
         Block {
             key: "Proof",
             caption: String::new(),
             lines,
-            setting: Setting::Even {
-                max_em: LIVE_MAX_EM,
-            },
+            setting: Setting::Even { max_em: size },
         },
         ascender,
         descender,
     ))
-}
-
-/// Split `text` at the space nearest to its middle, by characters.
-fn split_in_two(text: &str) -> Option<(&str, &str)> {
-    let middle = text.chars().count() / 2;
-    let (at, _) = text
-        .char_indices()
-        .enumerate()
-        .filter(|(_, (_, c))| *c == ' ')
-        .min_by_key(|(index, _)| index.abs_diff(middle))
-        .map(|(_, at)| at)?;
-    let (first, second) = (text[..at].trim(), text[at..].trim());
-    (!first.is_empty() && !second.is_empty()).then_some((first, second))
 }
 
 /// The smallest waterfall line, in pixels of em.
@@ -603,7 +611,7 @@ mod tests {
         use masonry::kurbo::Shape as _;
         let mut app = workspace_for_layout();
         let top = |app: &Workspace| {
-            let (block, _, _) = live_block(app, "A A").expect("A has ink");
+            let (block, _, _) = live_block(app, "A A", LIVE_EM_DEFAULT).expect("A has ink");
             block.lines[0]
                 .paths
                 .iter()
@@ -619,13 +627,24 @@ mod tests {
     }
 
     #[test]
-    fn a_long_sample_splits_at_the_space_nearest_the_middle() {
-        assert_eq!(split_in_two("aa bb cc dd"), Some(("aa bb", "cc dd")));
-        assert_eq!(
-            split_in_two("בבב הבה ובו נבנ"),
-            Some(("בבב הבה", "ובו נבנ"))
+    fn the_panel_proof_wraps_into_more_lines_as_its_size_grows() {
+        use crate::application::view::render::panel_resize_tests_support::workspace_for_layout;
+        let app = workspace_for_layout();
+        let lines = |size: f64| {
+            live_block(&app, "A A A A A A A A A A A A", size)
+                .expect("A has ink")
+                .0
+                .lines
+                .len()
+        };
+        let (small, large) = (lines(LIVE_EM_RANGE.0), lines(LIVE_EM_RANGE.1));
+        assert!(
+            small >= 1 && large > small,
+            "{small} lines small, {large} lines large"
         );
-        assert_eq!(split_in_two("Hamburgefontsiv"), None);
+        assert!(large <= LIVE_MAX_LINES);
+        // One word wider than the panel still sets, on a line of its own.
+        assert_eq!(lines(4000.0), LIVE_MAX_LINES);
     }
 
     #[test]

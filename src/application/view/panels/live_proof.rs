@@ -21,7 +21,7 @@ pub(crate) fn section(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     let mut rows = Vec::new();
     if let Some(sample) = shown {
         let text = app.proof_sample_text(sample);
-        match specimen::live_block(app, &text) {
+        match specimen::live_block(app, &text, app.panel_proof_size) {
             Some((block, ascender, descender)) => rows.push(Row::Specimen {
                 block,
                 ascender,
@@ -34,26 +34,37 @@ pub(crate) fn section(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
             rows.push(Row::Meta(format!("Not in the font: {missing}")));
         }
     }
-    let mut groups = vec![Group::new("", rows)];
+    // The controls come first, so they stay in place while the sample's height changes.
+    let mut controls = Vec::new();
     if samples.len() > 1 {
         let keys: Vec<String> = samples.iter().map(|sample| sample.key.clone()).collect();
-        groups.push(Group::new(
-            "Sample",
-            vec![Row::Chips {
-                items: samples.iter().map(|sample| sample.label.clone()).collect(),
-                chosen: shown.and_then(|shown| keys.iter().position(|key| *key == shown.key)),
-                on_pick: Arc::new(move |app: &mut Workspace, index| {
-                    if let Some(key) = keys.get(index) {
-                        app.panel_sample = Some(key.clone());
-                    }
-                }),
-            }],
-        ));
+        controls.push(Row::Dropdown {
+            key: "Proof sample list",
+            caption: "Sample".into(),
+            choices: samples.iter().map(|sample| sample.label.clone()).collect(),
+            chosen: shown.and_then(|shown| keys.iter().position(|key| *key == shown.key)),
+            on_pick: Arc::new(move |app: &mut Workspace, index| {
+                if let Some(key) = keys.get(index) {
+                    app.panel_sample = Some(key.clone());
+                }
+            }),
+        });
     }
+    let (min, max) = specimen::LIVE_EM_RANGE;
+    controls.push(Row::Slider {
+        caption: "Size".into(),
+        min,
+        max,
+        value: app.panel_proof_size,
+        on_change: Arc::new(|app: &mut Workspace, size| app.panel_proof_size = size),
+    });
+    controls.extend(rows);
+    let mut groups = vec![Group::new("", controls)];
     if let Some(error) = &app.proof_samples.error {
         groups.push(Group::new("", vec![Row::Prose(error.clone())]));
     }
-    recipes::section_of(app, KEY, KEY, groups)
+    // The inspector frames each section itself, so this is the plain folding section.
+    recipes::section(app, KEY, KEY, recipes::body_of(app, groups))
 }
 
 /// The characters of `text` that no glyph of the font has, at most eight, as `U+05B8` codes.

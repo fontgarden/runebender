@@ -38,6 +38,7 @@ Captions and titles are title case, never all caps. Nothing in the view uppercas
 | `Field` | Caption over an input | A value you type |
 | `Picker` | The current choice with a chevron | One of several models or files; never a stack of toggles |
 | `Chips` | Small outlined pills over as many lines as needed | A set of words or tags |
+| `Dropdown` | A caption and the chosen name in one row; the list opens under it and closes on a pick | One of many, where the list is too long to keep on screen |
 | `Choice` | Segmented control | Two or three exclusive options |
 | `Primary` | Filled button, full width | The one thing the section is for |
 | `Secondary` | Outlined button, full width | The other way to do it |
