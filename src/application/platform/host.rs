@@ -588,6 +588,23 @@ impl Workspace {
         if let Some(file) = std::env::var_os("RUNEBENDER_NODES").filter(|f| !f.is_empty()) {
             app.open_graph_file(FsPath::new(&file));
         }
+        // RUNEBENDER_SHOW_LAYERS=1 turns on the eye of every layer of the open glyph, and
+        // RUNEBENDER_LAYER=<name> edits that layer of it.
+        if std::env::var_os("RUNEBENDER_SHOW_LAYERS").is_some() {
+            for row in app.glyph_layer_rows() {
+                if !row.visible {
+                    app.toggle_glyph_layer_visible(&row.layer);
+                }
+            }
+        }
+        if let Ok(name) = std::env::var("RUNEBENDER_LAYER")
+            && let Some(row) = app
+                .glyph_layer_rows()
+                .into_iter()
+                .find(|row| row.name == name)
+        {
+            app.edit_glyph_layer(&row.layer);
+        }
         if std::env::var("RUNEBENDER_MODE").as_deref() == Ok("graph") {
             app.enter_graph_mode();
         }

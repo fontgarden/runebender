@@ -169,10 +169,52 @@ impl Workspace {
         self.park();
         if master {
             self.font.edit_layers.remove(&glyph);
+            self.layer_name_buf.clear();
         } else {
             self.font.edit_layers.insert(glyph, layer.clone());
+            self.layer_name_buf.clone_from(&layer.name);
         }
         self.refresh_source_views();
+    }
+
+    /// Rename the backup layer being edited to the name typed in the Layers panel.
+    pub(crate) fn rename_glyph_layer(&mut self, name: &str) {
+        let glyph = self.session.glyph_name.clone();
+        let Some(layer) = self
+            .font
+            .active_layer_address(&glyph)
+            .map(|address| address.layer)
+        else {
+            return;
+        };
+        let name = name.trim();
+        if name == layer.name {
+            return;
+        }
+        self.park();
+        match self.font.project.rename_glyph_layer(&glyph, &layer, name) {
+            Ok(renamed) => {
+                let old = GlyphLayerAddress {
+                    glyph: glyph.clone(),
+                    layer,
+                };
+                let new = GlyphLayerAddress {
+                    glyph: glyph.clone(),
+                    layer: renamed.clone(),
+                };
+                if self.visible_layers.remove(&old) {
+                    self.visible_layers.insert(new);
+                }
+                self.font.edit_layers.insert(glyph.clone(), renamed.clone());
+                self.layer_name_buf.clone_from(&renamed.name);
+                // The renamed layer starts a new edit history, at depth 0.
+                self.record_layer_structure(&glyph, "layer rename", 0);
+                self.refresh_source_views();
+                self.modified = true;
+                self.note = format!("Renamed the layer to {}", renamed.name);
+            }
+            Err(error) => self.note = error,
+        }
     }
 
     /// Show or hide a layer of the open glyph behind the layer being edited.
@@ -502,6 +544,44 @@ mod layer_tests {
             "the empty layer folder is removed"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_backup_layer_is_renamed_with_its_drawing_and_eye_and_undo_restores_the_name() {
+        use crate::application::widgets::shortcuts::AppAction;
+        let root = std::env::temp_dir().join(format!(
+            "runebender-layer-rename-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut app = workspace(&root);
+        app.duplicate_glyph_layer();
+        let backup = app.glyph_layer_rows()[1].layer.clone();
+        app.edit_glyph_layer(&backup);
+        assert_eq!(app.layer_name_buf, backup.name);
+
+        app.rename_glyph_layer("  Narrow sketch ");
+        let rows = app.glyph_layer_rows();
+        assert_eq!(rows.len(), 2, "{}", app.note);
+        assert_eq!(rows[1].name, "Narrow sketch");
+        assert!(
+            rows[1].editing && rows[1].visible,
+            "the choice and the eye follow the name"
+        );
+        assert_eq!(app.session.current_layer().unwrap().contours().count(), 1);
+
+        // Undo restores the old name.
+        app.dispatch(AppAction::Undo);
+        let names: Vec<_> = app
+            .glyph_layer_rows()
+            .into_iter()
+            .map(|row| row.name)
+            .collect();
+        assert!(names.contains(&backup.name), "{names:?}: {}", app.note);
+        assert!(!names.contains(&"Narrow sketch".to_owned()));
     }
 
     #[test]

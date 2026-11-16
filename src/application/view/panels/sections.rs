@@ -54,18 +54,18 @@ pub(crate) fn layers_section(app: &Workspace) -> Option<impl WidgetView<Workspac
         if index == active {
             continue;
         }
-        let toggle = move |app: &mut Workspace| {
-            if !app.reference_layers.remove(&index) {
-                app.reference_layers.insert(index);
-            }
-        };
+        // Another master: its eye shows it behind the edited layer, its name switches to it.
         rows.push(layer_row(
             pal,
             name,
             false,
             app.reference_layers.contains(&index),
-            Box::new(toggle),
-            Box::new(toggle),
+            Box::new(move |app| {
+                if !app.reference_layers.remove(&index) {
+                    app.reference_layers.insert(index);
+                }
+            }),
+            Box::new(move |app| app.set_master(index)),
         ));
     }
     let backup = editor && app.editing_backup_layer();
@@ -81,13 +81,7 @@ pub(crate) fn layers_section(app: &Workspace) -> Option<impl WidgetView<Workspac
                 )
                 .icon_size(design::STATUS_ICON_SIZE)
                 .tile_size(design::STATUS_ICON_SIZE),
-                // Only a backup layer can replace the master or be deleted.
-                backup.then(|| {
-                    recipes::action(pal, "Use as master".into(), |app: &mut Workspace| {
-                        app.use_glyph_layer_as_master();
-                    })
-                }),
-                FlexSpacer::Flex(1.0),
+                // Only a backup layer can be deleted or replace the master.
                 backup.then(|| {
                     icon_button::icon_button(
                         ControlStyle::new(pal, ControlKind::Bare),
@@ -98,14 +92,30 @@ pub(crate) fn layers_section(app: &Workspace) -> Option<impl WidgetView<Workspac
                     .icon_size(design::STATUS_ICON_SIZE)
                     .tile_size(design::STATUS_ICON_SIZE)
                 }),
+                FlexSpacer::Flex(1.0),
+                backup.then(|| {
+                    recipes::action(pal, "Use as master".into(), |app: &mut Workspace| {
+                        app.use_glyph_layer_as_master();
+                    })
+                }),
             ),
+        )
+    });
+    // The edited backup layer's name; Enter renames it.
+    let rename = backup.then(|| {
+        recipes::field_bare(
+            pal,
+            "Layer name",
+            app.layer_name_buf.clone(),
+            |app: &mut Workspace, value| app.layer_name_buf = value,
+            |app: &mut Workspace, value| app.rename_glyph_layer(&value),
         )
     });
     Some(recipes::section(
         app,
         "Layers",
         "Layers",
-        xcolumn(Region::List, (xcolumn(Region::List, rows), footer)),
+        xcolumn(Region::List, (xcolumn(Region::List, rows), rename, footer)),
     ))
 }
 
@@ -121,19 +131,19 @@ fn layer_row(
     on_name: LayerClick,
 ) -> Box<xilem::AnyWidgetView<Workspace>> {
     let style = ControlStyle::new(pal, ControlKind::Row).selected(pal, editing);
-    sized_box(
-        xrow(
-            Region::Inline,
-            (
-                icon_button::icon_button(
-                    ControlStyle::new(pal, ControlKind::Bare),
-                    if visible { "eye-open" } else { "eye-closed" },
-                    "Show this layer behind the edited layer",
-                    move |app: &mut Workspace| on_eye(app),
-                )
-                .icon_size(design::STATUS_ICON_SIZE)
-                .tile_size(design::STATUS_ICON_SIZE),
-                sized_box(button(
+    sized_box(xrow(
+        Region::Inline,
+        (
+            icon_button::icon_button(
+                ControlStyle::new(pal, ControlKind::Bare),
+                if visible { "eye-open" } else { "eye-closed" },
+                "Show this layer behind the edited layer",
+                move |app: &mut Workspace| on_eye(app),
+            )
+            .icon_size(design::STATUS_ICON_SIZE)
+            .tile_size(design::STATUS_ICON_SIZE),
+            sized_box(
+                button(
                     style,
                     // A row keeps its name at the left edge, as sidebar rows do.
                     xrow(
@@ -146,18 +156,19 @@ fn layer_row(
                         ),
                     ),
                     move |app: &mut Workspace| on_name(app),
-                ))
-                .dims(Dimensions::new(
-                    Dim::Stretch,
-                    Dim::from(ControlSize::Control),
-                ))
-                .flex(1.0),
-            ),
-        )
-        .padding(masonry::properties::Padding::horizontal(Length::px(
-            design::SIDEBAR_ROW_INSET,
-        ))),
-    )
+                )
+                // The name sits inside the row's face, not against its edge.
+                .padding(masonry::properties::Padding::horizontal(Length::px(
+                    design::SIDEBAR_ROW_INSET,
+                ))),
+            )
+            .dims(Dimensions::new(
+                Dim::Stretch,
+                Dim::from(ControlSize::Control),
+            ))
+            .flex(1.0),
+        ),
+    ))
     .dims(Dimensions::new(
         Dim::Stretch,
         Dim::from(ControlSize::Control),

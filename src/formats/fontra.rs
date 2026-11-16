@@ -11,6 +11,7 @@
 //!
 //! Read: continuous axes and their mappings, full font sources, outlines, components, anchors,
 //! advance widths, kerning groups and values, and feature text.
+//! A source's sub-layers (`<layer>^<name>`) are read and written as UFO layers named `<name>`.
 //! Not read: sparse sources, glyph layers between sources, glyph axes and component locations.
 //! They stay in the folder on write-back and are reported as warnings when the folder opens.
 //! The folder layout follows Fontra's own backend, `fontra/backends/fontra.py`.
@@ -640,6 +641,14 @@ fn decompose(transform: norad::AffineTransform) -> Value {
 }
 
 /// A Fontra static glyph as a UFO glyph.
+/// The name of a sub-layer of the source layer `layer`: Fontra stores a source's extra layers
+/// under `<layer>^<name>`.
+fn sub_layer_name<'a>(key: &'a str, layer: &str) -> Option<&'a str> {
+    key.strip_prefix(layer)?
+        .strip_prefix('^')
+        .filter(|name| !name.is_empty())
+}
+
 fn read_layer(
     name: &str,
     glyph: &Value,
@@ -1072,7 +1081,6 @@ pub fn to_ufo_files(folder: &Path) -> Result<ConversionResult, String> {
             let mut ufo = norad::Font::new();
             fill_font_info(&mut ufo.font_info, &font, source, &family)?;
             ufo.features.clone_from(&features);
-            let layer = ufo.default_layer_mut();
             let mut imported = Vec::new();
             for name in &order {
                 let Some((_, glyph)) = glyph_files.get(*name) else {
@@ -1084,8 +1092,29 @@ pub fn to_ufo_files(folder: &Path) -> Result<ConversionResult, String> {
                 matched_layers.insert((name.to_string(), layer_name.to_owned()));
                 let static_glyph = &glyph["layers"][layer_name]["glyph"];
                 let codepoints = codepoints.get(name).copied().unwrap_or_default();
-                layer.insert_glyph(read_layer(name, static_glyph, codepoints, &mut warnings)?);
+                ufo.default_layer_mut().insert_glyph(read_layer(
+                    name,
+                    static_glyph,
+                    codepoints,
+                    &mut warnings,
+                )?);
                 imported.push(*name);
+                // The source's sub-layers, `<layer>^<name>`, become UFO layers named `<name>`.
+                for (key, sub_layer) in glyph["layers"].as_object().into_iter().flatten() {
+                    let Some(sub_name) = sub_layer_name(key, layer_name) else {
+                        continue;
+                    };
+                    let drawing = read_layer(name, &sub_layer["glyph"], &[], &mut warnings)?;
+                    let target = match ufo.layers.get_mut(sub_name) {
+                        Some(target) => target,
+                        None => ufo
+                            .layers
+                            .new_layer(sub_name)
+                            .map_err(|error| format!("layer {sub_name}: {error}"))?,
+                    };
+                    target.insert_glyph(drawing);
+                    matched_layers.insert((name.to_string(), key.clone()));
+                }
             }
             super::metadata::lib_keys::write_foreign_glyphs(
                 &mut ufo.lib,
@@ -1166,7 +1195,7 @@ pub fn to_ufo_files(folder: &Path) -> Result<ConversionResult, String> {
             .count();
         if skipped > 0 {
             warnings.push(format!(
-                "{skipped} glyph layers between sources or in the background are not read"
+                "{skipped} glyph layers between sources are not read"
             ));
         }
         if !font.axes.is_empty() || document.sources.len() > 1 {
@@ -1493,6 +1522,53 @@ pub fn write_back(original: &Path, sources: &[WorkingSource], stage: &Path) -> R
             let target = layer["glyph"].as_object_mut().expect("glyph is an object");
             for (key, value) in write_layer(edited) {
                 target.insert(key, value);
+            }
+        }
+        // The UFO's extra layers go back as the source's sub-layers, `<layer>^<name>`.
+        for (source, working) in &font_sources {
+            let Some(layer_name) = font.layer_for(&glyph, source).map(str::to_owned) else {
+                continue;
+            };
+            let default_name = working.font.default_layer().name().to_string();
+            let mut kept = std::collections::HashSet::new();
+            for ufo_layer in working.font.layers.iter() {
+                let sub_name = ufo_layer.name().to_string();
+                if sub_name == default_name || sub_name.starts_with("com.runebender.proposal.") {
+                    continue;
+                }
+                let Some(edited) = ufo_layer.get_glyph(name) else {
+                    continue;
+                };
+                let key = format!("{layer_name}^{sub_name}");
+                kept.insert(key.clone());
+                let current = &glyph["layers"][&key]["glyph"];
+                let unchanged = !current.is_null()
+                    && read_layer(name, current, &[], &mut ignored)
+                        .is_ok_and(|current| same_drawing(&current, edited));
+                if unchanged {
+                    continue;
+                }
+                if !glyph["layers"].is_object() {
+                    glyph["layers"] = json!({});
+                }
+                let layer = glyph["layers"]
+                    .as_object_mut()
+                    .expect("layers is an object")
+                    .entry(key)
+                    .or_insert_with(|| json!({"glyph": {}}));
+                if !layer["glyph"].is_object() {
+                    layer["glyph"] = json!({});
+                }
+                let target = layer["glyph"].as_object_mut().expect("glyph is an object");
+                for (key, value) in write_layer(edited) {
+                    target.insert(key, value);
+                }
+            }
+            // A sub-layer the UFO no longer has was deleted.
+            if let Some(layers) = glyph["layers"].as_object_mut() {
+                layers.retain(|key, _| {
+                    sub_layer_name(key, &layer_name).is_none() || kept.contains(key)
+                });
             }
         }
         if glyph != before {
@@ -1837,6 +1913,71 @@ mod tests {
         assert_eq!(component.transform.x_offset, 10.0);
         assert_eq!(light.kerning["public.kern1.A"]["A"], -10.0);
         assert!(!regular.kerning.contains_key("public.kern1.A"));
+        let _ = std::fs::remove_dir_all(folder.parent().unwrap());
+    }
+
+    #[test]
+    fn a_source_sub_layer_opens_as_a_ufo_layer_and_saves_back_edited_added_and_deleted() {
+        let folder = fixture("sublayers");
+        let path = folder.join("glyphs/A^1.json");
+        let mut a = read_json(&path).unwrap();
+        let mut sketch = a["layers"]["bold"].clone();
+        sketch["glyph"]["xAdvance"] = 700.into();
+        a["layers"]["bold^Sketch"] = sketch;
+        write_text(&path, &fontra_json(&a)).unwrap();
+
+        let result = to_ufo_files(&folder).unwrap();
+        assert!(
+            !result
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("between sources")),
+            "{:?}",
+            result.warnings
+        );
+        let mut sources = load(&result, &folder.with_file_name("out"));
+        let bold = &mut sources[2].font;
+        assert_eq!(
+            bold.layers
+                .get("Sketch")
+                .unwrap()
+                .get_glyph("A")
+                .unwrap()
+                .width,
+            700.0
+        );
+        assert_eq!(bold.default_layer().get_glyph("A").unwrap().width, 600.0);
+
+        // Edit the sub-layer and add another, as the Layers panel does.
+        let mut edited = bold
+            .layers
+            .get("Sketch")
+            .unwrap()
+            .get_glyph("A")
+            .unwrap()
+            .clone();
+        edited.width = 720.0;
+        bold.layers
+            .get_mut("Sketch")
+            .unwrap()
+            .insert_glyph(edited.clone());
+        edited.width = 800.0;
+        bold.layers.new_layer("Wide").unwrap().insert_glyph(edited);
+        let stage = folder.with_file_name("Saved.fontra");
+        write_back(&folder, &sources, &stage).unwrap();
+        let saved = read_json(&stage.join("glyphs/A^1.json")).unwrap();
+        assert_eq!(saved["layers"]["bold^Sketch"]["glyph"]["xAdvance"], 720);
+        assert_eq!(saved["layers"]["bold^Wide"]["glyph"]["xAdvance"], 800);
+        assert_eq!(saved["layers"]["bold"]["glyph"]["xAdvance"], 600);
+
+        // Deleting the UFO layer deletes the sub-layer, and only that.
+        sources[2].font.layers.remove("Sketch");
+        let again = folder.with_file_name("Again.fontra");
+        write_back(&stage, &sources, &again).unwrap();
+        let saved = read_json(&again.join("glyphs/A^1.json")).unwrap();
+        assert!(saved["layers"].get("bold^Sketch").is_none());
+        assert_eq!(saved["layers"]["bold^Wide"]["glyph"]["xAdvance"], 800);
+        assert_eq!(saved["layers"]["light"]["glyph"]["xAdvance"], 500);
         let _ = std::fs::remove_dir_all(folder.parent().unwrap());
     }
 

@@ -574,15 +574,28 @@ impl FontModel {
         layers
     }
 
-    /// One layer's own contours as a path, for drawing it behind the layer being edited.
+    /// One layer's contours and components as a path, for drawing it behind the edited layer.
     pub(crate) fn layer_outline(
         &self,
         glyph: &str,
         layer: &runebender::font::variable::LayerId,
     ) -> Option<Arc<BezPath>> {
-        self.project
-            .document_layer(glyph, layer)
-            .map(|view| Arc::new(glyph_paths::ordinary_layer_contours_to_bezpath(view)))
+        let view = self.project.document_layer(glyph, layer)?;
+        let mut path = glyph_paths::ordinary_layer_contours_to_bezpath(view);
+        // The layer's components, resolved in this layer's source, as part of its outline.
+        let address = runebender::font::variable::GlyphLayerAddress {
+            glyph: glyph.to_owned(),
+            layer: layer.clone(),
+        };
+        if let Ok(components) = crate::application::editor::session::resolved_document_components(
+            &self.project,
+            &address,
+        ) {
+            for component in &components {
+                path.extend(component.path.iter());
+            }
+        }
+        Some(Arc::new(path))
     }
 
     /// The glyph's outline in the background layer, as a path.

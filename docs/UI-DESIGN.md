@@ -248,6 +248,8 @@ These variables control what the frame shows:
 | `RUNEBENDER_COMPONENT=<n>` | Open the open glyph's component at index `n` in place, inside its composite. |
 | `RUNEBENDER_AXIS=wght=500,wdth=80` | Set the design-space location. |
 | `RUNEBENDER_MASTER=<name>` | Make this master active, by its style name. |
+| `RUNEBENDER_SHOW_LAYERS=1` | Turn on the eye of every layer of the open glyph. |
+| `RUNEBENDER_LAYER=<name>` | Edit this layer of the open glyph, by its name in the Layers panel. |
 
 The code in `src/application/launch.rs` and `src/application/platform/host.rs` reads these variables.
 Search for `RUNEBENDER_` in `src` to find more specialized ones.

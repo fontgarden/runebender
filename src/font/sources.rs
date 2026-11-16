@@ -824,6 +824,52 @@ impl Project {
         Ok(())
     }
 
+    /// Rename one glyph's auxiliary layer, as one undoable source change. The glyph's layer
+    /// moves to the layer named `name`, which is created when the source lacks it, and the old
+    /// layer's container is removed when no other glyph uses it. The layer's own edit history
+    /// does not move with it. The default layer and an existing target are rejected.
+    pub fn rename_glyph_layer(
+        &mut self,
+        glyph: &str,
+        id: &LayerId,
+        name: &str,
+    ) -> Result<LayerId, String> {
+        let index = self.source_index(id.source).ok_or("unknown source")?;
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("a layer needs a name".into());
+        }
+        if self.variable.default_layer_name(id.source) == Some(id.name.as_str()) {
+            return Err("a master layer takes its name from its master".into());
+        }
+        if self.document_layer(glyph, id).is_none() {
+            return Err("missing glyph layer".into());
+        }
+        let target = LayerId {
+            source: id.source,
+            name: name.into(),
+        };
+        if self.document_layer(glyph, &target).is_some() {
+            return Err("the glyph already has a layer with that name".into());
+        }
+        let before = SourceFrame::capture(self);
+        self.variable.ensure_layer_container(&target)?;
+        assert!(
+            self.variable.copy_layer(glyph, id, &target),
+            "validated source layer must remain copyable"
+        );
+        assert!(
+            self.variable.remove_layer(glyph, id),
+            "validated canonical layer must remain removable"
+        );
+        if !self.variable.has_layer(id) && self.variable.source_contains_layer(id) {
+            self.variable.remove_empty_layer_container(id);
+        }
+        self.sources[index].dirty = true;
+        self.record_source_change(before);
+        Ok(target)
+    }
+
     /// Delete one glyph's auxiliary layer and, when no other glyph uses that layer, its
     /// container, as one undoable source change. The default layer is rejected.
     pub fn delete_glyph_layer(&mut self, glyph: &str, id: &LayerId) -> Result<(), String> {
