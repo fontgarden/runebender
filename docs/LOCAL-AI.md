@@ -263,7 +263,7 @@ Source: `src/automation/context.rs`. A later layer wins.
 
 1. Default: `assets/context/type-design.context.md` and `assets/context/font-engineering.context.md`.
 2. Personal: `*.context.md` in `~/.config/runebender/context/` and `RUNEBENDER_CONTEXT_PATH`.
-3. Font: `context.md` or `*.context.md` beside the font, up to the repository root.
+3. Font: `CONTEXT.md` (or `context.md`) or `*.context.md` beside the font, up to the repository root.
 
 The `design_context` tool and the Chat prompt read these files.
 

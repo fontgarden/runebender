@@ -9,6 +9,7 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
 
 ### Added
 
+- A font's own context file can be named `CONTEXT.md`: the plain name `context.md` is read in any case.
 - Thickness overlay in the Curves section: the local thickness field of the ink (Hildebrand and Rüegsegger), filled as a smooth gradient on the warm end of the theme's mark ramp around the glyph's median thickness.
   `RUNEBENDER_VIEW=thickness` turns it on in a headless capture.
 
