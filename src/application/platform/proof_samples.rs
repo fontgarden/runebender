@@ -4,7 +4,7 @@
 //! Read the proof samples of the project of the open font, and read them again when they change.
 //!
 //! The file is `sources/proof-samples.toml` at the project root that `reference-fonts/` uses,
-//! or `proof-samples.toml` next to the font, as the web proof of fontgarden-tools reads it.
+//! or `proof-samples.toml` next to the font, as the web proof of fgtools reads it.
 
 use super::reference_fonts::project_root;
 use runebender::text::proof_samples::{self, ProofSample};

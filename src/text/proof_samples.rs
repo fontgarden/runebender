@@ -4,7 +4,7 @@
 //! Proof samples: short texts that show a glyph in the context of its script.
 //!
 //! The format is the `sample` tables of `sources/proof-samples.toml` in a Font.Garden project,
-//! which the web proof of fontgarden-tools also reads.
+//! which the web proof of fgtools also reads.
 //! Runebender ships its own defaults in `assets/data/proof-samples.toml`.
 //! A project file adds samples, replaces a default sample with the same key, and with
 //! `defaults = false` removes the defaults.

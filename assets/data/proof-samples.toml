@@ -1,7 +1,7 @@
 # The default text samples of the Runebender proof view and the Proof section.
 #
 # The `sample` tables use the format of `sources/proof-samples.toml` in a Font.Garden project,
-# which the web proof of fontgarden-tools also reads.
+# which the web proof of fgtools also reads.
 # The texts of the word, joining and mark samples are the default samples of that web proof.
 # A project file adds samples, replaces a sample with the same key, or removes these defaults
 # with `defaults = false`.
