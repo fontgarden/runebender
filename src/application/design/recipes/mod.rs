@@ -209,6 +209,58 @@ where
     panel_group(&app.palette, section(app, key, title, body))
 }
 
+/// A folding section of list rows, for the left panel's categories, scripts and filters.
+///
+/// The row faces reach [`SIDEBAR_ROW_INSET`](crate::application::design::SIDEBAR_ROW_INSET)
+/// past the panel's content column on both sides.
+/// The header's marker and title, and every row's marker, name and count, stay on that column,
+/// so no row is indented under its header.
+pub(crate) fn list_section<V>(
+    app: &Workspace,
+    key: &'static str,
+    title: &str,
+    rows: Vec<V>,
+) -> impl WidgetView<Workspace> + use<V>
+where
+    V: WidgetView<Workspace> + 'static,
+{
+    use crate::application::design::{PANEL_SECTION_INSET, SIDEBAR_ROW_INSET};
+    let pal = &app.palette;
+    let open = !app.collapsed.contains(key);
+    let header = sized_box(section_toggle_height(
+        pal,
+        title,
+        open,
+        ControlSize::Row.px(),
+        move |app: &mut Workspace| {
+            if !app.collapsed.remove(key) {
+                app.collapsed.insert(key);
+            }
+        },
+    ))
+    .padding(masonry::properties::Padding::horizontal(Length::px(
+        SIDEBAR_ROW_INSET,
+    )));
+    column(
+        Region::List,
+        (
+            sized_box(
+                column(
+                    Region::Section,
+                    (header, open.then(|| column(Region::List, rows))),
+                )
+                .gap(crate::application::design::PANEL_SECTION_BODY_GAP),
+            )
+            .padding(masonry::properties::Padding::from_vh(
+                PANEL_SECTION_INSET.length(),
+                Length::px(PANEL_SECTION_INSET.px() - SIDEBAR_ROW_INSET),
+            )),
+            hairline(pal),
+        ),
+    )
+    .gap(Space::None)
+}
+
 /// A read-only label/value row: name left, value right, one row tall.
 pub(crate) fn kv(pal: &Palette, name: String, value: String) -> impl WidgetView<Workspace> + use<> {
     let (muted, text) = (pal.text_muted, pal.text);

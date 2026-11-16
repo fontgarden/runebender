@@ -237,7 +237,7 @@ These variables control what the frame shows:
 | `RUNEBENDER_GLYPH=<name>` | Open this glyph in the editor. |
 | `RUNEBENDER_SELECTED=<name>` | Select this glyph in the grid. |
 | `RUNEBENDER_SELECTALL=1` | Select all points in the open glyph. |
-| `RUNEBENDER_EXPAND=<key>` | Expand the panel section with this collapse key. |
+| `RUNEBENDER_EXPAND=<key>[,<key>]` | Expand the panel sections with these collapse keys. |
 | `RUNEBENDER_COLLAPSED=<key,...>` | Collapse these panel sections. |
 | `RUNEBENDER_HIDDEN_DOCKS=<left,right>` | Fold these docks away, as the footer toggles do. |
 | `RUNEBENDER_SCRIPT=<label>` | Select this script group in the sidebar and open its coverage rows. |

@@ -159,8 +159,9 @@ pub(crate) const SIDEBAR_SPLITTER_HIT_WIDTH: f64 = 16.0;
 pub(crate) const PANEL_SECTION_INSET: Space = Space::Md;
 /// Standard space between a folding section header and its contents.
 pub(crate) const PANEL_SECTION_BODY_GAP: Space = Space::Sm;
-/// GPUI category rows inset their marker and count by 14 logical pixels.
-pub(crate) const SIDEBAR_ROW_INSET: f64 = 14.0;
+/// Space between a list row's face and its marker, name and count.
+/// It is close to the space above and below the row's text, so a selected row has even margins.
+pub(crate) const SIDEBAR_ROW_INSET: f64 = 4.0;
 /// Painted sidebar marker geometry, shared with the GPUI reference.
 pub(crate) const ROW_MARKER_SIZE: f64 = 10.0;
 /// Height of the navigation strip above the left panel, in logical pixels.
@@ -323,7 +324,7 @@ pub(crate) enum ControlSize {
     Swatch,
     /// 20 px. An icon, a small thumbnail.
     Icon,
-    /// 19 px. A category row, matching the GPUI sidebar.
+    /// 20 px. A category row.
     SidebarRow,
     /// 21 px. A row in a dense list or tree.
     Row,
@@ -343,7 +344,7 @@ impl ControlSize {
             Self::Dot => 10.0,
             Self::Swatch => 24.0,
             Self::Icon => 20.0,
-            Self::SidebarRow => 19.0,
+            Self::SidebarRow => 20.0,
             Self::Row => 21.0,
             Self::Control => 28.0,
             Self::Large => 36.0,

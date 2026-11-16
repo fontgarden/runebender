@@ -564,7 +564,7 @@ pub(crate) fn sidebar_group<V>(
 where
     V: WidgetView<Workspace> + 'static,
 {
-    recipes::panel_section(app, title, title, xcolumn(Region::List, rows))
+    recipes::list_section(app, title, title, rows)
 }
 
 pub(crate) fn sidebar(app: &Workspace) -> impl WidgetView<Workspace> + use<> {

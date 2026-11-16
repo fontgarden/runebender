@@ -150,7 +150,9 @@ pub(crate) fn run(
         if let Ok(section) = std::env::var("RUNEBENDER_EXPAND")
             && let Some(workspace) = app.workspace.as_mut()
         {
-            workspace.collapsed.remove(section.as_str());
+            for key in section.split(',') {
+                workspace.collapsed.remove(key.trim());
+            }
         }
         // In the Graph view, wait for the specimen's first render.
         // RUNEBENDER_GRAPH_EXPANDED=1 then shows its first image expanded.

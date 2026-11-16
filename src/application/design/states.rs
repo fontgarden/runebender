@@ -224,8 +224,10 @@ impl ControlStyle {
             (ControlKind::Toggle | ControlKind::Chip, false) => outlined,
             (ControlKind::Toggle | ControlKind::Chip, true) => inverted,
             (ControlKind::Row, false) => bare(pal.text),
+            // A selected row uses the selected glyph tile's face, so one selection color
+            // runs through the sidebar and the grid.
             (ControlKind::Row, true) => Face {
-                fill: pal.selected_bg(),
+                fill: pal.selected_cell_bg(),
                 outline: pal.outline,
                 ink: pal.selected_content_ink(),
             },
