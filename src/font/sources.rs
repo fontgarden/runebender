@@ -724,6 +724,21 @@ impl Project {
         self.commit_background_group(edit)
     }
 
+    /// Swap the contours and widths of two layers of one glyph in the same source.
+    ///
+    /// Returns the shared history group and invalidation scope, or `None` when the layers are
+    /// already identical.
+    pub fn swap_document_layers(
+        &mut self,
+        address: &GlyphLayerAddress,
+        other: &LayerId,
+    ) -> Result<Option<(EditHistoryGroupId, DocumentChange)>, String> {
+        let Some(edit) = self.variable.swap_layers(address, other)? else {
+            return Ok(None);
+        };
+        self.commit_background_group(edit)
+    }
+
     /// Remove this glyph's background, retaining its layer container and unrelated glyphs.
     ///
     /// Returns the shared history group and invalidation scope, or `None` when already absent.
@@ -804,6 +819,29 @@ impl Project {
             self.variable.remove_layer(glyph, id),
             "validated canonical layer must remain removable"
         );
+        self.sources[index].dirty = true;
+        self.record_source_change(before);
+        Ok(())
+    }
+
+    /// Delete one glyph's auxiliary layer and, when no other glyph uses that layer, its
+    /// container, as one undoable source change. The default layer is rejected.
+    pub fn delete_glyph_layer(&mut self, glyph: &str, id: &LayerId) -> Result<(), String> {
+        let index = self.source_index(id.source).ok_or("unknown source")?;
+        if self.variable.default_layer_name(id.source) == Some(id.name.as_str()) {
+            return Err("remove the source to remove a default layer".into());
+        }
+        if self.document_layer(glyph, id).is_none() {
+            return Err("missing glyph layer".into());
+        }
+        let before = SourceFrame::capture(self);
+        assert!(
+            self.variable.remove_layer(glyph, id),
+            "validated canonical layer must remain removable"
+        );
+        if !self.variable.has_layer(id) && self.variable.source_contains_layer(id) {
+            self.variable.remove_empty_layer_container(id);
+        }
         self.sources[index].dirty = true;
         self.record_source_change(before);
         Ok(())

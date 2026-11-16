@@ -98,6 +98,15 @@ pub(crate) enum DocumentGroupScope {
 /// Per-glyph depths also keep metadata ordered with the editor's layer history.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum MetadataEdit {
+    /// A layer of `glyph` was added or deleted in the Layers panel. The project's source
+    /// history holds the exact structure; `undo_depth` is the edited layer's history depth
+    /// when it happened, so Undo reaches this entry in order.
+    LayerStructure {
+        revision: u64,
+        glyph: String,
+        label: String,
+        undo_depth: usize,
+    },
     Interpolation {
         revision: u64,
         glyph: String,
@@ -148,6 +157,7 @@ impl MetadataEdit {
     pub(crate) fn revision(&self) -> u64 {
         match self {
             Self::Interpolation { revision, .. }
+            | Self::LayerStructure { revision, .. }
             | Self::DocumentGroup { revision, .. }
             | Self::Rename { revision, .. }
             | Self::Unicode { revision, .. }

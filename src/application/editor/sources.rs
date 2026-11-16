@@ -216,8 +216,12 @@ impl Workspace {
             count += 1;
         }
         self.park();
+        let undo_depth = self
+            .font
+            .history_depth(&glyph, runebender::font::history::HistoryDirection::Undo);
         match self.font.project.add_glyph_layer(&glyph, &from, &name) {
             Ok(layer) => {
+                self.record_layer_structure(&glyph, "new layer", undo_depth);
                 self.visible_layers
                     .insert(GlyphLayerAddress { glyph, layer });
                 self.refresh_source_views();
@@ -245,10 +249,14 @@ impl Workspace {
         }
         self.park();
         self.font.edit_layers.remove(&glyph);
-        match self.font.project.remove_glyph_layer(&glyph, &layer) {
+        // Undo reaches this entry from the master layer, where the deletion leaves the editor.
+        let undo_depth = self
+            .font
+            .history_depth(&glyph, runebender::font::history::HistoryDirection::Undo);
+        // One source change removes the layer and its folder when no other glyph uses it.
+        match self.font.project.delete_glyph_layer(&glyph, &layer) {
             Ok(()) => {
-                // Drop the layer's folder when no other glyph uses it.
-                let _ = self.font.project.remove_empty_auxiliary_layer(&layer);
+                self.record_layer_structure(&glyph, "layer deletion", undo_depth);
                 self.visible_layers.remove(&GlyphLayerAddress {
                     glyph,
                     layer: layer.clone(),
@@ -293,6 +301,52 @@ fn backup_layer_name() -> String {
 }
 
 impl Workspace {
+    /// Put a layer addition or deletion on the editor's undo stack.
+    fn record_layer_structure(&mut self, glyph: &str, label: &str, undo_depth: usize) {
+        self.metadata_undo.push(
+            crate::application::workspace::MetadataEdit::LayerStructure {
+                revision: self.font.project.document_revision(),
+                glyph: glyph.to_owned(),
+                label: label.to_owned(),
+                undo_depth,
+            },
+        );
+        self.metadata_redo.clear();
+        self.overview_redo.clear();
+    }
+
+    /// Make the backup layer being edited the master's drawing: the two layers swap their
+    /// contours and widths, so the old master drawing stays in the backup layer. The editor
+    /// moves to the master layer. One Undo swaps them back.
+    pub(crate) fn use_glyph_layer_as_master(&mut self) {
+        let glyph = self.session.glyph_name.clone();
+        let Some(address) = self.font.active_layer_address(&glyph) else {
+            return;
+        };
+        let Some(master) = self.font.glyph_layers(&glyph).into_iter().next() else {
+            return;
+        };
+        if address.layer == master {
+            self.note = "This is the master layer; select a backup layer".into();
+            return;
+        }
+        self.park();
+        match self.font.project.swap_document_layers(&address, &master) {
+            Ok(Some((group, change))) => {
+                self.record_document_group(
+                    group,
+                    &change,
+                    crate::application::workspace::DocumentGroupScope::Contextual,
+                );
+                self.modified = true;
+                self.note = format!("{} is now the master drawing", address.layer.name);
+                self.edit_glyph_layer(&master);
+            }
+            Ok(None) => self.note = "The layer already matches the master".into(),
+            Err(error) => self.note = error,
+        }
+    }
+
     /// Whether the open glyph is being edited on a layer other than the master's own.
     pub(crate) fn editing_backup_layer(&self) -> bool {
         self.glyph_layer_rows()
@@ -325,6 +379,48 @@ mod layer_tests {
         app.open_glyph(app.font.index_of("A").unwrap());
         assert!(matches!(app.mode, Mode::Editor(_)));
         app
+    }
+
+    #[test]
+    fn undo_and_redo_restore_and_repeat_layer_additions_and_deletions() {
+        use crate::application::widgets::shortcuts::AppAction;
+        let root = std::env::temp_dir().join(format!(
+            "runebender-layer-undo-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut app = workspace(&root);
+        app.duplicate_glyph_layer();
+        assert_eq!(app.glyph_layer_rows().len(), 2, "{}", app.note);
+        let backup = app.glyph_layer_rows()[1].layer.clone();
+
+        // Undo removes the new layer; Redo brings it back with its drawing.
+        app.dispatch(AppAction::Undo);
+        assert_eq!(app.glyph_layer_rows().len(), 1, "{}", app.note);
+        assert!(app.visible_layer_outlines().is_empty());
+        app.dispatch(AppAction::Redo);
+        assert_eq!(app.glyph_layer_rows().len(), 2, "{}", app.note);
+
+        // A deleted layer comes back with Undo, and the editor is on the master layer.
+        app.edit_glyph_layer(&backup);
+        app.remove_glyph_layer();
+        assert_eq!(app.glyph_layer_rows().len(), 1, "{}", app.note);
+        app.dispatch(AppAction::Undo);
+        let rows = app.glyph_layer_rows();
+        assert_eq!(rows.len(), 2, "{}", app.note);
+        assert!(rows[0].editing);
+        assert_eq!(
+            app.font
+                .project
+                .document_layer("A", &backup)
+                .unwrap()
+                .contours()
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -406,5 +502,51 @@ mod layer_tests {
             "the empty layer folder is removed"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn use_as_master_swaps_the_drawings_and_undo_swaps_them_back() {
+        use crate::application::widgets::shortcuts::AppAction;
+        let root = std::env::temp_dir().join(format!(
+            "runebender-layer-master-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut app = workspace(&root);
+        app.duplicate_glyph_layer();
+        let rows = app.glyph_layer_rows();
+        let (master, backup) = (rows[0].layer.clone(), rows[1].layer.clone());
+        app.font
+            .project
+            .edit_document_layer("A", &backup, |draft| {
+                draft.add_shape_contour(kurbo::Rect::new(100.0, 100.0, 200.0, 200.0), false)?;
+                Ok(())
+            })
+            .unwrap();
+        let contours = |app: &Workspace, layer| {
+            app.font
+                .project
+                .document_layer("A", layer)
+                .unwrap()
+                .contours()
+                .count()
+        };
+
+        app.edit_glyph_layer(&backup);
+        app.use_glyph_layer_as_master();
+        assert_eq!(contours(&app, &master), 2, "{}", app.note);
+        assert_eq!(contours(&app, &backup), 1, "the old master drawing is kept");
+        assert!(
+            app.glyph_layer_rows()[0].editing,
+            "the editor is on the master"
+        );
+        assert_eq!(app.session.current_layer().unwrap().contours().count(), 2);
+
+        app.dispatch(AppAction::Undo);
+        assert_eq!(contours(&app, &master), 1, "{}", app.note);
+        assert_eq!(contours(&app, &backup), 2);
     }
 }

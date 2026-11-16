@@ -81,7 +81,13 @@ pub(crate) fn layers_section(app: &Workspace) -> Option<impl WidgetView<Workspac
                 )
                 .icon_size(design::STATUS_ICON_SIZE)
                 .tile_size(design::STATUS_ICON_SIZE),
-                // Only a backup layer can be deleted; a master layer has no minus.
+                // Only a backup layer can replace the master or be deleted.
+                backup.then(|| {
+                    recipes::action(pal, "Use as master".into(), |app: &mut Workspace| {
+                        app.use_glyph_layer_as_master();
+                    })
+                }),
+                FlexSpacer::Flex(1.0),
                 backup.then(|| {
                     icon_button::icon_button(
                         ControlStyle::new(pal, ControlKind::Bare),

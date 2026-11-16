@@ -89,6 +89,69 @@ impl VariableData {
         .map(Some)
     }
 
+    /// Swap the contours and widths of two layers of one glyph in the same source, as one
+    /// history group: the Layers panel's "Use as master".
+    pub(in crate::font) fn swap_layers(
+        &self,
+        address: &GlyphLayerAddress,
+        other: &LayerId,
+    ) -> Result<Option<BackgroundEdit>, String> {
+        if address.layer == *other {
+            return Err("a layer cannot swap with itself".into());
+        }
+        if address.layer.source != other.source {
+            return Err("layers of different sources cannot swap".into());
+        }
+        let first = self.layer_snapshot(address).ok_or("missing glyph layer")?;
+        let target = GlyphLayerAddress {
+            glyph: address.glyph.clone(),
+            layer: other.clone(),
+        };
+        let second = self.layer_snapshot(&target).ok_or("missing glyph layer")?;
+        let (layer, preserved) = first.clone().into_parts();
+        let mut first_draft = LayerEditDraft::new(layer, preserved);
+        let (layer, preserved) = second.clone().into_parts();
+        let mut second_draft = LayerEditDraft::new(layer, preserved);
+        let mut changed = first_draft
+            .replace_layer_contours_only(second.view())
+            .map_err(|error| error.to_string())?;
+        changed |= second_draft
+            .replace_layer_contours_only(first.view())
+            .map_err(|error| error.to_string())?;
+        changed |= first_draft
+            .set_width(second.view().width())
+            .map_err(|error| error.to_string())?;
+        changed |= second_draft
+            .set_width(first.view().width())
+            .map_err(|error| error.to_string())?;
+        if !changed {
+            return Ok(None);
+        }
+        let (layer, preserved) = first_draft.into_parts();
+        let first_after = CanonicalLayerSnapshot::new(address.clone(), layer, preserved);
+        let (layer, preserved) = second_draft.into_parts();
+        let second_after = CanonicalLayerSnapshot::new(target.clone(), layer, preserved);
+        self.background_edit(
+            &address.glyph,
+            other.clone(),
+            "use layer as master",
+            Vec::new(),
+            vec![
+                BackgroundLayerEdit {
+                    address: address.clone(),
+                    before: Some(first),
+                    after: Some(first_after),
+                },
+                BackgroundLayerEdit {
+                    address: target,
+                    before: Some(second),
+                    after: Some(second_after),
+                },
+            ],
+        )
+        .map(Some)
+    }
+
     pub(in crate::font) fn swap_layer_with_background(
         &self,
         address: &GlyphLayerAddress,

@@ -467,6 +467,7 @@ impl Workspace {
                 MetadataEdit::Unicode { glyph, .. }
                 | MetadataEdit::SourceMetadata { glyph, .. }
                 | MetadataEdit::Interpolation { glyph, .. }
+                | MetadataEdit::LayerStructure { glyph, .. }
                 | MetadataEdit::DocumentLayer { glyph, .. } => glyph,
                 MetadataEdit::DocumentGroup { .. } => return false,
             };
@@ -499,6 +500,9 @@ impl Workspace {
                 glyph, undo_depth, ..
             }
             | MetadataEdit::Interpolation {
+                glyph, undo_depth, ..
+            }
+            | MetadataEdit::LayerStructure {
                 glyph, undo_depth, ..
             } => (glyph, *undo_depth),
             MetadataEdit::DocumentLayer {
@@ -565,6 +569,29 @@ impl Workspace {
                     "{} Unicode for {glyph}",
                     if redo { "Redid" } else { "Undid" }
                 )
+            }
+            MetadataEdit::LayerStructure { label, .. } => {
+                self.park();
+                match self.font.project.undo_sources(redo) {
+                    Ok(true) => {
+                        // A restored or removed layer changes which layers exist to show
+                        // and edit; a choice that no longer exists falls back to the master.
+                        let project = &self.font.project;
+                        self.visible_layers.retain(|address| {
+                            project
+                                .document_layer(&address.glyph, &address.layer)
+                                .is_some()
+                        });
+                        self.refresh_source_views();
+                        self.modified = true;
+                    }
+                    Ok(false) => return false,
+                    Err(error) => {
+                        self.note = error;
+                        return true;
+                    }
+                }
+                format!("{} {label}", if redo { "Redid" } else { "Undid" })
             }
             MetadataEdit::Interpolation { .. } => {
                 let direction = if redo {
@@ -709,6 +736,9 @@ impl Workspace {
                 glyph, undo_depth, ..
             }
             | MetadataEdit::Interpolation {
+                glyph, undo_depth, ..
+            }
+            | MetadataEdit::LayerStructure {
                 glyph, undo_depth, ..
             } => (glyph, *undo_depth),
             MetadataEdit::DocumentLayer {
