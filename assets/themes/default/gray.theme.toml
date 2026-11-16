@@ -27,18 +27,19 @@ name = "Gray"
 "09" = "oklch(0.84 0 0)"
 
 # Rainbow palette: named hues for glyph marks and semantic editor colors.
+# Glyph tiles, the mark picker, points, and other semantic colors all use these values.
 [rainbow]
 # Glyph mark colors and their order in the mark picker.
 marks = ["red", "orange", "yellow", "green", "blue", "purple", "pink"]
 # Complete OKLCH colors before the step offsets below are added.
 [rainbow.hues]
-red = "oklch(0.61 0.167 27)"
-orange = "oklch(0.68 0.15 46)"
-yellow = "oklch(0.82 0.135 96)"
-green = "oklch(0.69 0.126 152)"
-blue = "oklch(0.64 0.119 248)"
-purple = "oklch(0.61 0.15 292)"
-pink = "oklch(0.68 0.15 350)"
+red = "oklch(0.619 0.144 26)"
+orange = "oklch(0.681 0.130 47)"
+yellow = "oklch(0.802 0.119 96)"
+green = "oklch(0.691 0.108 153)"
+blue = "oklch(0.648 0.103 247)"
+purple = "oklch(0.624 0.128 293)"
+pink = "oklch(0.683 0.128 349)"
 
 # Signed OKLCH offsets added to each hue, not complete colors.
 # Negative lightness darkens; positive lightness brightens; chroma changes saturation.
@@ -53,9 +54,6 @@ deep = "oklch(-0.26 0.0 0)"
 [drawing]
 # Rainbow step used for glyph marks: dim, base, bright, or deep.
 markStep = "base"
-# Opacity of glyph tile faces and the metrics card header over the canvas, as in the
-# label tool's letter colors. Points, anchors, combs, and the mark picker stay opaque.
-markTileOpacity = 0.85
 # Glyph mark treatment: fill colors the tile; border colors its outline.
 markStyle = "fill"
 # Outline around a tile with a filled rainbow mark.
@@ -179,8 +177,10 @@ cellSelectedFill = "baseUi.01"
 # Shared selected-cell ink token.
 cellSelectedInk = "baseUi.07"
 # Native selected backgrounds, including glyph tiles, sidebar rows, and controls.
-# Native selected glyphs and sidebar labels use rainbow.yellow at markStep.
 controlSelected = "baseUi.03"
+# Selected glyph names and sidebar labels: a brighter yellow than the mark, so the
+# label stays readable on controlSelected.
+selectedContentInk = "oklch(0.82 0.135 96)"
 # Contrasting ink for other selected controls.
 controlSelectedInk = "baseUi.09"
 # Keyboard focus ring: a one-pixel ring inside the focused control.

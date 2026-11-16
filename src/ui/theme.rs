@@ -192,10 +192,6 @@ struct ThemeFile {
     // Keep the original top-level settings readable in existing custom themes.
     #[serde(rename = "markStep")]
     mark_step: Option<String>,
-    #[serde(rename = "markTileStep")]
-    mark_tile_step: Option<String>,
-    #[serde(rename = "markTileOpacity")]
-    mark_tile_opacity: Option<f64>,
     #[serde(rename = "markStyle")]
     mark_style: Option<String>,
     #[serde(rename = "markOutline")]
@@ -218,8 +214,6 @@ struct ThemeFile {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DrawingDef {
     mark_step: Option<String>,
-    mark_tile_step: Option<String>,
-    mark_tile_opacity: Option<f64>,
     mark_style: Option<String>,
     mark_outline: Option<String>,
     mark_ink: Option<String>,
@@ -423,10 +417,6 @@ pub struct Theme {
     /// Glyph mark colours in palette order, drawn at this theme's
     /// `markStep`. Matches the web's `--rb-mark-{name}` variables.
     pub marks: Vec<(String, ColorRgba)>,
-    /// Mark colors for glyph tiles in the same order, drawn at `markTileStep`
-    /// and blended over the canvas at `markTileOpacity`.
-    /// They equal `marks` unless the theme sets either one.
-    pub mark_tiles: Vec<(String, ColorRgba)>,
     /// Corner radii and stroke width for this theme.
     pub geometry: Geometry,
     /// Native window appearance, separate from shape and color tokens.
@@ -700,18 +690,6 @@ pub fn parse_theme(source: &str) -> Result<Theme, String> {
     merge_drawing_setting(&file.id, "markStep", &mut file.mark_step, drawing.mark_step)?;
     merge_drawing_setting(
         &file.id,
-        "markTileStep",
-        &mut file.mark_tile_step,
-        drawing.mark_tile_step,
-    )?;
-    merge_drawing_setting(
-        &file.id,
-        "markTileOpacity",
-        &mut file.mark_tile_opacity,
-        drawing.mark_tile_opacity,
-    )?;
-    merge_drawing_setting(
-        &file.id,
         "markStyle",
         &mut file.mark_style,
         drawing.mark_style,
@@ -899,38 +877,6 @@ pub fn parse_theme(source: &str) -> Result<Theme, String> {
             .collect::<Result<Vec<_>, _>>()
     };
     let marks = marks_at(mark_step)?;
-    let mut mark_tiles = match file.mark_tile_step.as_deref() {
-        Some(step) => marks_at(step)?,
-        None => marks.clone(),
-    };
-    if let Some(opacity) = file.mark_tile_opacity {
-        if !(0.0..=1.0).contains(&opacity) {
-            return Err(format!(
-                "theme '{theme_id}' markTileOpacity must be from 0 to 1"
-            ));
-        }
-        // Blend like a translucent fill over the canvas, so the tile stays opaque
-        // above its shadow and the grid ground.
-        let canvas = surfaces["canvas"];
-        let mix = |over: u8, under: u8| {
-            let value = f64::from(over) * opacity + f64::from(under) * (1.0 - opacity);
-            #[expect(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                reason = "a weighted mean of two channels stays within 0 to 255"
-            )]
-            let channel = value.round() as u8;
-            channel
-        };
-        for (_, color) in &mut mark_tiles {
-            *color = ColorRgba {
-                r: mix(color.r, canvas.r),
-                g: mix(color.g, canvas.g),
-                b: mix(color.b, canvas.b),
-                a: 255,
-            };
-        }
-    }
     for label in MARK_LABELS {
         if marks.iter().filter(|(name, _)| name == label).count() != 1 {
             return Err(format!(
@@ -1018,7 +964,6 @@ pub fn parse_theme(source: &str) -> Result<Theme, String> {
         text,
         roles,
         marks,
-        mark_tiles,
     })
 }
 
@@ -1431,39 +1376,6 @@ mod tests {
     }
 
     #[test]
-    fn mark_tiles_use_their_own_step_and_opacity_and_default_to_the_marks() {
-        let source = builtin_theme_source("gray").unwrap();
-        let gray = load_theme("gray").unwrap();
-        let canvas = gray.surface("canvas");
-        let names = |marks: &[(String, ColorRgba)]| {
-            marks.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>()
-        };
-        assert_eq!(names(&gray.mark_tiles), names(&gray.marks));
-        for ((_, tile), (_, mark)) in gray.mark_tiles.iter().zip(&gray.marks) {
-            assert_eq!(tile.a, 255, "tiles stay opaque over their shadow");
-            let expected = (f64::from(mark.r) * 0.85 + f64::from(canvas.r) * 0.15).round();
-            assert_eq!(f64::from(tile.r), expected);
-        }
-        let opaque = parse_theme(&source.replace("markTileOpacity = 0.85\n", "")).unwrap();
-        assert_eq!(opaque.mark_tiles, opaque.marks);
-        let stepped = source.replace("markTileOpacity = 0.85", "markTileStep = \"deep\"");
-        let stepped = parse_theme(&stepped).unwrap();
-        assert_ne!(stepped.mark_tiles, stepped.marks);
-        let unknown = source.replace("markTileOpacity = 0.85", "markTileStep = \"faint\"");
-        assert!(
-            parse_theme(&unknown)
-                .unwrap_err()
-                .contains("rainbow.marks.red")
-        );
-        let invalid = source.replace("markTileOpacity = 0.85", "markTileOpacity = 1.5");
-        assert!(
-            parse_theme(&invalid)
-                .unwrap_err()
-                .contains("markTileOpacity")
-        );
-    }
-
-    #[test]
     fn grouped_drawing_settings_preserve_legacy_theme_appearance() {
         for &id in BUILTIN_THEME_IDS {
             let source = builtin_theme_source(id).unwrap();
@@ -1475,7 +1387,6 @@ mod tests {
                 .extend(drawing.as_table().unwrap().clone());
             let legacy = parse_theme(&toml::to_string(&file).unwrap()).unwrap();
             assert_eq!(grouped.marks, legacy.marks, "{id}");
-            assert_eq!(grouped.mark_tiles, legacy.mark_tiles, "{id}");
             assert_eq!(grouped.mark_style, legacy.mark_style, "{id}");
             assert_eq!(grouped.mark_outline, legacy.mark_outline, "{id}");
             assert_eq!(grouped.mark_ink, legacy.mark_ink, "{id}");
