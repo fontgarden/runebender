@@ -107,16 +107,14 @@ The built-in Rainbow palette contains the seven mark-picker hues: red, orange, y
 The `[drawing]` section follows the palettes and controls how their colors appear on glyph tiles and outline points.
 It contains `markStep`, `markStyle`, `markOutline`, `markInk`, `pointStyle`, `pointOutline`, and `pointHalo`.
 Glyph tiles, the metrics card header, the mark picker and points all use the same Rainbow colors, so a mark has one color everywhere.
-Gray draws its tiles at 0.85 opacity; points, anchors, combs, and the mark picker keep the full colors.
 Existing custom themes can keep these settings at the top level, but must not also define the same setting in `[drawing]`.
 Dark, Dark Gray, Gray, Light Gray, Light, Strawberry, and Campfire explicitly define panel, tile, and control rounding, slider states, header ink, backdrop tint, and panel shadows.
 Gray uses 6-pixel tile corners; the other built-ins use 8-pixel tile corners.
 All built-ins use 10-pixel panel corners and 4-pixel control corners while keeping their own palettes and point styles.
-Sidebar tabs use the glyph-tile radius up to 4 pixels for their top corners.
-The active tab's concave bottom flares are 2 pixels larger, because outer curves read as even only when slightly larger than the corners they surround.
-The strip uses 6-pixel tab gaps and outer insets, and a flare never exceeds that inset.
+Sidebar tabs are a row of equal icon buttons with control corners, 6-pixel gaps and 6-pixel insets.
+The open tab takes the side panel's face, and the other tabs keep the `inactiveTab` face and dimmer ink.
+No tab changes size or position when it opens.
 Icons that are inset in their frame draw at 14 pixels and icons that fill their frame draw at 12, so all tab icons look the same size.
-The active icon sits lower than the inactive icons.
 Optional `text.inactiveTabInk` supplies solid inactive icon ink; older themes retain their previous opacity treatment.
 Panel outlines sit outside the content clip, with matching concentric radii and paint bounds that include the full stroke.
 Selected glyph and sidebar labels use the theme's yellow mark; other selected controls use `controlSelectedInk`.

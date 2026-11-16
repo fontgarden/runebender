@@ -17,13 +17,13 @@ use masonry::core::{
     UpdateCtx, Widget, WidgetId,
 };
 use masonry::imaging::Painter;
-use masonry::kurbo::{Axis, BezPath, Insets, Rect, Size, Stroke};
+use masonry::kurbo::{Axis, Insets, Rect, Size, Stroke};
 use masonry::layout::{LenReq, Length};
 use runebender::ui::icons::icons;
 use xilem::core::{MessageCtx, MessageResult, Mut, View, ViewMarker};
 use xilem::{Pod, ViewCtx};
 
-use crate::application::design::{self, ControlStyle, RAIL_TAB_ICON};
+use crate::application::design::{ControlStyle, RAIL_TAB_ICON};
 use crate::application::widgets::icon_paint;
 
 const TILE: f64 = 24.0;
@@ -35,8 +35,8 @@ pub(crate) struct IconWidget {
     icon: &'static str,
     label: &'static str,
     style: ControlStyle,
-    /// The rail tab's icon rise and corner radius, when this is a rail tab.
-    rail: Option<(f64, f64)>,
+    /// Whether this is a rail tab: announced as a tab, with a fixed icon size.
+    tab: bool,
     icon_size: Option<f64>,
     tile_size: f64,
     focus_target: Option<Arc<Mutex<Option<WidgetId>>>>,
@@ -63,18 +63,7 @@ impl Widget for IconWidget {
 
     fn layout(&mut self, ctx: &mut LayoutCtx<'_>, _props: &PropertiesRef<'_>, size: Size) {
         self.size = size;
-        let flare = self
-            .rail
-            .filter(|_| self.style.is_selected())
-            .map_or(0.0, |(_, radius)| {
-                design::rail_tab_flare(radius.max(0.5).min(size.width.min(size.height) / 2.0))
-            });
-        ctx.set_paint_insets(Insets::new(
-            flare,
-            0.0,
-            flare,
-            if flare > 0.0 { 1.0 } else { 0.0 },
-        ));
+        ctx.set_paint_insets(Insets::ZERO);
     }
 
     fn paint(
@@ -89,40 +78,16 @@ impl Widget for IconWidget {
         let size = rect.size();
         let face = self.style.face(self.hovered, self.pressed);
         let line = self.style.stroke();
-        if let Some((_, radius)) = self.rail {
-            // Open at the bottom, with outward curves joining the panel below.
-            let r = radius.max(0.5).min(size.width.min(size.height) / 2.0);
-            if self.style.is_selected() {
-                // The rail leaves this shape open, so the panel's face shows through it;
-                // a fill is painted only when the face has one.
-                let (outline, fill) = rail_tab_face(rect, radius);
-                if face.fill.components[3] > 0.0 {
-                    painter.fill(&fill, face.fill).draw();
-                }
-                painter
-                    .stroke(&outline, &Stroke::new(line), face.outline)
-                    .draw();
-            } else {
-                // Kurbo insets grow a rectangle for positive values. Move the stroke
-                // inward so inactive tops align with the active tab's top edge.
-                let shape = rect.inset(-line / 2.0).to_rounded_rect(r);
-                painter.fill(shape, face.fill).draw();
-                painter
-                    .stroke(shape, &Stroke::new(line), face.outline)
-                    .draw();
-            }
-        } else {
-            let shape = rect.to_rounded_rect(self.style.radius());
-            painter.fill(shape, face.fill).draw();
-            if face.outline.components[3] > 0.0 {
-                painter
-                    .stroke(
-                        rect.inset(-line / 2.0).to_rounded_rect(self.style.radius()),
-                        &Stroke::new(line),
-                        face.outline,
-                    )
-                    .draw();
-            }
+        let shape = rect.to_rounded_rect(self.style.radius());
+        painter.fill(shape, face.fill).draw();
+        if face.outline.components[3] > 0.0 {
+            painter
+                .stroke(
+                    rect.inset(-line / 2.0).to_rounded_rect(self.style.radius()),
+                    &Stroke::new(line),
+                    face.outline,
+                )
+                .draw();
         }
         if ctx.is_focus_target() {
             let ring = rect
@@ -137,7 +102,7 @@ impl Widget for IconWidget {
         };
         let pad = size.width.min(size.height) * 0.10;
         let vb = icon.view_box;
-        let scale = if self.rail.is_some() {
+        let scale = if self.tab {
             self.icon_size.unwrap_or(RAIL_TAB_ICON) / vb.width().max(vb.height())
         } else if let Some(side) = self.icon_size {
             side.min(size.width).min(size.height) / vb.width().max(vb.height())
@@ -145,11 +110,7 @@ impl Widget for IconWidget {
             ((size.width - pad * 2.0) / vb.width()).min((size.height - pad * 2.0) / vb.height())
         };
         let dx = rect.x0 + (size.width - vb.width() * scale) / 2.0;
-        let dy = rect.y0 + (size.height - vb.height() * scale) / 2.0
-            - match self.rail {
-                Some((rise, _)) if self.style.is_selected() => rise,
-                _ => 0.0,
-            };
+        let dy = rect.y0 + (size.height - vb.height() * scale) / 2.0;
         icon_paint::paint(
             painter,
             self.icon,
@@ -234,11 +195,7 @@ impl Widget for IconWidget {
     }
 
     fn accessibility_role(&self) -> Role {
-        if self.rail.is_some() {
-            Role::Tab
-        } else {
-            Role::Button
-        }
+        if self.tab { Role::Tab } else { Role::Button }
     }
 
     fn accessibility(
@@ -249,7 +206,7 @@ impl Widget for IconWidget {
     ) {
         node.set_label(self.label);
         node.add_action(Action::Click);
-        if self.rail.is_some() {
+        if self.tab {
             node.set_selected(self.style.is_selected());
         } else if self.style.is_selectable() {
             node.set_toggled(if self.style.is_selected() {
@@ -265,50 +222,11 @@ impl Widget for IconWidget {
     }
 }
 
-/// The active rail tab's outline and filled area for its box `rect`.
-///
-/// The outline rises from outward flares at the bottom to rounded top corners, so the tab
-/// opens onto the panel below. The fill closes the outline just below `rect`, covering the
-/// rail's bottom keyline. Returns `(outline, fill)`.
-pub(crate) fn rail_tab_face(rect: Rect, radius: f64) -> (BezPath, BezPath) {
-    let r = radius.max(0.5).min(rect.width().min(rect.height()) / 2.0);
-    // Quarter-circle control points match Kurbo's rounded rectangles.
-    let k = r * 0.552_284_749_830_793_6;
-    let flare = design::rail_tab_flare(r);
-    let kf = flare * 0.552_284_749_830_793_6;
-    let left = rect.x0 + 0.5;
-    let right = rect.x1 - 0.5;
-    let top = rect.y0 + 0.5;
-    let bottom = rect.y1 - 0.5;
-    let mut outline = BezPath::new();
-    outline.move_to((left - flare, bottom));
-    outline.curve_to(
-        (left - flare + kf, bottom),
-        (left, bottom - flare + kf),
-        (left, bottom - flare),
-    );
-    outline.line_to((left, top + r));
-    outline.curve_to((left, top + r - k), (left + r - k, top), (left + r, top));
-    outline.line_to((right - r, top));
-    outline.curve_to((right - r + k, top), (right, top + r - k), (right, top + r));
-    outline.line_to((right, bottom - flare));
-    outline.curve_to(
-        (right, bottom - flare + kf),
-        (right + flare - kf, bottom),
-        (right + flare, bottom),
-    );
-    let mut fill = outline.clone();
-    fill.line_to((right + flare, rect.y1 + 1.0));
-    fill.line_to((left - flare, rect.y1 + 1.0));
-    fill.close_path();
-    (outline, fill)
-}
-
 pub(crate) struct IconView<F> {
     icon: &'static str,
     label: &'static str,
     style: ControlStyle,
-    rail: Option<(f64, f64)>,
+    tab: bool,
     icon_size: Option<f64>,
     tile_size: f64,
     focus_target: Option<Arc<Mutex<Option<WidgetId>>>>,
@@ -326,7 +244,7 @@ pub(crate) fn icon_button<State: 'static, F: Fn(&mut State) + 'static>(
         icon,
         label,
         style,
-        rail: None,
+        tab: false,
         icon_size: None,
         tile_size: TILE,
         focus_target: None,
@@ -354,10 +272,9 @@ impl<F> IconView<F> {
         self
     }
 
-    /// Draw the control as a rail tab: the open tab rises by `icon_rise`
-    /// and flares into the panel below at `radius`.
-    pub(crate) fn rail_tab(mut self, icon_rise: f64, radius: f64) -> Self {
-        self.rail = Some((icon_rise, radius));
+    /// Announce the control as a rail tab, drawn at the rail's icon size.
+    pub(crate) fn rail_tab(mut self) -> Self {
+        self.tab = true;
         self
     }
 }
@@ -372,7 +289,7 @@ impl<State: 'static, F: Fn(&mut State) + 'static> View<State, (), ViewCtx> for I
             icon: self.icon,
             label: self.label,
             style: self.style,
-            rail: self.rail,
+            tab: self.tab,
             icon_size: self.icon_size,
             tile_size: self.tile_size,
             focus_target: self.focus_target.clone(),
@@ -393,13 +310,13 @@ impl<State: 'static, F: Fn(&mut State) + 'static> View<State, (), ViewCtx> for I
     ) {
         if self.icon != prev.icon
             || self.style != prev.style
-            || self.rail != prev.rail
+            || self.tab != prev.tab
             || self.icon_size != prev.icon_size
             || self.tile_size != prev.tile_size
         {
             el.widget.icon = self.icon;
             el.widget.style = self.style;
-            el.widget.rail = self.rail;
+            el.widget.tab = self.tab;
             el.widget.icon_size = self.icon_size;
             el.widget.tile_size = self.tile_size;
             el.ctx.request_layout();
@@ -443,7 +360,7 @@ mod tests {
             icon: "text",
             label: "Text tool",
             style: ControlStyle::new(&Palette::load("gray"), ControlKind::Tool),
-            rail: None,
+            tab: false,
             icon_size: None,
             tile_size: TILE,
             focus_target,

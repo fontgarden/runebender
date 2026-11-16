@@ -13,9 +13,7 @@ use crate::application::design::{
     ControlKind, ControlSize, ControlStyle, Ground, Region, Space, Stroke, TextSize,
     column as xcolumn, row as xrow,
 };
-use crate::application::design::{
-    RAIL_TAB_ACTIVE_HEIGHT, RAIL_TAB_HEIGHT, RAIL_TAB_INACTIVE_HEIGHT,
-};
+use crate::application::design::{RAIL_TAB_BUTTON_HEIGHT, RAIL_TAB_HEIGHT};
 use crate::application::view::canvas::grid::{GridEvent, grid};
 use crate::application::view::panels::chat::chat_panel;
 use crate::application::view::panels::local_ai::local_ai_panel;
@@ -218,11 +216,11 @@ fn shapes_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     .boxed()
 }
 
-/// One navigation strip for the font, node, and glyph workspaces.
+/// One navigation strip for the font, node, and glyph workspaces: a row of equal icon
+/// buttons, where the open one takes the panel's face and the others stay dimmer.
 fn rail_tabs(app: &Workspace, editing: bool) -> impl WidgetView<Workspace> + use<> {
     use crate::application::design::{RAIL_TAB_ICON, RAIL_TAB_ICON_FULL_FRAME, RAIL_TAB_INSET};
     let pal = &app.palette;
-    let radius = design::rail_tab_radius(pal.corner_radius);
     let is_active = |which: Rail| {
         app.rail == which || (!editing && app.rail == Rail::Shapes && which == Rail::Glyphs)
     };
@@ -239,27 +237,20 @@ fn rail_tabs(app: &Workspace, editing: bool) -> impl WidgetView<Workspace> + use
     .into_iter()
     .flatten()
     .collect();
-    let count = specs.len();
-    let active_slot = specs.iter().position(|&(_, which, _)| is_active(which));
     let tab = |(icon, which, size): (&'static str, Rail, f64)| {
-        let active = is_active(which);
         sized_box(
             icon_button(
-                ControlStyle::new(pal, ControlKind::Tab).selected(pal, active),
+                ControlStyle::new(pal, ControlKind::Tab).selected(pal, is_active(which)),
                 icon,
                 icon,
                 move |app: &mut Workspace| app.rail = which,
             )
             .icon_size(size)
-            .rail_tab(design::RAIL_TAB_ICON_RISE, radius),
+            .rail_tab(),
         )
         .dims(Dimensions::new(
             Dim::Stretch,
-            Dim::Fixed(Length::px(if active {
-                RAIL_TAB_ACTIVE_HEIGHT
-            } else {
-                RAIL_TAB_INACTIVE_HEIGHT
-            })),
+            Dim::Fixed(Length::px(RAIL_TAB_BUTTON_HEIGHT)),
         ))
     };
     sized_box(xilem::view::zstack((
@@ -267,44 +258,21 @@ fn rail_tabs(app: &Workspace, editing: bool) -> impl WidgetView<Workspace> + use
             let background = pal.tab_rail.with_alpha(pal.side_panel_alpha());
             let outline = pal.outline;
             move |_: &mut Workspace, _, scene, size| {
-                use crate::application::design::controls::icon_button;
-                use crate::application::widgets::even_row::slot_widths;
                 use masonry::imaging::Painter;
-                use masonry::kurbo::{Rect, Shape as _};
+                use masonry::kurbo::Rect;
                 let mut painter = Painter::new(scene);
                 let stroke = Stroke::Hairline.px();
-                let keyline =
-                    |x0: f64, x1: f64| Rect::new(x0, size.height - stroke, x1, size.height);
-                let mut ground = Rect::new(0.0, 0.0, size.width, size.height).to_path(0.1);
-                // The same whole-pixel slots the tab row uses locate the active tab, whose
-                // shape the rail leaves open; its keyline stops at the tab's flares.
-                let opening = active_slot.map(|index| {
-                    let widths = slot_widths(size.width, count, RAIL_TAB_INSET, RAIL_TAB_INSET);
-                    let x = RAIL_TAB_INSET
-                        + widths[..index].iter().sum::<f64>()
-                        + RAIL_TAB_INSET * index as f64;
-                    let tab = Rect::new(
-                        x,
-                        RAIL_TAB_INSET,
-                        x + widths[index],
-                        RAIL_TAB_INSET + RAIL_TAB_ACTIVE_HEIGHT,
-                    );
-                    icon_button::rail_tab_face(tab, radius).1
-                });
                 // The floating panel frame owns the side outlines; a strip here
                 // would double the panel edge beside the rail.
-                if let Some(hole) = &opening {
-                    ground.extend(hole.reverse_subpaths().elements().iter().copied());
-                }
-                painter.fill(&ground, background).draw();
-                match opening {
-                    Some(hole) => {
-                        let span = hole.bounding_box();
-                        painter.fill(keyline(0.0, span.x0), outline).draw();
-                        painter.fill(keyline(span.x1, size.width), outline).draw();
-                    }
-                    None => painter.fill(keyline(0.0, size.width), outline).draw(),
-                }
+                painter
+                    .fill(Rect::new(0.0, 0.0, size.width, size.height), background)
+                    .draw();
+                painter
+                    .fill(
+                        Rect::new(0.0, size.height - stroke, size.width, size.height),
+                        outline,
+                    )
+                    .draw();
             }
         }))
         .dims(Dimensions::new(Dim::Stretch, Dim::Stretch)),

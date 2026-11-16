@@ -244,8 +244,9 @@ impl ControlStyle {
                 outline: pal.outline,
                 ink: pal.inactive_tab_ink,
             },
+            // The open tab takes the panel's own face, so it reads as part of the panel.
             (ControlKind::Tab, true) => Face {
-                fill: Palette::FLAT,
+                fill: pal.side_panel_face(),
                 outline: pal.outline,
                 ink: pal.active_tab_ink,
             },
