@@ -155,6 +155,20 @@ headerMutedInk = "baseUi.08"
 # Colors named by editor purpose; shared across hosts, so some are host-specific.
 # Values can reference Base UI or Rainbow, or use a literal color such as #17B870.
 [roles]
+# Code editor in script nodes: its ground, text, and syntax colors.
+codeBackground = "#000000"
+codeText = "#D8C8A0"
+codeKeyword = "#CC6255"
+codeFunction = "#D9BE4A"
+codeType = "#4D9E78"
+codeString = "#6DBF4E"
+codeNumber = "#D4943D"
+codeComment = "#58524A"
+codeConstant = "#8878A8"
+codeOperator = "#A0A0C0"
+# Line numbers, and the visual-mode selection behind the text.
+codeLineNumber = "#3A3632"
+codeSelection = "#2A2520"
 # Dark Agent Proof page; independent of the glyph fill.
 proofDarkBackground = "baseUi.01"
 # Outlines of other layers and masters behind the layer being edited. Dark blue, so they

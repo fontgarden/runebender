@@ -161,6 +161,15 @@ pub(crate) fn run(
             && matches!(workspace.mode, crate::application::workspace::Mode::Graph)
             && workspace.live_graph.is_some()
         {
+            // RUNEBENDER_GRAPH_SCRIPT=<index> adds a code node with that example script.
+            if let Some(example) = std::env::var("RUNEBENDER_GRAPH_SCRIPT")
+                .ok()
+                .and_then(|value| value.parse().ok())
+            {
+                crate::application::editor::tools::graph::controls::add_live_specimen_script(
+                    workspace, None, example,
+                );
+            }
             // A capture shows the graph rendered, as if the designer pressed Run.
             workspace.graph.auto_run = true;
             crate::application::editor::tools::graph::controls::live_autorun_tick(workspace);

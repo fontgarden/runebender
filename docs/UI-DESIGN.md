@@ -111,6 +111,8 @@ Existing custom themes can keep these settings at the top level, but must not al
 Dark, Dark Gray, Gray, Light Gray, Light, Strawberry, and Campfire explicitly define panel, tile, and control rounding, slider states, header ink, backdrop tint, and panel shadows.
 Gray uses 6-pixel tile corners; the other built-ins use 8-pixel tile corners.
 All built-ins use 10-pixel panel corners and 4-pixel control corners while keeping their own palettes and point styles.
+Optional `code*` roles color the code editor in script nodes: `codeBackground`, `codeText`, `codeKeyword`, `codeFunction`, `codeType`, `codeString`, `codeNumber`, `codeComment`, `codeConstant`, `codeOperator`, `codeLineNumber`, and `codeSelection`.
+A theme without them uses its own text and mark colors on its field surface.
 Sidebar tabs are a row of equal icon buttons with control corners, 6-pixel gaps and 6-pixel insets.
 The open tab takes the side panel's face, and the other tabs keep the `inactiveTab` face and dimmer ink.
 No tab changes size or position when it opens.
@@ -238,6 +240,7 @@ These variables control what the frame shows:
 | `RUNEBENDER_SELECTED=<name>` | Select this glyph in the grid. |
 | `RUNEBENDER_SELECTALL=1` | Select all points in the open glyph. |
 | `RUNEBENDER_EXPAND=<key>[,<key>]` | Expand the panel sections with these collapse keys. |
+| `RUNEBENDER_GRAPH_SCRIPT=<index>` | In the Graph view, add a code node with this example script. |
 | `RUNEBENDER_COLLAPSED=<key,...>` | Collapse these panel sections. |
 | `RUNEBENDER_HIDDEN_DOCKS=<left,right>` | Fold these docks away, as the footer toggles do. |
 | `RUNEBENDER_SCRIPT=<label>` | Select this script group in the sidebar and open its coverage rows. |

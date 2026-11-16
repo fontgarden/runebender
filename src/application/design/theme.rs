@@ -582,6 +582,27 @@ impl Palette {
             .unwrap_or_else(|| self.role("reference"))
     }
 
+    /// Colors of the code editor in script nodes: the theme's `code*` roles.
+    /// A theme without them gets its own text and mark colors on its field surface.
+    pub(crate) fn code(&self) -> CodeColors {
+        let role = |name: &str, fallback: Color| self.roles.get(name).copied().unwrap_or(fallback);
+        let mark = |label: &str| self.mark(label).unwrap_or(self.text);
+        CodeColors {
+            background: role("codeBackground", self.field),
+            text: role("codeText", self.text),
+            keyword: role("codeKeyword", mark("red")),
+            function: role("codeFunction", mark("orange")),
+            type_name: role("codeType", mark("blue")),
+            string: role("codeString", mark("green")),
+            number: role("codeNumber", mark("orange")),
+            comment: role("codeComment", self.text_muted),
+            constant: role("codeConstant", mark("purple")),
+            operator: role("codeOperator", self.text),
+            line_number: role("codeLineNumber", self.text_muted),
+            selection: role("codeSelection", self.selected_bg()),
+        }
+    }
+
     /// Correction strokes drawn over a proof: `proofPencil`, else the theme's red mark.
     pub(crate) fn proof_pencil_ink(&self) -> Color {
         self.roles
@@ -739,6 +760,23 @@ impl Palette {
     pub(crate) fn mark(&self, label: &str) -> Option<Color> {
         self.marks.get(label).copied()
     }
+}
+
+/// The code editor's colors, by what they paint.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct CodeColors {
+    pub background: Color,
+    pub text: Color,
+    pub keyword: Color,
+    pub function: Color,
+    pub type_name: Color,
+    pub string: Color,
+    pub number: Color,
+    pub comment: Color,
+    pub constant: Color,
+    pub operator: Color,
+    pub line_number: Color,
+    pub selection: Color,
 }
 
 #[cfg(test)]

@@ -585,6 +585,18 @@ const OPTIONAL_ROLES: &[&str] = &[
     "controlSelectedOutline",
     "savedInk",
     "unsavedInk",
+    "codeBackground",
+    "codeText",
+    "codeKeyword",
+    "codeFunction",
+    "codeType",
+    "codeString",
+    "codeNumber",
+    "codeComment",
+    "codeConstant",
+    "codeOperator",
+    "codeLineNumber",
+    "codeSelection",
 ];
 const MARK_LABELS: [&str; 7] = ["red", "orange", "yellow", "green", "blue", "purple", "pink"];
 

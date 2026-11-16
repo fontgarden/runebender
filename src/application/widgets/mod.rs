@@ -4,6 +4,7 @@
 //! The controls the editor owns: icon tiles, text labels, the context
 //! menu, and the shortcut host.
 
+pub(crate) mod code_editor;
 pub(crate) mod context_menu;
 pub(crate) mod drag_region;
 pub(crate) mod even_row;
