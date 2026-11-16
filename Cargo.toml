@@ -134,6 +134,8 @@ block = { git = "https://github.com/vaimeai/rust-block", rev = "b88ec0fad1ed2a67
 [profile.release]
 lto = "thin"
 codegen-units = 1
+# Symbol names are about 9 MB of the binary and are not used when the editor runs.
+strip = true
 
 # Development builds: dependencies are optimized once and cached, and the workspace's own
 # crates use a light optimization level so the editor is responsive and rebuilds stay short.

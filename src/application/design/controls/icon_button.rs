@@ -222,7 +222,7 @@ impl Widget for IconWidget {
     }
 }
 
-pub(crate) struct IconView<F> {
+pub(crate) struct IconView<State> {
     icon: &'static str,
     label: &'static str,
     style: ControlStyle,
@@ -230,16 +230,17 @@ pub(crate) struct IconView<F> {
     icon_size: Option<f64>,
     tile_size: f64,
     focus_target: Option<Arc<Mutex<Option<WidgetId>>>>,
-    on_click: F,
+    // Boxed so every icon button is one view type, whatever its callback.
+    on_click: Box<dyn Fn(&mut State) + Send + Sync + 'static>,
 }
 
 /// An icon control drawn in `style`, announced to assistive technology as `label`.
-pub(crate) fn icon_button<State: 'static, F: Fn(&mut State) + 'static>(
+pub(crate) fn icon_button<State: 'static, F: Fn(&mut State) + Send + Sync + 'static>(
     style: ControlStyle,
     icon: &'static str,
     label: &'static str,
     on_click: F,
-) -> IconView<F> {
+) -> IconView<State> {
     IconView {
         icon,
         label,
@@ -248,11 +249,11 @@ pub(crate) fn icon_button<State: 'static, F: Fn(&mut State) + 'static>(
         icon_size: None,
         tile_size: TILE,
         focus_target: None,
-        on_click,
+        on_click: Box::new(on_click),
     }
 }
 
-impl<F> IconView<F> {
+impl<State> IconView<State> {
     /// Set the icon's maximum ink extent in logical pixels, clamped to its tile.
     /// Rail tabs default to the rail's own icon-size token.
     pub(crate) fn icon_size(mut self, size: f64) -> Self {
@@ -279,8 +280,8 @@ impl<F> IconView<F> {
     }
 }
 
-impl<F> ViewMarker for IconView<F> {}
-impl<State: 'static, F: Fn(&mut State) + 'static> View<State, (), ViewCtx> for IconView<F> {
+impl<State> ViewMarker for IconView<State> {}
+impl<State: 'static> View<State, (), ViewCtx> for IconView<State> {
     type Element = Pod<IconWidget>;
     type ViewState = ();
 
