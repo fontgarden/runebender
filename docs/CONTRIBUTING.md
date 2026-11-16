@@ -18,7 +18,7 @@ sudo apt-get install build-essential pkg-config \
 
 git clone https://github.com/fontgarden/runebender.git
 cd runebender
-cargo build --profile fast --locked
+cargo build --locked
 ```
 
 The clone and Cargo commands apply on macOS too; only the package installation is Linux-specific.

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Minimal macOS behind-window material, for Xilem issue #1852.
-//! Run with `cargo run --profile fast --locked --example macos_vibrancy`.
+//! Run with `cargo run --locked --example macos_vibrancy`.
 
 #[cfg(target_os = "macos")]
 mod macos {

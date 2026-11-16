@@ -7480,7 +7480,7 @@ mod tests {
 
     /// Time every step of a point drag on a real glyph and print the budget.
     ///
-    /// Run by hand with `cargo test --profile fast frame_budget -- --ignored --nocapture`.
+    /// Run by hand with `cargo test --release frame_budget -- --ignored --nocapture`.
     /// `RUNEBENDER_BENCH_GLYPH` picks the glyph, and `RUNEBENDER_SCREENSHOT=1` with
     /// `RUNEBENDER_EDITOR_ZOOM=<zoom>` frames the canvas at a chosen zoom, as a screenshot does.
     #[test]

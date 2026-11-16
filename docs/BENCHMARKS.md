@@ -132,7 +132,7 @@ Run the optimized native point-drag probe without opening a window:
 
 ```sh
 RUNEBENDER_TEST_FONTS=assets/font-sources/variable-fonts/VirtuaGrotesk \
-cargo test --profile fast --locked --features integration-fonts --bin runebender \
+cargo test --release --locked --features integration-fonts --bin runebender \
   frame_budget_report -- --ignored --nocapture --test-threads=1
 ```
 

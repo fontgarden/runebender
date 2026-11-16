@@ -135,12 +135,13 @@ block = { git = "https://github.com/vaimeai/rust-block", rev = "b88ec0fad1ed2a67
 lto = "thin"
 codegen-units = 1
 
-# Optimized local builds without release's whole-program optimization cost.
-[profile.fast]
-inherits = "release"
-lto = "off"
-codegen-units = 16
-incremental = true
+# Development builds: dependencies are optimized once and cached, and the workspace's own
+# crates use a light optimization level so the editor is responsive and rebuilds stay short.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
 
 [workspace]
 members = ["crates/nufo"]

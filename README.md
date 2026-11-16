@@ -49,22 +49,13 @@ Coding agents must also follow [AGENTS.md](AGENTS.md).
 ## Local native builds
 
 Run these commands from a checkout of this repository; Cargo uses the pinned Rust toolchain.
-For UI development, use an optimized build with incremental compilation:
+For UI development, run:
 
 ```sh
-cargo run --profile fast --locked -- path/to/Font.designspace
+cargo run --locked -- path/to/Font.designspace
 ```
 
 Cargo builds when needed, then launches the editor with the supplied font.
-To build without launching:
-
-```sh
-cargo build --profile fast --locked
-```
-
-The executable is `target/fast/runebender`.
-This profile keeps release's optimization level and disabled debug assertions, while disabling LTO and using 16 code-generation units to favor shorter rebuilds.
-Its first build fills a separate cache; later source changes reuse incremental compilation data.
 Use `cargo build --release --locked` for final release builds and performance comparisons.
 
 ## macOS application packages
