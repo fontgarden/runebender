@@ -41,6 +41,10 @@ fn source_roots(font: &FontModel) -> Vec<std::path::PathBuf> {
     roots
 }
 
+/// A value that changes when a source file is added, removed, resized or rewritten.
+///
+/// It compares what is on disk with what was opened or last saved. A file rewritten with the
+/// same bytes still counts as changed, because its modification time moves.
 fn source_fingerprint(roots: &[std::path::PathBuf]) -> u64 {
     fn hash_path(path: &FsPath, state: &mut std::collections::hash_map::DefaultHasher) {
         path.hash(state);
@@ -56,8 +60,13 @@ fn source_fingerprint(roots: &[std::path::PathBuf]) -> u64 {
                 hash_path(&entry, state);
             }
         } else {
-            match std::fs::read(path) {
-                Ok(bytes) => bytes.hash(state),
+            // A file's length and modification time stand for its contents. Reading every
+            // glyph file took as long as opening the font, at open and twice per save.
+            match std::fs::metadata(path) {
+                Ok(metadata) => {
+                    metadata.len().hash(state);
+                    metadata.modified().ok().hash(state);
+                }
                 Err(error) => error.kind().hash(state),
             }
         }
