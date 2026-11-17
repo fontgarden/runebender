@@ -112,13 +112,22 @@ impl ShapingFont {
         use skrifa::{MetadataProvider as _, raw::TableProvider as _};
         let font = skrifa::FontRef::new(&bytes).map_err(|error| error.to_string())?;
         let count = font.maxp().map_err(|error| error.to_string())?.num_glyphs();
-        let glyph_names = font.glyph_names();
-        let names = (0..count)
-            .map(|id| {
-                glyph_names
-                    .get(GlyphId::new(u32::from(id)))
-                    .map(|name| name.to_string())
-                    .ok_or_else(|| format!("compiled font has no name for glyph {id}"))
+        // Read the names in one pass. Asking for one name at a time scans the `post` table's
+        // strings from the start for each glyph, which costs glyphs squared.
+        let mut found: Vec<Option<String>> = vec![None; usize::from(count)];
+        for (id, name) in font.glyph_names().iter() {
+            if let Some(slot) = usize::try_from(id.to_u32())
+                .ok()
+                .and_then(|index| found.get_mut(index))
+            {
+                *slot = Some(name.to_string());
+            }
+        }
+        let names = found
+            .into_iter()
+            .enumerate()
+            .map(|(id, name)| {
+                name.ok_or_else(|| format!("compiled font has no name for glyph {id}"))
             })
             .collect::<Result<_, _>>()?;
         Ok(Self {
