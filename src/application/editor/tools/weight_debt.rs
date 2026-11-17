@@ -116,17 +116,17 @@ impl Workspace {
         {
             return Some(cached.clone());
         }
-        let report = weight_debt::report(project, light, heavy).ok()?;
+        let report = weight_debt::report((project, light), (project, heavy)).ok()?;
         let everything: Vec<String> = report
             .groups
             .iter()
             .flat_map(|group| group.drawn.iter().cloned())
             .collect();
-        let shared = weight_debt::fit_offset(project, light, heavy, &everything);
+        let shared = weight_debt::fit_offset((project, light), (project, heavy), &everything);
         let mut fits = BTreeMap::new();
         for group in &report.groups {
             let own = (group.drawn.len() >= OWN_FIT_MINIMUM)
-                .then(|| weight_debt::fit_offset(project, light, heavy, &group.drawn))
+                .then(|| weight_debt::fit_offset((project, light), (project, heavy), &group.drawn))
                 .flatten();
             match (own, shared) {
                 (Some(fit), _) => {
