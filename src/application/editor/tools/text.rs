@@ -31,9 +31,11 @@ pub(crate) struct TextInputs {
     /// Document and tab identity. A change means the widget must restore a
     /// different parked buffer instead of refreshing the current one.
     context_id: (u64, u64),
-    inventory: TextGlyphInventory,
-    kerning: TextKerningModel,
-    outlines: Arc<Vec<(String, Arc<BezPath>)>>,
+    inventory: Arc<TextGlyphInventory>,
+    kerning: Arc<TextKerningModel>,
+    outlines: GlyphOutlines,
+    /// The glyph being edited and its unsaved outline, drawn in place of its entry above.
+    live_outline: Option<(String, Arc<BezPath>)>,
     compiled: Option<Arc<Vec<u8>>>,
     normalized: Vec<f64>,
     line_height: f64,
@@ -66,13 +68,20 @@ pub(crate) struct CachedTextInputs {
     inputs: TextInputs,
 }
 
+/// Glyph outlines by name, shared between the text inputs and every buffer made from them.
+pub(crate) type GlyphOutlines = Arc<std::collections::HashMap<String, Arc<BezPath>>>;
+
 /// The compiled preview font read at one normalized location: every glyph's outline and
 /// advance, which take a pass over the whole binary to extract.
 pub(crate) struct CachedTextLocation {
     compiled: Arc<runebender::font::compiler::CompiledFont>,
     normalized: Vec<f64>,
-    outlines: Arc<Vec<(String, Arc<BezPath>)>>,
-    advances: Vec<(String, f64)>,
+    outlines: GlyphOutlines,
+    advances: std::collections::HashMap<String, f64>,
+    /// The inventory these advances were applied to, and the result. Applying them walks every
+    /// glyph, so it is done once for a compiled font and inventory, not on every rebuild.
+    base_inventory: Arc<TextGlyphInventory>,
+    inventory: Arc<TextGlyphInventory>,
 }
 
 impl TextInputs {
@@ -107,16 +116,21 @@ impl TextInputs {
             .id();
         Self {
             context_id: (0, 0),
-            inventory: TextGlyphInventory::from_project(&font.project, source)
-                .expect("the active source has canonical text inputs"),
-            kerning: TextKerningModel::from_project(&font.project, source)
-                .expect("the active source has canonical kerning inputs"),
+            inventory: Arc::new(
+                TextGlyphInventory::from_project(&font.project, source)
+                    .expect("the active source has canonical text inputs"),
+            ),
+            kerning: Arc::new(
+                TextKerningModel::from_project(&font.project, source)
+                    .expect("the active source has canonical kerning inputs"),
+            ),
             outlines: Arc::new(
                 font.glyphs
                     .iter()
                     .map(|glyph| (glyph.name.clone(), glyph.outline.clone()))
                     .collect(),
             ),
+            live_outline: None,
             compiled: None,
             normalized: Vec::new(),
             line_height: (font.units_per_em().max(font.ascender()) - font.descender()).max(1.0),
@@ -174,45 +188,54 @@ impl TextInputs {
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
             let fresh = cache.as_ref().is_some_and(|c| {
-                Arc::ptr_eq(&c.compiled, &compiled) && c.normalized == self.normalized
+                Arc::ptr_eq(&c.compiled, &compiled)
+                    && c.normalized == self.normalized
+                    && Arc::ptr_eq(&c.base_inventory, &self.inventory)
             });
             if !fresh {
                 let outlines = match compiled.outlines(&self.normalized) {
-                    Ok(outlines) => Arc::new(outlines),
+                    Ok(outlines) => Arc::new(outlines.into_iter().collect()),
                     Err(error) => {
                         runebender::text::shape::log_shaping_failure(&error);
                         return self;
                     }
                 };
+                let advances: std::collections::HashMap<String, f64> = compiled
+                    .advances(&self.normalized)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect();
+                let mut inventory = (*self.inventory).clone();
+                for (name, advance) in &advances {
+                    inventory.set_advance(name.clone(), *advance);
+                }
                 *cache = Some(CachedTextLocation {
                     compiled: compiled.clone(),
                     normalized: self.normalized.clone(),
                     outlines,
-                    advances: compiled.advances(&self.normalized).unwrap_or_default(),
+                    advances,
+                    base_inventory: self.inventory.clone(),
+                    inventory: Arc::new(inventory),
                 });
             }
             let located = cache.as_ref().expect("the location was just read");
             self.outlines = located.outlines.clone();
             self.compiled = Some(compiled.bytes.clone());
-            for (name, advance) in &located.advances {
-                if let Some((active, _, width)) = &mut self.active_glyph
-                    && active == name
-                {
-                    *width = *advance;
-                }
-                self.inventory.set_advance(name.clone(), *advance);
+            if let Some((active, _, width)) = &mut self.active_glyph
+                && let Some(advance) = located.advances.get(active.as_str())
+            {
+                *width = *advance;
             }
+            self.inventory = located.inventory.clone();
         }
         self
     }
 
     /// Substitute the editor's live draft without recompiling the shaping font.
     pub(crate) fn with_live_outline(mut self, name: &str, outline: Arc<BezPath>) -> Self {
-        if let Some((_, path)) = Arc::make_mut(&mut self.outlines)
-            .iter_mut()
-            .find(|(glyph, _)| glyph == name)
-        {
-            *path = outline;
+        // Kept beside the shared outlines; replacing one entry in them would copy them all.
+        if self.outlines.contains_key(name) {
+            self.live_outline = Some((name.to_owned(), outline));
         }
         self
     }
@@ -282,7 +305,8 @@ pub(crate) struct TextState {
     ascender: f64,
     descender: f64,
     /// Outlines by glyph name, so painting does not touch the font.
-    outlines: Arc<Vec<(String, Arc<BezPath>)>>,
+    outlines: GlyphOutlines,
+    live_outline: Option<(String, Arc<BezPath>)>,
 }
 
 impl TextState {
@@ -304,9 +328,14 @@ impl TextState {
         let source = project.source_id(0).unwrap();
         Self::new(&TextInputs {
             context_id: (0, 0),
-            inventory: TextGlyphInventory::from_project(&project, source).unwrap(),
-            kerning: TextKerningModel::from_project(&project, source).unwrap(),
-            outlines: Arc::new(Vec::new()),
+            inventory: TextGlyphInventory::from_project(&project, source)
+                .unwrap()
+                .into(),
+            kerning: TextKerningModel::from_project(&project, source)
+                .unwrap()
+                .into(),
+            outlines: GlyphOutlines::default(),
+            live_outline: None,
             compiled: None,
             normalized: Vec::new(),
             line_height: 1000.0,
@@ -325,9 +354,9 @@ impl TextState {
     /// A buffer wired to a master.
     pub(crate) fn new(inputs: &TextInputs) -> Self {
         let mut buffer = TextBuffer::new();
-        buffer.set_glyph_inventory(inputs.inventory.clone());
+        buffer.set_shared_glyph_inventory(inputs.inventory.clone());
         buffer.set_compiled_font(inputs.compiled.clone(), inputs.normalized.clone());
-        buffer.set_kerning_model(inputs.kerning.clone());
+        buffer.set_shared_kerning_model(inputs.kerning.clone());
         buffer.set_feature_overrides(inputs.feature_overrides.clone());
         buffer.set_shaping_locale(inputs.script.clone(), inputs.language.clone());
         match inputs.direction {
@@ -363,6 +392,7 @@ impl TextState {
             ascender: inputs.ascender,
             descender: inputs.descender,
             outlines: inputs.outlines.clone(),
+            live_outline: inputs.live_outline.clone(),
         }
     }
 
@@ -370,10 +400,11 @@ impl TextState {
     /// or editing a glyph changes advances and outlines, and a text line
     /// that does not follow is showing yesterday's spacing.
     pub(crate) fn refresh(&mut self, inputs: &TextInputs) {
-        self.buffer.set_glyph_inventory(inputs.inventory.clone());
+        self.buffer
+            .set_shared_glyph_inventory(inputs.inventory.clone());
         self.buffer
             .set_compiled_font(inputs.compiled.clone(), inputs.normalized.clone());
-        self.buffer.set_kerning_model(inputs.kerning.clone());
+        self.buffer.set_shared_kerning_model(inputs.kerning.clone());
         self.buffer
             .set_feature_overrides(inputs.feature_overrides.clone());
         self.buffer
@@ -396,16 +427,17 @@ impl TextState {
         }
         self.buffer.refresh_shaping();
         self.outlines = inputs.outlines.clone();
+        self.live_outline = inputs.live_outline.clone();
         self.line_height = inputs.line_height;
         self.ascender = inputs.ascender;
         self.descender = inputs.descender;
     }
 
     fn outline(&self, name: &str) -> Option<&Arc<BezPath>> {
-        self.outlines
-            .iter()
-            .find(|(candidate, _)| candidate == name)
-            .map(|(_, path)| path)
+        match &self.live_outline {
+            Some((live, path)) if live == name => Some(path),
+            _ => self.outlines.get(name),
+        }
     }
 
     /// Type a character. Returns false when the font has no glyph for it,
@@ -577,9 +609,10 @@ mod tests {
         let disabled = std::collections::HashSet::from(["liga".to_string(), "kern".to_string()]);
         let inputs = TextInputs {
             context_id: (0, 0),
-            inventory: TextGlyphInventory::default(),
-            kerning: TextKerningModel::default(),
-            outlines: Arc::new(Vec::new()),
+            inventory: TextGlyphInventory::default().into(),
+            kerning: TextKerningModel::default().into(),
+            outlines: GlyphOutlines::default(),
+            live_outline: None,
             compiled: None,
             normalized: Vec::new(),
             line_height: 1000.0,
@@ -622,9 +655,12 @@ mod tests {
         let source = project.source_id(0).unwrap();
         let mut inputs = TextInputs {
             context_id: (0, 0),
-            inventory: TextGlyphInventory::from_project(&project, source).unwrap(),
-            kerning: TextKerningModel::default(),
-            outlines: Arc::new(Vec::new()),
+            inventory: TextGlyphInventory::from_project(&project, source)
+                .unwrap()
+                .into(),
+            kerning: TextKerningModel::default().into(),
+            outlines: GlyphOutlines::default(),
+            live_outline: None,
             compiled: None,
             normalized: Vec::new(),
             line_height: 1000.0,
@@ -659,9 +695,10 @@ mod tests {
     fn non_unicode_open_glyph_is_still_seeded() {
         let inputs = TextInputs {
             context_id: (0, 0),
-            inventory: TextGlyphInventory::default(),
-            kerning: TextKerningModel::default(),
-            outlines: Arc::new(Vec::new()),
+            inventory: TextGlyphInventory::default().into(),
+            kerning: TextKerningModel::default().into(),
+            outlines: GlyphOutlines::default(),
+            live_outline: None,
             compiled: None,
             normalized: Vec::new(),
             line_height: 1000.0,

@@ -6,7 +6,7 @@
 use super::*;
 
 /// A parsed compiled preview with the bytes it was parsed from.
-type ParsedPreview = (std::sync::Arc<Vec<u8>>, Rc<ShapingFont>);
+type ParsedPreview = (Arc<Vec<u8>>, Rc<ShapingFont>);
 
 thread_local! {
     /// The compiled preview last parsed for shaping.
@@ -18,11 +18,11 @@ thread_local! {
 }
 
 /// Parse a compiled preview font once per binary.
-fn parsed_preview(bytes: &std::sync::Arc<Vec<u8>>) -> Option<Rc<ShapingFont>> {
+fn parsed_preview(bytes: &Arc<Vec<u8>>) -> Option<Rc<ShapingFont>> {
     PARSED_PREVIEW.with(|slot| {
         let mut slot = slot.borrow_mut();
         if let Some((parsed_from, font)) = slot.as_ref()
-            && std::sync::Arc::ptr_eq(parsed_from, bytes)
+            && Arc::ptr_eq(parsed_from, bytes)
         {
             return Some(font.clone());
         }

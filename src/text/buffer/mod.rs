@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
+use std::sync::Arc;
 use unicode_bidi::{BidiInfo, Level};
 
 use crate::text::shape::{ShapingFont, ShapingGlyph, ShapingSource, log_shaping_failure};
@@ -561,8 +562,10 @@ pub struct TextBuffer {
     /// its own first strong character, which is what lets a Latin line
     /// and an Arabic line share a buffer.
     auto_direction: bool,
-    kerning: TextKerningModel,
-    glyph_inventory: TextGlyphInventory,
+    /// Shared with the host, which hands the same model to every buffer it makes.
+    /// A buffer that changes its own copy clones it first.
+    kerning: Arc<TextKerningModel>,
+    glyph_inventory: Arc<TextGlyphInventory>,
     manual_kerning: Option<ManualKerningSession>,
     /// Preview feature overrides handed to the shaper.
     feature_overrides: Vec<(String, bool)>,
@@ -578,7 +581,7 @@ pub struct TextBuffer {
     /// `Clone` starts empty: two buffers with the same text are equal
     /// whether or not either has compiled its font yet.
     shaping_font: ShapingFontCache,
-    compiled_font: Option<std::sync::Arc<Vec<u8>>>,
+    compiled_font: Option<Arc<Vec<u8>>>,
     normalized: Vec<f64>,
     /// The positioning shaping gave each sort, applied by `layout`.
     shaped_offsets: ShapedOffsets,
@@ -597,8 +600,8 @@ impl Default for TextBuffer {
             direction: TextDirection::default(),
             // Detect per line until the toolbar pins a direction.
             auto_direction: true,
-            kerning: TextKerningModel::default(),
-            glyph_inventory: TextGlyphInventory::default(),
+            kerning: Arc::default(),
+            glyph_inventory: Arc::default(),
             manual_kerning: None,
             feature_overrides: Vec::new(),
             script_override: None,
@@ -615,11 +618,7 @@ impl Default for TextBuffer {
 impl TextBuffer {
     /// Supply the full compiled document for variable advances and GPOS.
     /// The bytes remain shared; changing coordinates does not recompile the font.
-    pub fn set_compiled_font(
-        &mut self,
-        font: Option<std::sync::Arc<Vec<u8>>>,
-        normalized: Vec<f64>,
-    ) {
+    pub fn set_compiled_font(&mut self, font: Option<Arc<Vec<u8>>>, normalized: Vec<f64>) {
         if self.compiled_font != font || self.normalized != normalized {
             self.compiled_font = font;
             self.normalized = normalized;
@@ -886,9 +885,11 @@ impl TextBuffer {
     /// composite that places it.
     pub fn set_glyph_outline(&mut self, name: &str, outline: &str) {
         if outline.is_empty() {
-            self.glyph_inventory.outlines.remove(name);
+            Arc::make_mut(&mut self.glyph_inventory)
+                .outlines
+                .remove(name);
         } else {
-            self.glyph_inventory
+            Arc::make_mut(&mut self.glyph_inventory)
                 .outlines
                 .insert(name.to_string(), outline.to_string());
         }
@@ -903,13 +904,21 @@ impl TextBuffer {
     /// anything updated since. Mid-nudge that reads as a flash: the
     /// composite snaps to its old shape and forward again.
     pub fn set_glyph_metrics(&mut self, mut inventory: TextGlyphInventory) {
-        std::mem::swap(&mut inventory.outlines, &mut self.glyph_inventory.outlines);
-        self.glyph_inventory = inventory;
+        std::mem::swap(
+            &mut inventory.outlines,
+            &mut Arc::make_mut(&mut self.glyph_inventory).outlines,
+        );
+        self.glyph_inventory = Arc::new(inventory);
         self.shaping_font.clear();
     }
 
     /// Replace the whole glyph inventory, outlines included, and drop the cached shaping font so it is rebuilt on next use.
     pub fn set_glyph_inventory(&mut self, glyph_inventory: TextGlyphInventory) {
+        self.set_shared_glyph_inventory(Arc::new(glyph_inventory));
+    }
+
+    /// Replace the whole glyph inventory with one shared between buffers, without copying it.
+    pub fn set_shared_glyph_inventory(&mut self, glyph_inventory: Arc<TextGlyphInventory>) {
         self.glyph_inventory = glyph_inventory;
         // The complete shaper is invalidated by set_compiled_font instead.
         if self.compiled_font.is_none() {

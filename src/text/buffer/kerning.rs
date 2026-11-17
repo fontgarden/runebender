@@ -13,6 +13,11 @@ impl TextBuffer {
 
     /// Replace the kerning model. Any manual kerning edits in the old model are lost.
     pub fn set_kerning_model(&mut self, kerning: TextKerningModel) {
+        self.kerning = Arc::new(kerning);
+    }
+
+    /// Replace the kerning model with one shared between buffers, without copying it.
+    pub fn set_shared_kerning_model(&mut self, kerning: Arc<TextKerningModel>) {
         self.kerning = kerning;
     }
 
@@ -96,17 +101,18 @@ impl TextBuffer {
     }
 
     pub(super) fn set_direct_kerning(&mut self, left: &str, right: &str, value: f64) {
+        // This buffer's own pairs change, so it takes its own copy of a shared model.
+        let kerning = &mut Arc::make_mut(&mut self.kerning).kerning;
         if value == 0.0 {
-            if let Some(pairs) = self.kerning.kerning.get_mut(left) {
+            if let Some(pairs) = kerning.get_mut(left) {
                 pairs.remove(right);
                 if pairs.is_empty() {
-                    self.kerning.kerning.remove(left);
+                    kerning.remove(left);
                 }
             }
             return;
         }
-        self.kerning
-            .kerning
+        kerning
             .entry(left.to_string())
             .or_default()
             .insert(right.to_string(), value);
