@@ -40,11 +40,17 @@ These rules apply between the layers.
    `tests/design_system.rs` checks this rule.
 
 The code does not obey rule 4 in each place yet.
-Items R2 to R5 of [the cleanup plan](CLEANUP-PLAN.md) remove the references that go against the order.
+`tests/module_layering.rs` counts each reference that goes against an order, and the count for a pair of modules can only go down.
+"Back edges" below gives the counts.
+Items R3 to R5 of [the cleanup plan](CLEANUP-PLAN.md) remove these references.
 
 ## Library modules
 
 The table is in dependency order, lowest layer first.
+
+<!-- check: library-order -->
+Library order: `ui`, `outline`, `font`, `text`, `formats`, `analysis`, `workflows`, `automation`.
+<!-- end -->
 
 | Order | Module | Responsibility | Can depend on |
 |---|---|---|---|
@@ -62,6 +68,10 @@ The table is in dependency order, lowest layer first.
 The table is in dependency order, lowest layer first.
 Each module is below `src/application`.
 `design` and `design::recipes` are two layers, because the widgets use the first and the second uses the widgets.
+
+<!-- check: application-order -->
+Application order: `design`, `widgets`, `design::recipes`, `local_models`, `pieces`, `font_model`, `workspace`, `actions`, `platform`, `editor`, `view`, `cli`, `launch`, `browser`.
+<!-- end -->
 
 | Order | Module | Path | Responsibility |
 |---|---|---|---|
@@ -82,6 +92,62 @@ Each module is below `src/application`.
 
 `local_models`, `pieces`, `font_model`, `workspace` and `actions` are the state layer.
 `cli`, `launch` and `browser` are the entry layer.
+
+## Back edges
+
+A back edge is a reference from a module to a module after it in its order.
+`tests/module_layering.rs` parses the production code with `syn` and counts one reference for each leaf of a `use` declaration and for each qualified path that starts with `crate`, `self`, `super` or `runebender`.
+Code under `#[cfg(test)]` is not counted.
+`LIBRARY_BACK_EDGES` and `APPLICATION_BACK_EDGES` in the test record the permitted count for each pair.
+The test fails when a count rises above its record, and also when a record is higher than the count.
+When a move removes references, lower the record in the same commit.
+To list the files and paths behind each pair, run `cargo test --locked --test module_layering -- --ignored --nocapture`.
+
+These are the counts at the start, measured at commit `a8d0682`.
+The test holds the current counts.
+
+Library: 9 pairs, 90 references.
+
+| From | To | References |
+|---|---|---|
+| `outline` | `font` | 39 |
+| `font` | `formats` | 30 |
+| `ui` | `workflows` | 5 |
+| `font` | `analysis` | 4 |
+| `font` | `text` | 4 |
+| `outline` | `formats` | 4 |
+| `ui` | `font` | 2 |
+| `formats` | `workflows` | 1 |
+| `ui` | `formats` | 1 |
+
+Application: 24 pairs, 141 references.
+
+| From | To | References |
+|---|---|---|
+| `widgets` | `workspace` | 19 |
+| `platform` | `editor` | 17 |
+| `editor` | `view` | 16 |
+| `workspace` | `editor` | 13 |
+| `widgets` | `view` | 12 |
+| `design::recipes` | `view` | 10 |
+| `platform` | `view` | 9 |
+| `workspace` | `platform` | 8 |
+| `widgets` | `actions` | 7 |
+| `actions` | `platform` | 4 |
+| `actions` | `editor` | 3 |
+| `design::recipes` | `workspace` | 3 |
+| `font_model` | `editor` | 3 |
+| `widgets` | `editor` | 3 |
+| `workspace` | `view` | 3 |
+| `design` | `platform` | 2 |
+| `design` | `view` | 2 |
+| `design` | `widgets` | 1 |
+| `editor` | `browser` | 1 |
+| `pieces` | `workspace` | 1 |
+| `platform` | `browser` | 1 |
+| `widgets` | `design::recipes` | 1 |
+| `widgets` | `platform` | 1 |
+| `workspace` | `browser` | 1 |
 
 ## Directories
 
