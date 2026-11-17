@@ -99,12 +99,70 @@ impl TextInputs {
         if let Some(cached) = cache.as_ref().filter(|cached| cached.key == key) {
             return cached.inputs.clone();
         }
-        let inputs = Self::read(font);
+        let inputs = cache
+            .as_ref()
+            .and_then(|cached| Self::follow_layer_edits(font, cached, key))
+            .unwrap_or_else(|| Self::read(font));
         *cache = Some(CachedTextInputs {
             key,
             inputs: inputs.clone(),
         });
         inputs
+    }
+
+    /// The inputs after layer edits to a few glyphs, made from the inputs before them.
+    ///
+    /// Reading the inputs generates mark features from every glyph's anchors, which is most of
+    /// its cost. A layer edit that changed no anchors, components or code points leaves the
+    /// features and the code point map as they were, so only the edited glyphs' advances and
+    /// the outline list are read again.
+    /// `None` when the inputs have to be read in full.
+    fn follow_layer_edits(
+        font: &FontModel,
+        cached: &CachedTextInputs,
+        key: (u64, usize, usize),
+    ) -> Option<Self> {
+        // Another master or a changed glyph list is a different inventory.
+        if (cached.key.1, cached.key.2) != (key.1, key.2) {
+            return None;
+        }
+        let changes = font.project.layer_changes_since(cached.key.0)?;
+        if changes
+            .iter()
+            .any(|change| change.codepoints || change.mark_inputs)
+        {
+            return None;
+        }
+        let source = font
+            .project
+            .document_sources()
+            .nth(font.project.active)?
+            .id();
+        let mut inputs = cached.inputs.clone();
+        if changes.iter().any(|change| change.metrics) {
+            let mut inventory = (*inputs.inventory).clone();
+            inventory.refresh_widths(
+                &font.project,
+                source,
+                changes
+                    .iter()
+                    .filter(|change| change.metrics)
+                    .map(|change| change.glyph.as_str()),
+            )?;
+            inputs.inventory = Arc::new(inventory);
+        }
+        inputs.outlines = Self::model_outlines(font);
+        Some(inputs)
+    }
+
+    /// Every glyph's outline as the glyph list holds it.
+    fn model_outlines(font: &FontModel) -> GlyphOutlines {
+        Arc::new(
+            font.glyphs
+                .iter()
+                .map(|glyph| (glyph.name.clone(), glyph.outline.clone()))
+                .collect(),
+        )
     }
 
     fn read(font: &FontModel) -> Self {
@@ -124,12 +182,7 @@ impl TextInputs {
                 TextKerningModel::from_project(&font.project, source)
                     .expect("the active source has canonical kerning inputs"),
             ),
-            outlines: Arc::new(
-                font.glyphs
-                    .iter()
-                    .map(|glyph| (glyph.name.clone(), glyph.outline.clone()))
-                    .collect(),
-            ),
+            outlines: Self::model_outlines(font),
             live_outline: None,
             compiled: None,
             normalized: Vec::new(),
@@ -603,6 +656,91 @@ mod tests {
     use super::*;
     #[cfg(feature = "integration-fonts")]
     use masonry::kurbo::Shape;
+
+    /// A font with two glyphs of width 500, opened without files.
+    fn two_glyph_model() -> FontModel {
+        use runebender::font::project::{Project, SourceInput};
+        let mut font = norad::Font::new();
+        for (name, character) in [("A", 'A'), ("B", 'B')] {
+            let mut glyph = norad::Glyph::new(name);
+            glyph.width = 500.0;
+            glyph.codepoints = norad::Codepoints::new([character]);
+            font.default_layer_mut().insert_glyph(glyph);
+        }
+        let project = Project::from_source(SourceInput::from_font(font, "Two.ufo".into())).unwrap();
+        FontModel::from_project(project)
+    }
+
+    #[test]
+    fn inputs_follow_a_width_edit_without_a_full_read() {
+        let mut font = two_glyph_model();
+        let layer = font
+            .project
+            .document_sources()
+            .next()
+            .unwrap()
+            .default_layer();
+        let before = TextInputs::new(&font);
+        let revision = font.project.document_revision();
+
+        font.project
+            .edit_document_layer("A", &layer, |draft| {
+                draft.set_width(640.0)?;
+                Ok(())
+            })
+            .unwrap();
+        // The edit is one the inputs can follow: no code point, anchor or component changed.
+        let changes = font.project.layer_changes_since(revision).unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].glyph, "A");
+        assert!(changes[0].metrics && !changes[0].codepoints && !changes[0].mark_inputs);
+
+        let followed = TextInputs::new(&font);
+        assert!(followed != before, "the new width is in the inputs");
+        assert!(
+            followed == TextInputs::read(&font),
+            "following equals reading in full"
+        );
+        // The kerning model and the feature text were not rebuilt.
+        assert!(Arc::ptr_eq(&followed.kerning, &before.kerning));
+
+        // Nothing changed since the current revision, and a revision that never existed, or
+        // one before the journal starts, cannot be followed.
+        let current = font.project.document_revision();
+        assert_eq!(font.project.layer_changes_since(current), Some(Vec::new()));
+        assert_eq!(font.project.layer_changes_since(current + 1), None);
+        assert_eq!(
+            font.project.layer_changes_since(revision.wrapping_sub(1)),
+            None
+        );
+    }
+
+    #[test]
+    fn inputs_are_read_in_full_after_a_code_point_edit() {
+        let mut font = two_glyph_model();
+        let layer = font
+            .project
+            .document_sources()
+            .next()
+            .unwrap()
+            .default_layer();
+        let before = TextInputs::new(&font);
+        let revision = font.project.document_revision();
+        font.project
+            .edit_document_layer("A", &layer, |draft| {
+                draft.set_codepoints(['Z']);
+                Ok(())
+            })
+            .unwrap();
+        let changes = font.project.layer_changes_since(revision).unwrap();
+        assert!(changes[0].codepoints);
+        let after = TextInputs::new(&font);
+        assert!(after == TextInputs::read(&font));
+        assert!(
+            !Arc::ptr_eq(&after.kerning, &before.kerning),
+            "a full read rebuilds it"
+        );
+    }
 
     #[test]
     fn shaping_options_reach_the_widget_buffer() {

@@ -80,10 +80,17 @@ impl LayerEditDraft {
                     .iter()
                     .map(|item| (item.id, &item.alignment, &item.metadata)))
             || self.preserved.anchors != preserved.anchors;
+        let mark_inputs = self.layer.anchors != layer.anchors
+            || self.preserved.anchors != preserved.anchors
+            || !self.layer.components().eq(layer.components())
+            || exact_components(&self.preserved.components)
+                != exact_components(&preserved.components);
         LayerDelta {
             geometry,
             metrics,
             metadata,
+            codepoints: self.preserved.codepoints != preserved.codepoints,
+            mark_inputs,
         }
     }
 

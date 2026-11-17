@@ -329,6 +329,30 @@ impl TextGlyphInventory {
     }
 }
 
+impl TextGlyphInventory {
+    /// Read the advance widths of `glyphs` again from one canonical document source.
+    ///
+    /// This is the whole update after layer edits that changed neither code points nor the
+    /// anchors and components that generated mark features are made from.
+    /// Returns `None`, leaving the inventory unchanged, when a glyph or the source is missing.
+    pub fn refresh_widths<'a>(
+        &mut self,
+        project: &crate::font::project::Project,
+        source: crate::font::variable::SourceId,
+        glyphs: impl IntoIterator<Item = &'a str>,
+    ) -> Option<()> {
+        let layer_id = project.document_source(source)?.default_layer();
+        let widths = glyphs
+            .into_iter()
+            .map(|name| Some((name, project.document_layer(name, &layer_id)?.width())))
+            .collect::<Option<Vec<_>>>()?;
+        for (name, width) in widths {
+            self.widths.insert(name.to_owned(), width);
+        }
+        Some(())
+    }
+}
+
 impl TextKerningModel {
     /// Every stored pair as first key, second key, and value, group
     /// names included, for hosts syncing buffer kerning back into a

@@ -575,6 +575,11 @@ pub(super) struct LayerDelta {
     pub(super) geometry: bool,
     pub(super) metrics: bool,
     pub(super) metadata: bool,
+    /// The Unicode code points changed. Also counted in `metadata`.
+    pub(super) codepoints: bool,
+    /// The anchors or components changed: the inputs of generated mark features.
+    /// Also counted in `geometry` or `metadata`.
+    pub(super) mark_inputs: bool,
 }
 
 impl LayerDelta {

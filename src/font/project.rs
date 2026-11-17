@@ -1810,6 +1810,23 @@ impl Project {
         self.variable.revision
     }
 
+    /// What changed between `revision` and the current revision, when layer edits alone
+    /// produced every revision in between.
+    ///
+    /// `None` means something else changed too, such as kerning, features, sources or the
+    /// glyph list, or the journal no longer reaches back that far; read the document again.
+    /// Data derived from the whole font uses this to follow an edit to one glyph without
+    /// reading every glyph.
+    pub fn layer_changes_since(&self, revision: u64) -> Option<Vec<super::variable::LayerChange>> {
+        Some(
+            self.variable
+                .layer_changes_since(revision)?
+                .into_iter()
+                .cloned()
+                .collect(),
+        )
+    }
+
     /// Clone the canonical editing state without source-format preservation or Master projections.
     pub fn document_snapshot(&self) -> DocumentSnapshot {
         self.variable.snapshot()

@@ -305,6 +305,9 @@ pub(crate) struct VariableData {
     /// Position of each glyph in `font.glyphs`, which is a plain list that finds a name by
     /// scanning. Kept current by [`Self::push_geometry`] and [`Self::reindex_geometry`].
     geometry_index: std::collections::HashMap<String, usize>,
+    /// What recent layer commits changed, oldest first, one entry per revision they produced.
+    /// A revision produced any other way has no entry; see [`Self::layer_changes_since`].
+    layer_changes: std::collections::VecDeque<(u64, Vec<LayerChange>)>,
     pub(super) source_formats:
         BTreeMap<SourceId, super::persistence::source_format::SourceFormatData>,
     pub(super) source_metadata: BTreeMap<SourceId, SourceMetadata>,
@@ -313,7 +316,73 @@ pub(crate) struct VariableData {
     pub(super) next_source: usize,
 }
 
+/// What one layer commit changed in a glyph, for derived data that follows single edits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LayerChange {
+    /// The edited glyph.
+    pub glyph: String,
+    /// The edited layer.
+    pub layer: LayerId,
+    /// The advance width or height changed.
+    pub metrics: bool,
+    /// The Unicode code points changed.
+    pub codepoints: bool,
+    /// The anchors or components changed, which generated mark features are made from.
+    pub mark_inputs: bool,
+}
+
+/// Layer commits remembered for [`VariableData::layer_changes_since`].
+const LAYER_CHANGE_CAPACITY: usize = 64;
+
 impl VariableData {
+    /// Remember what the layer commit that produced the current revision changed.
+    fn record_layer_changes(
+        &mut self,
+        changes: impl IntoIterator<Item = (GlyphLayerAddress, super::babelfont::LayerDelta)>,
+    ) {
+        let changes = changes
+            .into_iter()
+            .map(|(address, delta)| LayerChange {
+                glyph: address.glyph,
+                layer: address.layer,
+                metrics: delta.metrics,
+                codepoints: delta.codepoints,
+                mark_inputs: delta.mark_inputs,
+            })
+            .collect();
+        if self.layer_changes.len() == LAYER_CHANGE_CAPACITY {
+            self.layer_changes.pop_front();
+        }
+        self.layer_changes.push_back((self.revision, changes));
+    }
+
+    /// Every layer change between `revision` and the current revision.
+    ///
+    /// `None` when any revision in between came from something other than a layer commit, such
+    /// as a kerning, source or glyph-list edit, or is older than the journal keeps.
+    /// The caller then has to read the whole document again.
+    pub(super) fn layer_changes_since(&self, revision: u64) -> Option<Vec<&LayerChange>> {
+        let steps = self.revision.checked_sub(revision)?;
+        let steps = usize::try_from(steps).ok()?;
+        if steps > self.layer_changes.len() {
+            return None;
+        }
+        let recent = self
+            .layer_changes
+            .iter()
+            .skip(self.layer_changes.len() - steps);
+        let mut expected = revision;
+        let mut changes = Vec::new();
+        for (at, entries) in recent {
+            expected = expected.checked_add(1)?;
+            if *at != expected {
+                return None;
+            }
+            changes.extend(entries);
+        }
+        Some(changes)
+    }
+
     /// Where `name` is in `font.glyphs`.
     ///
     /// The index is trusted only when it points at a glyph with that name.
@@ -370,6 +439,7 @@ impl Clone for VariableData {
             compiled: std::sync::Mutex::default(),
             glyphs: self.glyphs.clone(),
             geometry_index: self.geometry_index.clone(),
+            layer_changes: self.layer_changes.clone(),
             source_formats: self.source_formats.clone(),
             source_metadata: self.source_metadata.clone(),
             designspace: self.designspace.clone(),
@@ -717,6 +787,11 @@ impl VariableData {
         *layer = new_layer;
         *preserved = new_preserved;
         self.revision = self.revision.wrapping_add(1);
+        let address = GlyphLayerAddress {
+            glyph: name.to_owned(),
+            layer: id.clone(),
+        };
+        self.record_layer_changes([(address, delta)]);
         Some(delta)
     }
 
@@ -767,6 +842,7 @@ impl VariableData {
             .collect::<Vec<_>>();
         if !changed.is_empty() {
             self.revision = self.revision.wrapping_add(1);
+            self.record_layer_changes(changed.iter().cloned());
         }
         Some(changed)
     }
