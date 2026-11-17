@@ -6,6 +6,7 @@
 
 use super::tools::label::LabelDrag;
 use super::*;
+use crate::application::design::point_marker::{self, PointKind};
 
 /// Cells along the longer side of the thickness field's grid.
 const THICKNESS_CELLS: usize = 256;
@@ -68,9 +69,7 @@ impl EditorWidget {
     /// glyph being edited stays the most detailed thing on the canvas.
     fn paint_part_points(&self, painter: &mut Painter<'_>, sort_affine: Affine) {
         let pal = &self.palette;
-        let marker_scale = point_marker_scale(self.session.viewport.zoom);
-        let ring_width = (POINT_RING_WIDTH * marker_scale).max(DesignStroke::Hairline.px());
-        let halo_width = ring_width + POINT_HALO_EXTRA;
+        let widths = point_marker::widths(self.session.viewport.zoom);
         for part in self
             .session
             .parts
@@ -94,35 +93,14 @@ impl EditorWidget {
                     .draw();
             }
             for point in &part.points {
-                let hue = if !point.on_curve {
-                    pal.role("pointOffcurve")
-                } else if point.smooth {
-                    pal.role("pointSmooth")
-                } else {
-                    pal.role("pointCorner")
-                };
-                let (fill, interior) = if pal.points_filled {
-                    (pal.point_outline.unwrap_or(pal.text), hue)
-                } else {
-                    (hue, pal.canvas)
-                };
-                let square = point.on_curve && !point.smooth;
-                let radius = if square {
-                    POINT_CORNER_RADIUS
-                } else {
-                    POINT_CURVE_RADIUS
-                };
-                let shape =
-                    point_marker_shape(sort_affine * point.point, radius * marker_scale, square);
-                if pal.point_halo {
-                    painter
-                        .stroke(&shape, &Stroke::new(halo_width), pal.point_halo_fill())
-                        .draw();
-                }
-                painter.fill(&shape, interior).draw();
-                painter
-                    .stroke(&shape, &Stroke::new(ring_width), fill)
-                    .draw();
+                let kind = PointKind::of(point.on_curve, point.smooth);
+                let ink = point_marker::ink(pal, kind.hue(pal), false, pal.canvas);
+                let shape = point_marker_shape(
+                    sort_affine * point.point,
+                    kind.radius() * widths.scale,
+                    kind.is_square(),
+                );
+                point_marker::paint(painter, &shape, ink, point_marker::halo(pal), widths);
             }
         }
     }
@@ -708,60 +686,30 @@ impl EditorWidget {
             }
         }
 
-        let marker_scale = point_marker_scale(self.session.viewport.zoom);
-        let ring_width = (POINT_RING_WIDTH * marker_scale).max(DesignStroke::Hairline.px());
-        let halo_width = ring_width + POINT_HALO_EXTRA;
+        let widths = point_marker::widths(self.session.viewport.zoom);
+        let marker_scale = widths.scale;
         if point_chrome {
             let start_markers = self.start_markers();
             for (id, sp, on_curve, smooth, _) in self.screen_points() {
                 let selected = self.session.selection.contains(&id);
-                let hue = if !on_curve {
-                    pal.role("pointOffcurve")
-                } else if smooth {
-                    pal.role("pointSmooth")
-                } else {
-                    pal.role("pointCorner")
-                };
-                // The hue is the ring or the interior, by the theme's
-                // recipe: a ring on a dark interior where the ground
-                // is far from mid grey, a hue fill with one keyline
-                // where it is not (the mark cells' treatment).
-                let (fill, interior) = if selected {
-                    (
-                        pal.point_outline.unwrap_or(pal.text),
-                        pal.role("pointSelected"),
-                    )
-                } else if pal.points_filled {
-                    (pal.point_outline.unwrap_or(pal.text), hue)
-                } else {
-                    (hue, pal.canvas)
-                };
-                // A point is a dark window with a coloured ring, shared with
-                // the web editor: a
-                // halo so the point keeps an edge over the outline, an
-                // interior that masks what runs under it, then a
-                // constant-width ring. A solid dot loses its shape against
-                // the curve it sits on.
-                let square = on_curve && !smooth;
-                let radius = if square {
-                    POINT_CORNER_RADIUS
-                } else {
-                    POINT_CURVE_RADIUS
-                };
-                let r = (radius + if selected { POINT_SELECTED_GROW } else { 0.0 }) * marker_scale;
+                let kind = PointKind::of(on_curve, smooth);
+                let hue = kind.hue(pal);
+                let ink = point_marker::ink(pal, hue, selected, pal.canvas);
+                let square = kind.is_square();
+                let r = (kind.radius() + if selected { POINT_SELECTED_GROW } else { 0.0 })
+                    * marker_scale;
                 let shape = start_markers
                     .iter()
                     .find(|(start_id, _, _)| *start_id == id)
                     .and_then(|(_, from, to)| direction_marker_shape(*from, *to, r, smooth))
                     .unwrap_or_else(|| point_marker_shape(sp, r, square));
-                let halo = pal.point_halo_fill();
-                let ring = Stroke::new(ring_width);
-                if pal.point_halo {
-                    painter
-                        .stroke(&shape, &Stroke::new(halo_width), halo)
-                        .draw();
-                }
-                painter.fill(&shape, interior).draw();
+                point_marker::paint_ground(
+                    painter,
+                    &shape,
+                    ink.interior,
+                    point_marker::halo(pal),
+                    widths,
+                );
 
                 // A point is also a window onto the design grid. GPUI
                 // redraws the dots or line chords which fall inside the
@@ -770,7 +718,7 @@ impl EditorWidget {
                 let (coarse_alpha, fine_alpha) = grid_alphas(self.session.viewport.zoom);
                 let (coarse_dot, fine_dot) = point_grid_dot_sizes(self.session.viewport.zoom);
                 let grid_color = if selected || pal.points_filled {
-                    fill
+                    ink.ring
                 } else {
                     hue
                 };
@@ -803,80 +751,58 @@ impl EditorWidget {
                         painter.fill(&marks, color).draw();
                     }
                 }
-                painter.stroke(&shape, &ring, fill).draw();
+                point_marker::paint_ring(painter, &shape, ink.ring, widths);
             }
         }
     }
 
     /// Paint the handles of the ordinary pen that are not committed, and the point a pen click would add.
     fn paint_pen_previews(&self, painter: &mut Painter<'_>, pal: &Palette, affine: Affine) {
-        let marker_scale = point_marker_scale(self.session.viewport.zoom);
-        let ring_width = (POINT_RING_WIDTH * marker_scale).max(DesignStroke::Hairline.px());
-        let halo_width = ring_width + POINT_HALO_EXTRA;
+        let widths = point_marker::widths(self.session.viewport.zoom);
+        let marker_scale = widths.scale;
         // The ordinary pen's initial incoming and current outgoing
         // handles remain session-local until close or the next segment
         // commits them. Paint their nodes separately so smooth points
         // retain the same visible feedback as committed off-curves.
         for (_, handle) in self.session.pen_handle_previews() {
-            let hue = pal.role("pointOffcurve");
-            let (fill, interior) = if pal.points_filled {
-                (pal.point_outline.unwrap_or(pal.text), hue)
-            } else {
-                (hue, pal.canvas)
-            };
-            let shape =
-                point_marker_shape(affine * handle, POINT_CURVE_RADIUS * marker_scale, false);
-            if pal.point_halo {
-                painter
-                    .stroke(&shape, &Stroke::new(halo_width), pal.point_halo_fill())
-                    .draw();
-            }
-            painter.fill(&shape, interior).draw();
-            painter
-                .stroke(&shape, &Stroke::new(ring_width), fill)
-                .draw();
+            let kind = PointKind::OffCurve;
+            let ink = point_marker::ink(pal, kind.hue(pal), false, pal.canvas);
+            let shape = point_marker_shape(affine * handle, kind.radius() * marker_scale, false);
+            point_marker::paint(painter, &shape, ink, point_marker::halo(pal), widths);
         }
 
         // The point a pen click would add to the segment under the
         // cursor: a faint corner on a line, a faint smooth point on a curve.
         if let Some((position, curve)) = self.insert_preview.filter(|_| self.tool == Tool::Pen) {
-            let hue = pal.role(if curve { "pointSmooth" } else { "pointCorner" });
-            let (fill, interior) = if pal.points_filled {
-                (pal.point_outline.unwrap_or(pal.text), hue)
-            } else {
-                (hue, pal.canvas)
-            };
-            let radius = if curve {
-                POINT_CURVE_RADIUS
-            } else {
-                POINT_CORNER_RADIUS
-            };
-            let shape = point_marker_shape(affine * position, radius * marker_scale, !curve);
-            painter.fill(&shape, interior.with_alpha(0.5)).draw();
-            painter
-                .stroke(&shape, &Stroke::new(ring_width), fill.with_alpha(0.6))
-                .draw();
+            let kind = PointKind::of(true, curve);
+            let ink = point_marker::ink(pal, kind.hue(pal), false, pal.canvas);
+            let shape = point_marker_shape(
+                affine * position,
+                kind.radius() * marker_scale,
+                kind.is_square(),
+            );
+            painter.fill(&shape, ink.interior.with_alpha(0.5)).draw();
+            point_marker::paint_ring(painter, &shape, ink.ring.with_alpha(0.6), widths);
         }
     }
 
     /// Paint the anchors of the open glyph.
     fn paint_anchors(&self, painter: &mut Painter<'_>, pal: &Palette, affine: Affine) {
-        let marker_scale = point_marker_scale(self.session.viewport.zoom);
-        let ring_width = (POINT_RING_WIDTH * marker_scale).max(DesignStroke::Hairline.px());
-        let halo_width = ring_width + POINT_HALO_EXTRA;
+        let widths = point_marker::widths(self.session.viewport.zoom);
+        let marker_scale = widths.scale;
         // Anchors use the same point construction, with solid pink inside
         // the shared dark keyline. Selection retains the node palette.
         let anchor_color = pal.mark("pink").unwrap_or_else(|| pal.role("danger"));
         for (anchor, position) in self.session.anchor_points() {
             let p = affine * position;
             let selected = self.session.selected_anchors.contains(&anchor);
-            let (ring, inner) = if selected {
-                (
-                    pal.point_outline.unwrap_or(pal.text),
-                    pal.role("pointSelected"),
-                )
-            } else {
-                (pal.point_outline.unwrap_or(pal.text), anchor_color)
+            let ink = point_marker::Ink {
+                ring: point_marker::outline(pal),
+                interior: if selected {
+                    pal.role("pointSelected")
+                } else {
+                    anchor_color
+                },
             };
             let r = (POINT_CURVE_RADIUS + if selected { POINT_SELECTED_GROW } else { 0.0 })
                 * marker_scale
@@ -888,15 +814,8 @@ impl EditorWidget {
                 kurbo::PathEl::LineTo(Point::new(p.x - r, p.y)),
                 kurbo::PathEl::ClosePath,
             ]);
-            if pal.point_halo {
-                painter
-                    .stroke(&diamond, &Stroke::new(halo_width), pal.role("halo"))
-                    .draw();
-            }
-            painter.fill(&diamond, inner).draw();
-            painter
-                .stroke(&diamond, &Stroke::new(ring_width), ring)
-                .draw();
+            let halo = pal.point_halo.then(|| pal.role("halo"));
+            point_marker::paint(painter, &diamond, ink, halo, widths);
         }
     }
 
@@ -1073,9 +992,7 @@ impl EditorWidget {
         if matches!(self.tool, Tool::Select | Tool::Metaball)
             && let Ok(source) = self.session.metaball_data()
         {
-            let marker_scale = point_marker_scale(self.session.viewport.zoom);
-            let ring_width = (POINT_RING_WIDTH * marker_scale).max(DesignStroke::Hairline.px());
-            let halo_width = ring_width + POINT_HALO_EXTRA;
+            let widths = point_marker::widths(self.session.viewport.zoom);
             for group in source.groups {
                 for ball in group.balls {
                     let center = affine * Point::new(ball.x, ball.y);
@@ -1084,14 +1001,15 @@ impl EditorWidget {
                         .metaballs
                         .selected
                         .contains(&(group.id, ball.id));
-                    let (marker_ring, interior) = if selected {
-                        (
-                            pal.point_outline.unwrap_or(pal.text),
-                            pal.role("pointSelected"),
-                        )
+                    let ink = if selected {
+                        point_marker::ink(pal, pal.canvas, true, pal.canvas)
                     } else {
-                        (pal.editor_control_ink(), pal.canvas)
+                        point_marker::Ink {
+                            ring: pal.editor_control_ink(),
+                            interior: pal.canvas,
+                        }
                     };
+                    let marker_ring = ink.ring;
                     let support = Circle::new(
                         center,
                         ball.radius * ball.reach * self.session.viewport.zoom,
@@ -1123,17 +1041,9 @@ impl EditorWidget {
                     }
                     let radius = (POINT_CURVE_RADIUS
                         + if selected { POINT_SELECTED_GROW } else { 0.0 })
-                        * marker_scale;
+                        * widths.scale;
                     let marker = Circle::new(center, radius);
-                    if pal.point_halo {
-                        painter
-                            .stroke(marker, &Stroke::new(halo_width), pal.point_halo_fill())
-                            .draw();
-                    }
-                    painter.fill(marker, interior).draw();
-                    painter
-                        .stroke(marker, &Stroke::new(ring_width), marker_ring)
-                        .draw();
+                    point_marker::paint(painter, &marker, ink, point_marker::halo(pal), widths);
                 }
             }
         }

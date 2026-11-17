@@ -6,6 +6,7 @@
 //! Tests of the design grid, point and start markers, and the text cursor blink cycle.
 
 use super::*;
+use crate::application::design::{POINT_RING_WIDTH, point_marker_scale};
 
 /// The cached dot field, moved to a pan offset, puts dots exactly where drawing each grid
 /// intersection through the view transform would, and leaves out the same ones.

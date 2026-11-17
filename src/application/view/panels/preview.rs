@@ -5,6 +5,7 @@
 
 use crate::application::design;
 use crate::application::design::Space;
+use crate::application::design::point_marker::{self, PointKind};
 use crate::application::editor::tools::text as text_tool;
 use crate::application::widgets::preview_blur;
 use crate::application::workspace::Workspace;
@@ -367,33 +368,21 @@ pub(crate) fn glyph_preview(app: &Workspace) -> impl WidgetView<Workspace> + use
                 }
                 for (x, y, point_type, smooth) in contour {
                     let at = t * Point::new(*x, *y);
-                    let off = *point_type == runebender::font::LayerPointType::OffCurve;
-                    let hue = pal.role(if off {
-                        "pointOffcurve"
-                    } else if *smooth {
-                        "pointSmooth"
-                    } else {
-                        "pointCorner"
-                    });
-                    let (fill, border) = if pal.points_filled {
-                        (hue, pal.point_outline.unwrap_or(pal.text))
-                    } else {
-                        (background, hue)
-                    };
-                    let radius = if off || *smooth {
-                        design::POINT_CURVE_RADIUS
-                    } else {
-                        design::POINT_CORNER_RADIUS
-                    } * design::INSPECTOR_PREVIEW_POINT_SCALE;
-                    if off || *smooth {
-                        let shape = Circle::new(at, radius);
-                        p.fill(shape, fill).draw();
-                        p.stroke(shape, &stroke, border).draw();
-                    } else {
+                    let kind = PointKind::of(
+                        *point_type != runebender::font::LayerPointType::OffCurve,
+                        *smooth,
+                    );
+                    let ink = point_marker::ink(&pal, kind.hue(&pal), false, background);
+                    let radius = kind.radius() * design::INSPECTOR_PREVIEW_POINT_SCALE;
+                    if kind.is_square() {
                         let shape =
                             Rect::new(at.x - radius, at.y - radius, at.x + radius, at.y + radius);
-                        p.fill(shape, fill).draw();
-                        p.stroke(shape, &stroke, border).draw();
+                        p.fill(shape, ink.interior).draw();
+                        p.stroke(shape, &stroke, ink.ring).draw();
+                    } else {
+                        let shape = Circle::new(at, radius);
+                        p.fill(shape, ink.interior).draw();
+                        p.stroke(shape, &stroke, ink.ring).draw();
                     }
                 }
             }
