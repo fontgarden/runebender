@@ -94,7 +94,7 @@ pub fn oklch_to_rgb(l: f64, c: f64, h: f64) -> ColorRgba {
 // ---- token file structures ----
 
 #[derive(Deserialize)]
-#[serde(try_from = "OklchValue")]
+#[serde(try_from = "String")]
 struct HueDef {
     hue: f64,
     lightness: f64,
@@ -102,47 +102,23 @@ struct HueDef {
 }
 
 #[derive(Deserialize)]
-#[serde(try_from = "OklchValue")]
+#[serde(try_from = "String")]
 struct StepDef {
     lightness: f64,
     chroma: f64,
 }
 
-/// Read uniform OKLCH strings while retaining older component tables.
-#[derive(Deserialize)]
-#[serde(untagged, deny_unknown_fields)]
-enum OklchValue {
-    Color(String),
-    Components {
-        lightness: f64,
-        chroma: f64,
-        hue: Option<f64>,
-    },
+/// The three numbers of an `oklch(lightness chroma hue)` string.
+fn oklch_string_components(value: &str) -> Result<[f64; 3], String> {
+    parse_oklch_components(value)
+        .ok_or_else(|| format!("expected oklch(lightness chroma hue), got '{value}'"))
 }
 
-impl OklchValue {
-    fn components(self, default_hue: Option<f64>) -> Result<[f64; 3], String> {
-        match self {
-            Self::Color(value) => parse_oklch_components(&value)
-                .ok_or_else(|| format!("expected oklch(lightness chroma hue), got '{value}'")),
-            Self::Components {
-                lightness,
-                chroma,
-                hue,
-            } => Ok([
-                lightness,
-                chroma,
-                hue.or(default_hue).ok_or("missing OKLCH hue")?,
-            ]),
-        }
-    }
-}
-
-impl TryFrom<OklchValue> for HueDef {
+impl TryFrom<String> for HueDef {
     type Error = String;
 
-    fn try_from(value: OklchValue) -> Result<Self, Self::Error> {
-        let [lightness, chroma, hue] = value.components(None)?;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let [lightness, chroma, hue] = oklch_string_components(&value)?;
         Ok(Self {
             hue,
             lightness,
@@ -151,11 +127,11 @@ impl TryFrom<OklchValue> for HueDef {
     }
 }
 
-impl TryFrom<OklchValue> for StepDef {
+impl TryFrom<String> for StepDef {
     type Error = String;
 
-    fn try_from(value: OklchValue) -> Result<Self, Self::Error> {
-        let [lightness, chroma, hue] = value.components(Some(0.0))?;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let [lightness, chroma, hue] = oklch_string_components(&value)?;
         if hue != 0.0 {
             return Err("rainbow steps must use a zero hue offset".into());
         }
@@ -174,36 +150,18 @@ struct RainbowDef {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ThemeFile {
-    #[serde(rename = "$comment", default)]
-    _comment: Option<serde_json::Value>,
     #[serde(rename = "formatVersion")]
     format_version: u32,
     id: String,
     name: String,
     #[serde(rename = "baseUi")]
     base_ui: HashMap<String, String>,
-    #[serde(alias = "glyphGrid")]
     rainbow: RainbowDef,
     surfaces: HashMap<String, String>,
     text: HashMap<String, String>,
     roles: HashMap<String, String>,
     #[serde(default)]
-    drawing: Option<DrawingDef>,
-    // Keep the original top-level settings readable in existing custom themes.
-    #[serde(rename = "markStep")]
-    mark_step: Option<String>,
-    #[serde(rename = "markStyle")]
-    mark_style: Option<String>,
-    #[serde(rename = "markOutline")]
-    mark_outline: Option<String>,
-    #[serde(rename = "markInk")]
-    mark_ink: Option<String>,
-    #[serde(rename = "pointStyle")]
-    point_style: Option<String>,
-    #[serde(rename = "pointOutline")]
-    point_outline: Option<String>,
-    #[serde(rename = "pointHalo")]
-    point_halo: Option<bool>,
+    drawing: DrawingDef,
     #[serde(default)]
     geometry: Option<GeometryDef>,
     #[serde(default)]
@@ -220,23 +178,6 @@ struct DrawingDef {
     point_style: Option<String>,
     point_outline: Option<String>,
     point_halo: Option<bool>,
-}
-
-fn merge_drawing_setting<T>(
-    theme_id: &str,
-    name: &str,
-    legacy: &mut Option<T>,
-    grouped: Option<T>,
-) -> Result<(), String> {
-    if grouped.is_some() {
-        if legacy.is_some() {
-            return Err(format!(
-                "theme '{theme_id}' defines {name} both at the top level and in drawing"
-            ));
-        }
-        *legacy = grouped;
-    }
-    Ok(())
 }
 
 /// The macOS material behind a blurred window, from lightest-touch to most opaque varies by
@@ -634,7 +575,7 @@ fn resolve_token(file: &ThemeFile, token: &str) -> Option<ColorRgba> {
     let mut parts = token.split('.');
     match (parts.next()?, parts.next(), parts.next(), parts.next()) {
         ("baseUi", Some(step), None, None) => parse_color(file.base_ui.get(step)?),
-        ("rainbow" | "glyphGrid", Some(name), Some(step), None) => {
+        ("rainbow", Some(name), Some(step), None) => {
             let hue = file.rainbow.hues.get(name)?;
             let offsets = file.rainbow.steps.get(step)?;
             // Preserve the original palette's chroma-reducing gamut recipe.
@@ -690,47 +631,14 @@ fn resolve_optional(
         .transpose()
 }
 
-/// Parse and resolve a TOML theme or an existing JSON theme.
-/// Reports invalid references by name.
+/// Parse and resolve a TOML theme.
+/// Reports invalid references and unknown keys by name.
 pub fn parse_theme(source: &str) -> Result<Theme, String> {
-    let mut file: ThemeFile = if source.trim_start().starts_with('{') {
-        serde_json::from_str(source).map_err(|error| format!("invalid theme JSON: {error}"))?
-    } else {
-        toml::from_str(source).map_err(|error| format!("invalid theme TOML: {error}"))?
-    };
-    let drawing = file.drawing.take().unwrap_or_default();
-    merge_drawing_setting(&file.id, "markStep", &mut file.mark_step, drawing.mark_step)?;
-    merge_drawing_setting(
-        &file.id,
-        "markStyle",
-        &mut file.mark_style,
-        drawing.mark_style,
-    )?;
-    merge_drawing_setting(
-        &file.id,
-        "markOutline",
-        &mut file.mark_outline,
-        drawing.mark_outline,
-    )?;
-    merge_drawing_setting(&file.id, "markInk", &mut file.mark_ink, drawing.mark_ink)?;
-    merge_drawing_setting(
-        &file.id,
-        "pointStyle",
-        &mut file.point_style,
-        drawing.point_style,
-    )?;
-    merge_drawing_setting(
-        &file.id,
-        "pointOutline",
-        &mut file.point_outline,
-        drawing.point_outline,
-    )?;
-    merge_drawing_setting(
-        &file.id,
-        "pointHalo",
-        &mut file.point_halo,
-        drawing.point_halo,
-    )?;
+    if source.trim_start().starts_with('{') {
+        return Err("JSON themes are not supported; write the theme as TOML".into());
+    }
+    let file: ThemeFile =
+        toml::from_str(source).map_err(|error| format!("invalid theme TOML: {error}"))?;
     let theme_id = file.id.as_str();
     validate_theme_id(theme_id)?;
     if !(0.0..=1.0).contains(&file.window.blur_tint_opacity) {
@@ -871,7 +779,7 @@ pub fn parse_theme(source: &str) -> Result<Theme, String> {
             roles.insert(name.into(), value);
         }
     }
-    let mark_step = file.mark_step.as_deref().unwrap_or("base");
+    let mark_step = file.drawing.mark_step.as_deref().unwrap_or("base");
     let marks_at = |step: &str| {
         file.rainbow
             .marks
@@ -927,7 +835,7 @@ pub fn parse_theme(source: &str) -> Result<Theme, String> {
             ));
         }
     }
-    let mark_style = match file.mark_style.as_deref() {
+    let mark_style = match file.drawing.mark_style.as_deref() {
         Some("fill") => MarkStyle::Fill,
         Some("border") | None => MarkStyle::Border,
         Some(value) => {
@@ -936,10 +844,14 @@ pub fn parse_theme(source: &str) -> Result<Theme, String> {
             ));
         }
     };
-    let mark_outline =
-        resolve_optional(&file, theme_id, "markOutline", file.mark_outline.as_deref())?;
-    let mark_ink = resolve_optional(&file, theme_id, "markInk", file.mark_ink.as_deref())?;
-    let point_style = match file.point_style.as_deref() {
+    let mark_outline = resolve_optional(
+        &file,
+        theme_id,
+        "markOutline",
+        file.drawing.mark_outline.as_deref(),
+    )?;
+    let mark_ink = resolve_optional(&file, theme_id, "markInk", file.drawing.mark_ink.as_deref())?;
+    let point_style = match file.drawing.point_style.as_deref() {
         Some("fill") => PointStyle::Fill,
         Some("ring") | None => PointStyle::Ring,
         Some(value) => {
@@ -952,7 +864,7 @@ pub fn parse_theme(source: &str) -> Result<Theme, String> {
         &file,
         theme_id,
         "pointOutline",
-        file.point_outline.as_deref(),
+        file.drawing.point_outline.as_deref(),
     )?;
     let mut base_ui: Vec<(&String, &String)> = file.base_ui.iter().collect();
     base_ui.sort();
@@ -971,7 +883,7 @@ pub fn parse_theme(source: &str) -> Result<Theme, String> {
         mark_ink,
         point_style,
         point_outline,
-        point_halo: file.point_halo.unwrap_or(true),
+        point_halo: file.drawing.point_halo.unwrap_or(true),
         surfaces,
         text,
         roles,
@@ -1371,79 +1283,46 @@ mod tests {
     }
 
     #[test]
-    fn existing_json_themes_still_load() {
-        let toml: toml::Value = toml::from_str(builtin_theme_source("gray").unwrap()).unwrap();
-        let mut json = serde_json::to_value(&toml).unwrap();
-        let drawing = json.as_object_mut().unwrap().remove("drawing").unwrap();
-        json.as_object_mut()
-            .unwrap()
-            .extend(drawing.as_object().unwrap().clone());
-        json["$comment"] = serde_json::json!(["Existing JSON comments remain valid."]);
-        let json = serde_json::to_string(&json)
-            .unwrap()
-            .replace("rainbow", "glyphGrid");
-        let theme = parse_theme(&json).expect("existing JSON theme");
-        assert_eq!(theme.id, "gray");
-        assert_eq!(theme.marks, load_theme("gray").unwrap().marks);
-    }
-
-    #[test]
-    fn grouped_drawing_settings_preserve_legacy_theme_appearance() {
-        for &id in BUILTIN_THEME_IDS {
-            let source = builtin_theme_source(id).unwrap();
-            let grouped = parse_theme(source).unwrap();
-            let mut file: toml::Value = toml::from_str(source).unwrap();
-            let drawing = file.as_table_mut().unwrap().remove("drawing").unwrap();
-            file.as_table_mut()
-                .unwrap()
-                .extend(drawing.as_table().unwrap().clone());
-            let legacy = parse_theme(&toml::to_string(&file).unwrap()).unwrap();
-            assert_eq!(grouped.marks, legacy.marks, "{id}");
-            assert_eq!(grouped.mark_style, legacy.mark_style, "{id}");
-            assert_eq!(grouped.mark_outline, legacy.mark_outline, "{id}");
-            assert_eq!(grouped.mark_ink, legacy.mark_ink, "{id}");
-            assert_eq!(grouped.point_style, legacy.point_style, "{id}");
-            assert_eq!(grouped.point_outline, legacy.point_outline, "{id}");
-            assert_eq!(grouped.point_halo, legacy.point_halo, "{id}");
-        }
-    }
-
-    #[test]
-    fn drawing_settings_reject_duplicate_locations_and_typos() {
+    fn older_theme_layouts_fail_and_name_the_unsupported_key() {
         let source = builtin_theme_source("gray").unwrap();
-        let duplicate = source.replace("name = \"Gray\"", "name = \"Gray\"\npointHalo = false");
-        assert_eq!(
-            parse_theme(&duplicate).unwrap_err(),
-            "theme 'gray' defines pointHalo both at the top level and in drawing"
-        );
+        let file: toml::Value = toml::from_str(source).unwrap();
+
+        // A JSON theme.
+        let json = serde_json::to_string(&file).unwrap();
+        assert!(parse_theme(&json).unwrap_err().contains("JSON"));
+
+        // A drawing setting at the top level, beside or instead of the drawing table.
+        let top_level = source.replace("name = \"Gray\"", "name = \"Gray\"\npointHalo = false");
+        assert!(parse_theme(&top_level).unwrap_err().contains("pointHalo"));
         let typo = source.replace("pointHalo =", "pointHlao =");
         assert!(parse_theme(&typo).unwrap_err().contains("pointHlao"));
-    }
 
-    #[test]
-    fn legacy_glyph_grid_tokens_preserve_rainbow_colors() {
-        let source = builtin_theme_source("gray").unwrap();
-        let mut file: toml::Value = toml::from_str(source).unwrap();
-        for section in ["hues", "steps"] {
-            for (_, value) in file["rainbow"][section].as_table_mut().unwrap().iter_mut() {
-                let [lightness, chroma, hue] =
-                    parse_oklch_components(value.as_str().unwrap()).unwrap();
-                let mut components = toml::Table::new();
-                components.insert("lightness".into(), lightness.into());
-                components.insert("chroma".into(), chroma.into());
-                if section == "hues" {
-                    components.insert("hue".into(), hue.into());
-                }
-                *value = toml::Value::Table(components);
-            }
-        }
-        let legacy_source = toml::to_string(&file)
+        // The glyphGrid table and its tokens.
+        let glyph_grid = source.replace("[rainbow", "[glyphGrid");
+        assert!(parse_theme(&glyph_grid).unwrap_err().contains("glyphGrid"));
+        let glyph_grid_token = source.replacen("\"rainbow.", "\"glyphGrid.", 1);
+        assert!(
+            parse_theme(&glyph_grid_token)
+                .unwrap_err()
+                .contains("glyphGrid.")
+        );
+
+        // A color as a component table, not an oklch() string.
+        let mut components = file.clone();
+        let hue = components["rainbow"]["hues"]
+            .as_table_mut()
             .unwrap()
-            .replace("rainbow", "glyphGrid");
-        let legacy = parse_theme(&legacy_source).unwrap();
-        let current = parse_theme(source).unwrap();
-        assert_eq!(legacy.marks, current.marks);
-        assert_eq!(legacy.roles, current.roles);
+            .iter_mut()
+            .next()
+            .unwrap()
+            .1;
+        let mut table = toml::Table::new();
+        table.insert("lightness".into(), 0.5.into());
+        table.insert("chroma".into(), 0.1.into());
+        table.insert("hue".into(), 30.0.into());
+        *hue = toml::Value::Table(table);
+        let error = parse_theme(&toml::to_string(&components).unwrap()).unwrap_err();
+        assert!(error.contains("hues"), "{error}");
     }
 
     #[test]

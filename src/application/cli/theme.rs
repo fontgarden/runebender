@@ -11,7 +11,7 @@ pub(super) enum ThemeAction {
     List,
     /// Check a theme file and report its resolved identity.
     Validate {
-        /// A .theme.toml or existing .theme.json file.
+        /// A .theme.toml file.
         file: PathBuf,
     },
     /// Copy a built-in theme into a new, editable file.
