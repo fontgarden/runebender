@@ -6,6 +6,28 @@
 use super::super::*;
 use masonry::core::KeyboardEvent;
 
+/// Place the caret at a press of the text tool, and make the sort under it the glyph being
+/// edited.
+pub(in super::super) fn press(editor: &mut EditorWidget, ctx: &mut EventCtx<'_>, at: Point) {
+    let Some(text) = editor.text.as_mut() else {
+        return;
+    };
+    editor.cursor_blink_elapsed_ns = 0;
+    editor.cursor_visible = true;
+    ctx.request_anim_frame();
+    let design = editor.session.viewport.screen_to_design(at);
+    if let Some(index) = text.click(design)
+        && let Some(glyph) = text.activate(index)
+    {
+        ctx.submit_action::<EditorEvent>(EditorEvent::EditGlyph {
+            name: glyph,
+            tool: Tool::Text,
+        });
+    }
+    editor.emit_text_proof_selection(ctx);
+    ctx.request_render();
+}
+
 /// Handle IME composition and paste, and restart the caret blink.
 /// Returns true when the event was consumed.
 pub(in super::super) fn input(

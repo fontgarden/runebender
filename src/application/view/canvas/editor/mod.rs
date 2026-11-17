@@ -29,7 +29,6 @@ use self::marks::{
     grid_index, horizontal_rule_rect, paint_metric_crosses, point_grid_marks, point_marker_shape,
     text_sort_metric_ys, vertical_rule_rect,
 };
-use self::menu::MENU_ITEMS;
 use crate::application::editor::tools::interpolation::InterpolationCanvas;
 
 use std::sync::Arc;

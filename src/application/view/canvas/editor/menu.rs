@@ -63,6 +63,88 @@ pub(super) const MENU_ITEMS: &[MenuRow] = &[
 ];
 
 impl EditorWidget {
+    /// Open the context menu for a secondary press at `at`, with rows for the picture, the
+    /// component and the open component under the pointer.
+    pub(super) fn open_context_menu(&mut self, ctx: &mut EventCtx<'_>, at: Point) {
+        let design = self.screen_to_glyph_design(at);
+        let mut rows = MENU_ITEMS.to_vec();
+        let on_image = self.image_frame(true).is_some_and(|(t, w, h)| {
+            (t * Rect::new(0.0, 0.0, w, h).to_path(0.1))
+                .bounding_box()
+                .contains(design)
+        });
+        if on_image {
+            let locked = self.session.image_locked();
+            rows.splice(
+                0..0,
+                [
+                    MenuRow {
+                        label: std::borrow::Cow::Borrowed(if locked {
+                            "Unlock Image"
+                        } else {
+                            "Lock Image"
+                        }),
+                        action: MenuAction::Op(|s| s.toggle_image_lock()),
+                    },
+                    MenuRow {
+                        label: std::borrow::Cow::Borrowed("Remove Image"),
+                        action: MenuAction::Op(|s| s.remove_image()),
+                    },
+                ],
+            );
+        }
+        if let Some(component) = self.session.component_at(design) {
+            self.session.select_component_id(component);
+            self.emit(ctx, false);
+            let aligned = self.session.selected_component_aligned() == Some(true);
+            let mut component_rows = vec![MenuRow {
+                label: std::borrow::Cow::Borrowed("Edit Component in Place"),
+                action: MenuAction::EditComponent(component),
+            }];
+            if let Some(base) = self.session.component_reference(component) {
+                component_rows.push(MenuRow {
+                    label: std::borrow::Cow::Owned(format!("Open {base}")),
+                    action: MenuAction::OpenBaseGlyph(base),
+                });
+            }
+            component_rows.push(MenuRow {
+                label: std::borrow::Cow::Borrowed(if aligned {
+                    "Disable Automatic Alignment"
+                } else {
+                    "Enable Automatic Alignment"
+                }),
+                action: MenuAction::ToggleComponentAlignment,
+            });
+            rows.splice(0..0, component_rows);
+        }
+        if let Some(host) = &self.session.host {
+            rows.insert(
+                0,
+                MenuRow {
+                    label: std::borrow::Cow::Owned(format!("Back to {}", host.root)),
+                    action: MenuAction::ExitComponent,
+                },
+            );
+            rows.insert(
+                1,
+                MenuRow {
+                    label: std::borrow::Cow::Owned(format!("Open {}", self.session.glyph_name)),
+                    action: MenuAction::OpenBaseGlyph(self.session.glyph_name.clone()),
+                },
+            );
+        }
+        let menu = ContextMenu::new(
+            ctx.widget_id(),
+            MenuTarget::Editor,
+            rows,
+            self.palette.clone(),
+            design,
+        );
+        let menu = NewWidget::new(menu);
+        self.menu = Some(menu.id());
+        ctx.create_layer(LayerType::Other, menu, ctx.to_window(at));
+    }
+
     /// Apply a context-menu choice. Called from the menu layer, which is
     /// not a child of this widget and so cannot reach it with an action.
     pub(crate) fn apply_menu_choice(

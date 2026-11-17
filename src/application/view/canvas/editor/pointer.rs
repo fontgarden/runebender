@@ -3,7 +3,7 @@
 
 //! Pointer handling of the editor widget: presses, drags, releases and scrolling for every tool.
 
-use super::tools::{hand, label, measure, metaball, pen, select, shapes, sketch};
+use super::tools::{hand, label, measure, metaball, pen, select, shapes, sketch, text};
 use super::*;
 
 impl EditorWidget {
@@ -89,24 +89,13 @@ impl EditorWidget {
                 }
                 // Text tool: a click is a caret placement, and a click on
                 // a sort makes that glyph the one being edited.
+                // Text tool: a click is a caret placement, and a click on
+                // a sort makes that glyph the one being edited.
                 if self.tool == Tool::Text
-                    && let Some(text) = self.text.as_mut()
+                    && self.text.is_some()
                     && *button == Some(PointerButton::Primary)
                 {
-                    self.cursor_blink_elapsed_ns = 0;
-                    self.cursor_visible = true;
-                    ctx.request_anim_frame();
-                    let design = self.session.viewport.screen_to_design(at);
-                    if let Some(index) = text.click(design)
-                        && let Some(glyph) = text.activate(index)
-                    {
-                        ctx.submit_action::<EditorEvent>(EditorEvent::EditGlyph {
-                            name: glyph,
-                            tool: Tool::Text,
-                        });
-                    }
-                    self.emit_text_proof_selection(ctx);
-                    ctx.request_render();
+                    text::press(self, ctx, at);
                     ctx.set_handled();
                     return;
                 }
@@ -115,91 +104,7 @@ impl EditorWidget {
                     // it is rooted in window space, so it can hang past
                     // the editor's edge like a menu should.
                     if self.menu.is_none() {
-                        let design = self.screen_to_glyph_design(at);
-                        let mut rows = MENU_ITEMS.to_vec();
-                        let on_image = self.image_frame(true).is_some_and(|(t, w, h)| {
-                            (t * Rect::new(0.0, 0.0, w, h).to_path(0.1))
-                                .bounding_box()
-                                .contains(design)
-                        });
-                        if on_image {
-                            let locked = self.session.image_locked();
-                            rows.splice(
-                                0..0,
-                                [
-                                    MenuRow {
-                                        label: std::borrow::Cow::Borrowed(if locked {
-                                            "Unlock Image"
-                                        } else {
-                                            "Lock Image"
-                                        }),
-                                        action: MenuAction::Op(|s| s.toggle_image_lock()),
-                                    },
-                                    MenuRow {
-                                        label: std::borrow::Cow::Borrowed("Remove Image"),
-                                        action: MenuAction::Op(|s| s.remove_image()),
-                                    },
-                                ],
-                            );
-                        }
-                        if let Some(component) = self.session.component_at(design) {
-                            self.session.select_component_id(component);
-                            self.emit(ctx, false);
-                            let aligned = self.session.selected_component_aligned() == Some(true);
-                            let mut component_rows = vec![MenuRow {
-                                label: std::borrow::Cow::Borrowed("Edit Component in Place"),
-                                action: MenuAction::EditComponent(component),
-                            }];
-                            if let Some(base) = self.session.component_reference(component) {
-                                component_rows.push(MenuRow {
-                                    label: std::borrow::Cow::Owned(format!("Open {base}")),
-                                    action: MenuAction::OpenBaseGlyph(base),
-                                });
-                            }
-                            component_rows.push(MenuRow {
-                                label: std::borrow::Cow::Borrowed(if aligned {
-                                    "Disable Automatic Alignment"
-                                } else {
-                                    "Enable Automatic Alignment"
-                                }),
-                                action: MenuAction::ToggleComponentAlignment,
-                            });
-                            rows.splice(0..0, component_rows);
-                        }
-                        if let Some(host) = &self.session.host {
-                            rows.insert(
-                                0,
-                                MenuRow {
-                                    label: std::borrow::Cow::Owned(format!(
-                                        "Back to {}",
-                                        host.root
-                                    )),
-                                    action: MenuAction::ExitComponent,
-                                },
-                            );
-                            rows.insert(
-                                1,
-                                MenuRow {
-                                    label: std::borrow::Cow::Owned(format!(
-                                        "Open {}",
-                                        self.session.glyph_name
-                                    )),
-                                    action: MenuAction::OpenBaseGlyph(
-                                        self.session.glyph_name.clone(),
-                                    ),
-                                },
-                            );
-                        }
-                        let menu = ContextMenu::new(
-                            ctx.widget_id(),
-                            MenuTarget::Editor,
-                            rows,
-                            self.palette.clone(),
-                            design,
-                        );
-                        let menu = NewWidget::new(menu);
-                        self.menu = Some(menu.id());
-                        ctx.create_layer(LayerType::Other, menu, ctx.to_window(at));
+                        self.open_context_menu(ctx, at);
                     }
                     ctx.set_handled();
                     return;
