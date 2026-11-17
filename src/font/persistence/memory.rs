@@ -612,7 +612,9 @@ pub fn open_memory_project(
                 .map(|(_, bytes)| bytes.to_vec())
                 .ok_or("missing original GLIF bytes")?;
             let glyph = layer.get_glyph(glyph_name).ok_or("missing decoded glyph")?;
-            originals.insert(path, super::OriginalGlif::capture(bytes, glyph)?);
+            if let Some(original) = super::OriginalGlif::capture(bytes, glyph)? {
+                originals.insert(path, original);
+            }
         }
         bookkeeping
             .original_glifs

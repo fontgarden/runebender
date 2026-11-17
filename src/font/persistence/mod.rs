@@ -842,10 +842,12 @@ fn capture_preserved_files(root: &Path, font: &norad::Font) -> Result<PreservedF
                 .ok_or("missing imported GLIF path")?;
             let path = root.join(layer.path()).join(file);
             let bytes = fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
-            original_glifs.insert(
-                (layer.name().to_string(), glyph.name().to_string()),
-                OriginalGlif::capture(bytes, glyph)?,
-            );
+            if let Some(original) = OriginalGlif::capture(bytes, glyph)? {
+                original_glifs.insert(
+                    (layer.name().to_string(), glyph.name().to_string()),
+                    original,
+                );
+            }
         }
     }
     Ok(PreservedFiles {
