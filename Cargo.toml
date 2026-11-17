@@ -35,6 +35,10 @@ required-features = ["application"]
 name = "font_engine"
 harness = false
 
+[[bench]]
+name = "large_font"
+harness = false
+
 [features]
 default = ["application"]
 macos-updater = ["application", "dep:sparkle-updater"]
