@@ -18,6 +18,7 @@ mod menu;
 mod metrics_card;
 mod paint;
 mod pointer;
+mod tools;
 mod view;
 
 pub(crate) use self::labels::label_colors;
@@ -191,39 +192,8 @@ enum Drag {
         anchor: Option<Point>,
         corner: Point,
     },
-    /// Label tool: a press in screen space. A loop becomes a polygon; a click lets go of the
-    /// picked shape.
-    Label {
-        points: Vec<Point>,
-    },
-    /// A polygon corner of a label region follows the pointer; the session holds where.
-    LabelCorner {
-        region: usize,
-        /// Option is held: the corner is being pulled away from others, so it does not snap
-        /// back onto a neighbor's corner.
-        detach: bool,
-    },
-    /// Shift-drag in the label tool: a box that selects the corners inside it, in design
-    /// space.
-    LabelMarquee {
-        start: Point,
-        current: Point,
-    },
-    /// Several label corners follow the pointer; the session holds where.
-    LabelCorners {
-        start: Point,
-    },
-    /// A whole lasso polygon follows the pointer; the session holds where.
-    LabelRegion {
-        region: usize,
-        start: Point,
-    },
-    /// A cut, or one end of it, follows the pointer; the session holds where.
-    LabelCut {
-        cut: usize,
-        end: Option<usize>,
-        start: Point,
-    },
+    /// A drag of the label tool.
+    Label(tools::label::LabelDrag),
     /// Measure tool: the ruler's fixed end in design space; the other end follows the pointer.
     Measure {
         start: Point,

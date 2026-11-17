@@ -3,6 +3,7 @@
 
 //! The label tool overlay: region colors, painting and the caption.
 
+use super::tools::label::LabelDrag;
 use super::*;
 
 /// One color per letter for the label tool, cycling through the theme's mark colors.
@@ -180,7 +181,7 @@ impl EditorWidget {
                 )
                 .draw();
         }
-        if let Drag::LabelMarquee { start, current } = &self.drag {
+        if let Drag::Label(LabelDrag::Marquee { start, current }) = &self.drag {
             let rect = affine.transform_rect_bbox(Rect::from_points(*start, *current));
             painter
                 .fill(rect, pal.role("selection").with_alpha(0.1))
@@ -190,7 +191,7 @@ impl EditorWidget {
                 .draw();
         }
         // A freehand drag in progress: a cut is a straight line, a lasso a loop.
-        if let Drag::Label { points, .. } = &self.drag
+        if let Drag::Label(LabelDrag::Freehand { points }) = &self.drag
             && points.len() >= 2
         {
             let color = if selected.is_some() {

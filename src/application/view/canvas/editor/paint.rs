@@ -4,6 +4,7 @@
 //! The paint pass of the editor widget, from the canvas background to the metrics card.
 //! The functions that build the thickness image are also here.
 
+use super::tools::label::LabelDrag;
 use super::*;
 
 /// Cells along the longer side of the thickness field's grid.
@@ -1158,7 +1159,7 @@ impl EditorWidget {
 
     /// Paint the freehand path of a lasso or label drag.
     fn paint_freehand_path(&self, painter: &mut Painter<'_>, pal: &Palette) {
-        if let Drag::Lasso { points, .. } | Drag::Label { points, .. } = &self.drag
+        if let Drag::Lasso { points, .. } | Drag::Label(LabelDrag::Freehand { points }) = &self.drag
             && let Some(first) = points.first()
         {
             let mut path = kurbo::BezPath::new();
