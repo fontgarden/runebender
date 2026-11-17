@@ -399,6 +399,7 @@ impl Workspace {
             .map(|entry| entry.name.clone())
             .collect::<Vec<_>>();
         let mut names = Vec::new();
+        let mut failure = None;
         for name in candidates {
             let address = runebender::font::variable::GlyphLayerAddress {
                 glyph: name.clone(),
@@ -414,8 +415,9 @@ impl Workspace {
             {
                 Ok(collapsed) => collapsed,
                 Err(error) => {
-                    self.note = error;
-                    return;
+                    // Glyphs converted before this one are committed and still need an undo step.
+                    failure = Some(error);
+                    break;
                 }
             };
             if collapsed == 0 {
@@ -431,9 +433,10 @@ impl Workspace {
             }
         }
         if names.is_empty() {
-            self.note = "No live metaballs in this master".into();
+            self.note = failure.unwrap_or_else(|| "No live metaballs in this master".into());
             return;
         }
+        let names_converted = names.len();
         self.overview_undo.push(OverviewEditBatch {
             source,
             glyphs: names,
@@ -444,7 +447,12 @@ impl Workspace {
         self.font.rebuild_cache();
         self.cells = Arc::new(cells_of(&self.font, &self.palette));
         self.modified = true;
-        self.note = "Converted this master's live metaballs to cubic contours".into();
+        self.note = match failure {
+            Some(error) => format!(
+                "Converted the live metaballs of {names_converted} glyphs, then stopped: {error}"
+            ),
+            None => "Converted this master's live metaballs to cubic contours".into(),
+        };
     }
 }
 
@@ -678,6 +686,59 @@ mod tests {
             !app.session.outline_is_empty(),
             "parked tabs load the converted glyph"
         );
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn a_failed_font_conversion_keeps_an_undo_step_for_glyphs_already_converted() {
+        let path = std::env::temp_dir().join(format!(
+            "runebender-metaball-partial-{}.ufo",
+            std::process::id()
+        ));
+        let group = |weight: f64| runebender::formats::metadata::metaballs::Metaballs {
+            version: 2,
+            groups: vec![MetaballGroup {
+                id: 1,
+                threshold: 1.0,
+                balls: vec![Metaball {
+                    id: 1,
+                    x: 250.0,
+                    y: 300.0,
+                    radius: 120.0,
+                    reach: default_reach(),
+                    weight,
+                }],
+            }],
+        };
+        let mut font = norad::Font::new();
+        // `j` has only a subtracting center, so it has no outline and its conversion fails.
+        for (name, weight) in [("i", 1.0), ("j", -1.0)] {
+            let mut glyph = norad::Glyph::new(name);
+            glyph.width = 500.0;
+            runebender::formats::metadata::metaballs::write_metaballs(&mut glyph, &group(weight))
+                .unwrap();
+            font.default_layer_mut().insert_glyph(glyph);
+        }
+        font.save(&path).unwrap();
+        let mut app = Workspace::open(&path).unwrap();
+        assert!(matches!(app.mode, Mode::Overview));
+        let contours = |app: &Workspace, name: &str| {
+            app.font
+                .font_snapshot()
+                .get_glyph(name)
+                .unwrap()
+                .contours
+                .len()
+        };
+
+        app.collapse_font_metaballs();
+
+        assert!(contours(&app, "i") > 0, "{}", app.note);
+        assert_eq!(contours(&app, "j"), 0);
+        assert!(app.modified);
+        assert!(app.note.contains("then stopped"), "{}", app.note);
+        app.undo_active_edit(false);
+        assert_eq!(contours(&app, "i"), 0, "undo reverts the converted glyph");
         std::fs::remove_dir_all(path).unwrap();
     }
 
