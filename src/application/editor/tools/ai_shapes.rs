@@ -17,8 +17,9 @@ use std::time::Instant;
 use masonry::kurbo::{self, BezPath, Point, Rect, Shape as _};
 use runebender::font::LayerPointType;
 use runebender::font::edit_batch::canonical_glyph_revision;
-use runebender::font::generated::{GeneratedContour, GeneratedPoint};
+use runebender::font::generated::GeneratedContour;
 use runebender::font::variable::{GlyphId, GlyphLayerAddress};
+use runebender::outline::drawing::{DrawingContour, DrawingPoint};
 use runebender::workflows::graph_run::{self, ShapesModel};
 use runebender::workflows::process::{
     self, OutputStream, ProcessCancellation, ProcessLimits, ProcessOutcome,
@@ -277,48 +278,21 @@ fn parse_progress(line: &str) -> Option<(usize, usize, &str)> {
     Some((done.parse().ok()?, total.parse().ok()?, note.trim()))
 }
 
-/// The contours in a `draw` report.
+/// The contours in a `draw` report, each a list of drawing points.
+/// Contours with fewer than two points are dropped.
 fn contours_from(report: &serde_json::Value) -> Result<Vec<GeneratedContour>, String> {
-    let list = report
-        .get("contours")
-        .and_then(|c| c.as_array())
-        .ok_or("the report has no contours")?;
-    let mut out = Vec::new();
-    for contour in list {
-        let pts = contour.as_array().ok_or("a contour is not a list")?;
-        let mut points = Vec::new();
-        for p in pts {
-            let x = p
-                .get("x")
-                .and_then(|v| v.as_f64())
-                .ok_or("a point has no x")?;
-            let y = p
-                .get("y")
-                .and_then(|v| v.as_f64())
-                .ok_or("a point has no y")?;
-            let point_type = match p.get("type").and_then(|v| v.as_str()) {
-                Some("move") => LayerPointType::Move,
-                Some("line") => LayerPointType::Line,
-                Some("offcurve") => LayerPointType::OffCurve,
-                Some("curve") => LayerPointType::Curve,
-                Some("qcurve") => LayerPointType::QCurve,
-                other => return Err(format!("unknown point type {other:?}")),
-            };
-            let smooth = p.get("smooth").and_then(|v| v.as_bool()).unwrap_or(false);
-            points.push(GeneratedPoint {
-                position: Point::new(x, y),
-                point_type,
-                smooth,
-            });
-        }
-        if points.len() >= 2 {
-            out.push(GeneratedContour { points });
-        }
-    }
-    if out.is_empty() {
+    let list = report.get("contours").ok_or("the report has no contours")?;
+    let contours: Vec<Vec<DrawingPoint>> =
+        serde_json::from_value(list.clone()).map_err(|error| format!("bad contours: {error}"))?;
+    let contours: Vec<GeneratedContour> = contours
+        .into_iter()
+        .filter(|points| points.len() >= 2)
+        .map(|points| GeneratedContour::from(&DrawingContour { points }))
+        .collect();
+    if contours.is_empty() {
         return Err("the model drew nothing".into());
     }
-    Ok(out)
+    Ok(contours)
 }
 
 impl Workspace {
