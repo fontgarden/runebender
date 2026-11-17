@@ -363,7 +363,7 @@ pub struct Project {
     pub(super) variable: VariableData,
     source_history: sources::SourceHistory,
     pub(super) hoi_history:
-        super::history::TransactionHistory<super::model::designspace::CanonicalDesignspace>,
+        super::history::UndoStack<super::model::designspace::CanonicalDesignspace>,
     document_history: super::history::DocumentHistory,
     edit_transaction_history: edit_transactions::EditTransactionHistory,
     source_metadata_history: super::history::SourceMetadataHistory,
@@ -544,7 +544,7 @@ impl Project {
         Self {
             variable,
             source_history: sources::SourceHistory::default(),
-            hoi_history: super::history::TransactionHistory::default(),
+            hoi_history: super::history::UndoStack::default(),
             document_history: super::history::DocumentHistory::default(),
             edit_transaction_history: edit_transactions::EditTransactionHistory::default(),
             source_metadata_history: super::history::SourceMetadataHistory::default(),

@@ -13,9 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::font::CanonicalSourceStructureSnapshot;
 use crate::font::LayerView;
 use crate::font::canonical_metadata::{CanonicalFontMetadata, KerningParticipant};
-use crate::font::history::{
-    HistoryDirection, HistoryReplayError, HistoryReplayOutcome, TransactionHistory,
-};
+use crate::font::history::{HistoryDirection, HistoryReplayError, HistoryReplayOutcome, UndoStack};
 use crate::font::model::designspace::{
     CanonicalLocation, InstanceId, SourceDescriptor, SourceOrderEntry, SparseSourceDescriptor,
 };
@@ -143,7 +141,7 @@ impl SourceFrame {
 
 #[derive(Debug, Default)]
 pub(super) struct SourceHistory {
-    transactions: TransactionHistory<SourceFrame>,
+    transactions: UndoStack<SourceFrame>,
 }
 
 impl Project {

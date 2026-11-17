@@ -301,7 +301,7 @@ fn rename_moves_every_layer_stack_without_changing_stable_layer_ids() {
         state(4.0, 500.0, "after", "after"),
     ));
 
-    assert!(history.rename_glyph("A", "A.alt"));
+    assert!(history.rename_glyph_with("A", "A.alt", |_, _, state| Some(state)));
     assert!(!history.can_replay(&old_default, HistoryDirection::Undo));
     assert!(!history.can_replay(&old_auxiliary, HistoryDirection::Undo));
     assert!(history.can_replay(&new_default, HistoryDirection::Undo));
@@ -326,7 +326,7 @@ fn rename_collision_rejects_atomically() {
         state(4.0, 600.0, "after", "after"),
     ));
 
-    assert!(!history.rename_glyph("A", "B"));
+    assert!(!history.rename_glyph_with("A", "B", |_, _, state| Some(state)));
     assert!(history.can_replay(&old, HistoryDirection::Undo));
     assert!(history.can_replay(&occupied, HistoryDirection::Undo));
     assert!(!history.can_replay(&address("B", 4, "public.default"), HistoryDirection::Undo));
