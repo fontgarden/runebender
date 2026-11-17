@@ -250,7 +250,9 @@ Source: `src/workflows/graph.rs`, `src/workflows/graph_run.rs`,
 
 - File graphs are `<name>.graph.json`. Each task in `font-ml tasks --json` is a
   node `font-ml.<task>`. Unchanged runs are cached by input hash.
-- Live graphs use `live.font`, `live.fork`, `live.python`, `live.specimen_script`, `live.proof` and `live.apply`.
+- Live graphs use `live.font`, `live.python`, `live.specimen_script` and `live.proof`.
+  A `live.python` node fed by `live.font` makes a detached font version, and the proofs show it.
+  Apply is a user action outside the graph (`graph_apply`), not a node.
 - New live graphs contain only built-in specimen pages.
   Add a specimen script explicitly to use DesignBot Rust or DrawBot Python examples; cold Rust compilation can take several minutes and shares the proof worker.
 - `graph_trace` with `local_sketch` runs the local sketch model and puts the

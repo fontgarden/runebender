@@ -438,11 +438,11 @@ pub fn kind_mark(kind: Kind) -> Option<&'static str> {
 /// mostly gives, or what it does to the font.
 pub fn type_mark(type_name: &str) -> Option<&'static str> {
     Some(match type_name {
-        "core.source" | "core.master" | "live.font" | "live.fork" => "green",
+        "core.source" | "core.master" | "live.font" => "green",
         "core.layer" | "core.proof" | "live.proof" => "yellow",
         "core.model" => "blue",
         "core.adapter" => "purple",
-        "core.install" | "live.apply" => "red",
+        "core.install" => "red",
         "core.compare" => "pink",
         "core.note" => return None,
         _ => "orange",
@@ -633,9 +633,10 @@ mod tests {
 
     #[test]
     fn the_live_starter_lays_out_every_wire() {
-        let g = crate::workflows::graph_live::starter(crate::font::variable::SourceId(0));
+        let g =
+            crate::workflows::graph_live::comparison_starter(crate::font::variable::SourceId(0));
         let boxes = layout(&g, &Registry::core());
-        assert_eq!(wires(&g, &boxes).len(), 4);
+        assert_eq!(wires(&g, &boxes).len(), 3);
     }
 
     #[test]

@@ -213,14 +213,8 @@ fn validate_identity_fields(graph: &NodeGraph) -> Result<(), LiveGraphFileError>
 
 fn strip_session_values(graph: &mut NodeGraph) {
     for node in &mut graph.nodes {
-        match node.type_name.as_str() {
-            "live.font" => {
-                node.values.remove("source");
-            }
-            "live.fork" => {
-                node.values.remove("branch");
-            }
-            _ => {}
+        if node.type_name == "live.font" {
+            node.values.remove("source");
         }
     }
 }
@@ -304,20 +298,6 @@ mod tests {
         python
             .values
             .insert("parameters".into(), json!({"weight": 725}));
-        let source = graph
-            .nodes
-            .iter()
-            .find(|node| node.type_name == "live.font")
-            .unwrap()
-            .id;
-        let fork = graph_live::add_direction(&mut graph, source, [336.0, 900.0]);
-        graph
-            .nodes
-            .iter_mut()
-            .find(|node| node.id == fork)
-            .unwrap()
-            .values
-            .insert("branch".into(), json!(99));
 
         let saved = save(&path, &graph, None).expect("save graph");
         let saved_python = saved
@@ -338,16 +318,6 @@ mod tests {
                 .unwrap()
                 .values
                 .contains_key("source")
-        );
-        assert!(
-            !saved
-                .graph
-                .nodes
-                .iter()
-                .find(|node| node.type_name == "live.fork")
-                .unwrap()
-                .values
-                .contains_key("branch")
         );
         let raw = fs::read_to_string(path).unwrap();
         assert!(!raw.contains("session_id"));

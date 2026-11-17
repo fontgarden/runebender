@@ -1207,10 +1207,8 @@ mod tests {
             "core.compose",
             "core.install",
             "live.font",
-            "live.fork",
             "live.python",
             "live.proof",
-            "live.apply",
         ] {
             assert!(!registry.get(name).unwrap().execution.cacheable(), "{name}");
         }
@@ -1222,10 +1220,8 @@ mod tests {
             registry.get("live.python").unwrap().execution.effects,
             NodeEffects::TrustedProcess
         );
-        assert_eq!(
-            registry.get("live.apply").unwrap().execution.effects,
-            NodeEffects::WriteFont
-        );
+        assert!(registry.get("live.fork").is_none());
+        assert!(registry.get("live.apply").is_none());
         assert_eq!(
             registry.get("core.compare").unwrap().execution.rows_input,
             RowsInputEncoding::Unsupported

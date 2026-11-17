@@ -1974,17 +1974,6 @@ fn digest_json(value: &impl Serialize) -> Result<String, GraphSessionError> {
 }
 
 fn execution_plan(graph: &NodeGraph) -> Result<GraphExecutionPlan, GraphSessionError> {
-    if graph.nodes.iter().any(|node| {
-        matches!(
-            node.type_name.as_str(),
-            "live.apply" | "core.install" | "live.fork"
-        )
-    }) {
-        return Err(GraphSessionError::new(
-            GraphSessionErrorCode::UnsupportedTopology,
-            "automatic live execution rejects apply, install and pre-existing fork nodes",
-        ));
-    }
     let nodes_of_type = |name: &str| {
         graph
             .nodes
@@ -2971,22 +2960,22 @@ mod tests {
                 .graph
                 .nodes
                 .iter()
-                .any(|node| { matches!(node.type_name.as_str(), "live.apply" | "core.install") })
+                .any(|node| node.type_name == "core.install")
         );
         assert_eq!(session.snapshot().graph.node(1).unwrap(), &source_before);
     }
 
     #[test]
-    fn automatic_apply_and_mismatched_scope_are_rejected() {
+    fn apply_nodes_and_mismatched_scope_are_rejected() {
+        // Apply is a user action outside the graph, so no node type can apply a run.
         let mut session = new_session();
-        let mut unsafe_request = run_request(&session, "agent", "unsafe-run");
         let apply = Node {
             id: 5,
             type_name: "live.apply".into(),
             pos: [900.0, 400.0],
             values: BTreeMap::new(),
         };
-        session
+        let error = session
             .mutate(mutation(
                 &session,
                 "human",
@@ -2998,12 +2987,9 @@ mod tests {
                     },
                 ],
             ))
-            .unwrap();
-        unsafe_request.guard = semantic_guard(&session);
-        let error = session.start_run(unsafe_request).unwrap_err();
-        assert_eq!(error.code, GraphSessionErrorCode::UnsupportedTopology);
+            .unwrap_err();
+        assert_eq!(error.code, GraphSessionErrorCode::InvalidEdit);
 
-        let mut session = new_session();
         let mut request = run_request(&session, "agent", "wrong-source");
         request.capture.font.source = 4;
         let error = session.start_run(request).unwrap_err();
