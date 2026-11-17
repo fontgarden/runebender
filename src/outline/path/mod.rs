@@ -6,28 +6,26 @@
 
 //! Path abstraction for glyph outlines: the editable representation.
 //!
-//! The `Path` enum wraps three curve types: `Cubic` (standard UFO
-//! beziers), `Quadratic` (TrueType-style), and `Hyper` (hyperbezier
-//! splines with only on-curve points). All three convert to
-//! `kurbo::BezPath` for rendering. Paths are created from
+//! The `Path` enum wraps two curve types: `Bezier` (UFO contours whose
+//! segments are lines, quadratic curves and cubic curves, in any mix)
+//! and `Hyper` (hyperbezier splines with only on-curve points). Both
+//! convert to `kurbo::BezPath` for rendering. Paths are created from
 //! `workspace::Contour` data when a glyph is opened for editing, and
 //! converted back when the session is saved.
 
-pub mod cubic;
+pub mod bezier;
 pub mod hyper;
 pub mod hyper_model;
 pub mod point;
 pub mod point_list;
 pub mod quadrant;
-pub mod quadratic;
 pub mod segment;
 
-pub use cubic::CubicPath;
+pub use bezier::BezierPath;
 pub use hyper::HyperPath;
 pub use point::{PathPoint, PointType};
 pub use point_list::PathPoints;
 pub use quadrant::Quadrant;
-pub use quadratic::QuadraticPath;
 pub use segment::{Segment, SegmentInfo};
 
 use self::hyper_model as workspace;
@@ -128,14 +126,11 @@ fn normalized_path_points(source: &[SourcePoint], closed: bool) -> PathPoints {
     PathPoints::from_vec(output)
 }
 
-/// A path in a glyph outline. Supports cubic, quadratic, and
-/// hyperbezier paths.
+/// A path in a glyph outline: a bezier contour or a hyperbezier contour.
 #[derive(Debug, Clone)]
 pub enum Path {
-    /// A contour containing cubic segments, with mixed quadratic and line segments retained.
-    Cubic(CubicPath),
-    /// A contour with quadratic control points (UFO `qcurve` segments).
-    Quadratic(QuadraticPath),
+    /// A contour of line, quadratic and cubic segments in any mix.
+    Bezier(BezierPath),
     /// A hyperbezier contour; only on-curve points are stored and handles are solved.
     Hyper(HyperPath),
 }
@@ -153,14 +148,6 @@ impl Path {
                 smooth: point.is_smooth(),
             })
             .collect();
-        let point_types: Vec<_> = source.iter().map(|point| point.kind).collect();
-        let has_cubic = point_types.contains(&LayerPointType::Curve);
-        let quadratic = !has_cubic
-            && (point_types.contains(&LayerPointType::QCurve)
-                || (!source.is_empty()
-                    && source
-                        .iter()
-                        .all(|point| point.kind == LayerPointType::OffCurve)));
         if hyper {
             let mut points: Vec<_> = source
                 .iter()
@@ -178,13 +165,8 @@ impl Path {
             }
             let points = PathPoints::from_vec(points);
             Self::Hyper(HyperPath::from_points(points, closed))
-        } else if quadratic {
-            Self::Quadratic(QuadraticPath::new(
-                normalized_path_points(&source, closed),
-                closed,
-            ))
         } else {
-            Self::Cubic(CubicPath::new(
+            Self::Bezier(BezierPath::new(
                 normalized_path_points(&source, closed),
                 closed,
             ))
@@ -193,8 +175,7 @@ impl Path {
 
     pub(crate) fn entity_id(&self) -> EntityId {
         match self {
-            Self::Cubic(path) => path.id,
-            Self::Quadratic(path) => path.id,
+            Self::Bezier(path) => path.id,
             Self::Hyper(path) => path.id,
         }
     }
@@ -202,8 +183,7 @@ impl Path {
     /// Renders this path as a new `kurbo::BezPath`.
     pub fn to_bezpath(&self) -> BezPath {
         match self {
-            Self::Cubic(cubic) => cubic.to_bezpath(),
-            Self::Quadratic(quadratic) => quadratic.to_bezpath(),
+            Self::Bezier(bezier) => bezier.to_bezpath(),
             Self::Hyper(hyper) => hyper.to_bezpath(),
         }
     }
@@ -211,8 +191,7 @@ impl Path {
     /// Appends this path's elements to an existing `BezPath` without clearing it.
     pub fn append_to_bezpath(&self, path: &mut BezPath) {
         match self {
-            Self::Cubic(cubic) => cubic.append_to_bezpath(path),
-            Self::Quadratic(quadratic) => quadratic.append_to_bezpath(path),
+            Self::Bezier(bezier) => bezier.append_to_bezpath(path),
             Self::Hyper(hyper) => hyper.append_to_bezpath(path),
         }
     }
@@ -248,16 +227,6 @@ impl Path {
                 smooth: point.smooth,
             })
             .collect();
-        let has_curve = source
-            .iter()
-            .any(|point| point.kind == LayerPointType::Curve);
-        let has_qcurve = source
-            .iter()
-            .any(|point| point.kind == LayerPointType::QCurve);
-        let all_off_curve = !source.is_empty()
-            && source
-                .iter()
-                .all(|point| point.kind == LayerPointType::OffCurve);
         let closed = contour
             .points
             .first()
@@ -266,20 +235,13 @@ impl Path {
         if closed && !points.is_empty() {
             points.rotate_left(1);
         }
-        let points = PathPoints::from_vec(points);
-
-        if !has_curve && (has_qcurve || all_off_curve) {
-            Self::Quadratic(QuadraticPath::new(points, closed))
-        } else {
-            Self::Cubic(CubicPath::new(points, closed))
-        }
+        Self::Bezier(BezierPath::new(PathPoints::from_vec(points), closed))
     }
 
     /// Returns the path's editable points, whatever the curve type.
     pub fn points(&self) -> &PathPoints {
         match self {
-            Self::Cubic(cubic) => cubic.points(),
-            Self::Quadratic(quadratic) => quadratic.points(),
+            Self::Bezier(bezier) => bezier.points(),
             Self::Hyper(hyper) => hyper.points(),
         }
     }
@@ -287,8 +249,7 @@ impl Path {
     /// Whether the last segment connects back to the first point.
     pub fn is_closed(&self) -> bool {
         match self {
-            Self::Cubic(cubic) => cubic.is_closed(),
-            Self::Quadratic(quadratic) => quadratic.is_closed(),
+            Self::Bezier(bezier) => bezier.is_closed(),
             Self::Hyper(hyper) => hyper.is_closed(),
         }
     }
@@ -296,8 +257,7 @@ impl Path {
     /// Converts back to the `workspace::Contour` form used for saving and conversion.
     pub fn to_contour(&self) -> workspace::Contour {
         match self {
-            Self::Cubic(cubic) => cubic.to_contour(),
-            Self::Quadratic(quadratic) => quadratic.to_contour(),
+            Self::Bezier(bezier) => bezier.to_contour(),
             Self::Hyper(hyper) => hyper.to_contour(),
         }
     }

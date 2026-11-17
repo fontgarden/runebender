@@ -8,7 +8,7 @@
 //! `PathPoint` pairs a `kurbo::Point` position with a `PointType`
 //! (on-curve smooth/corner, or off-curve handle) and a unique
 //! `EntityId`. Points are stored in `PathPoints` collections inside
-//! each `CubicPath`, `QuadraticPath`, or `HyperPath`. The `PointType`
+//! each `BezierPath` or `HyperPath`. The `PointType`
 //! determines drawing style (filled circle vs. open square) and drag
 //! behavior (smooth points maintain tangent continuity).
 

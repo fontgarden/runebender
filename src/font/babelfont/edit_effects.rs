@@ -784,7 +784,7 @@ impl LayerEditDraft {
                 };
                 (
                     contour.id(),
-                    crate::outline::path::Path::Cubic(hyper.to_cubic()),
+                    crate::outline::path::Path::Bezier(hyper.to_cubic()),
                 )
             })
             .collect::<Vec<_>>();

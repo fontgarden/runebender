@@ -89,10 +89,10 @@ impl HyperPath {
         }
     }
 
-    /// Expand the solved spline into a `CubicPath` with explicit
-    /// on-curve and off-curve control points.
-    pub fn to_cubic(&self) -> super::cubic::CubicPath {
-        use super::cubic::CubicPath;
+    /// Expand the solved spline into a `BezierPath` of cubic segments with
+    /// explicit on-curve and off-curve control points.
+    pub fn to_cubic(&self) -> super::bezier::BezierPath {
+        use super::bezier::BezierPath;
 
         let mut points = Vec::new();
 
@@ -147,7 +147,7 @@ impl HyperPath {
             }
         }
 
-        CubicPath::new(PathPoints::from_vec(points), self.closed)
+        BezierPath::new(PathPoints::from_vec(points), self.closed)
     }
 
     /// Rebuild the bezier cache from points using the spline solver.

@@ -191,7 +191,7 @@ Each directory under `src` has one row.
 | `src/formats/metadata` | Codecs for UFO lib keys: mark colors, metaballs and metrics keys. |
 | `src/outline` | One file for each group of geometry operations. |
 | `src/outline/metaballs` | The fit of metaball boundaries to cubic contours. |
-| `src/outline/path` | The cubic, quadratic and hyperbezier path types, their points and their segments. |
+| `src/outline/path` | The bezier and hyperbezier path types, their points and their segments. |
 | `src/testing` | Fixture font paths for the unit tests of the library. |
 | `src/text` | Shaping, feature code, joining rules and proof samples. |
 | `src/text/buffer` | The text buffer: bidirectional runs, kerning, layout and shaping. |

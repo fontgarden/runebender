@@ -3,14 +3,14 @@
 
 // Ported from runebender-xilem/src/path/cubic.rs (Apache-2.0).
 
-//! Cubic bezier path representation, the default curve type for
-//! UFO fonts.
+//! Bezier path representation, the curve type of every UFO contour that
+//! is not a hyperbezier.
 //!
-//! A `CubicPath` stores one contour as a sequence of on-curve and
-//! off-curve points. `to_bezpath()` walks the points and emits `kurbo`
-//! move/curve/line commands. `from_contour()` converts from the
-//! workspace's `Contour` format, assigning each point a unique
-//! `EntityId` for selection and hit testing.
+//! A `BezierPath` stores one contour as a sequence of on-curve and
+//! off-curve points. One off-curve point between two on-curve points is
+//! a quadratic segment, and two are a cubic segment, so one contour can
+//! mix lines, quadratic curves and cubic curves. `to_bezpath()` walks the
+//! points and emits `kurbo` move, line, quad and curve commands.
 
 use super::point::{PathPoint, PointType};
 use super::point_list::PathPoints;
@@ -18,13 +18,13 @@ use crate::font::model::entity_id::EntityId;
 use crate::outline::path::hyper_model as workspace;
 use kurbo::BezPath;
 
-/// A contour containing cubic segments, with mixed quadratic and line segments retained.
+/// A contour of line, quadratic and cubic segments in any mix.
 ///
 /// This corresponds to a UFO contour. Points are stored in order, with
 /// the convention that for closed paths, the first point (index 0) is
 /// conceptually the last point in the cyclic sequence.
 #[derive(Debug, Clone)]
-pub struct CubicPath {
+pub struct BezierPath {
     /// The on-curve and off-curve points in contour order.
     pub points: PathPoints,
     /// Whether the contour is closed; closed paths join the last point back to index 0.
@@ -33,7 +33,7 @@ pub struct CubicPath {
     pub id: EntityId,
 }
 
-impl CubicPath {
+impl BezierPath {
     /// Creates a path from existing points and assigns it a fresh `EntityId`.
     pub fn new(points: PathPoints, closed: bool) -> Self {
         Self {
@@ -63,14 +63,14 @@ impl CubicPath {
         self.closed
     }
 
-    /// Convert this cubic path to a kurbo `BezPath` for rendering.
+    /// Convert this path to a kurbo `BezPath` for rendering.
     pub fn to_bezpath(&self) -> BezPath {
         let mut path = BezPath::new();
         self.append_to_bezpath(&mut path);
         path
     }
 
-    /// Append this cubic path directly into an existing `BezPath`.
+    /// Append this path directly into an existing `BezPath`.
     pub fn append_to_bezpath(&self, path: &mut BezPath) {
         let points = self.points.as_slice();
 
@@ -88,7 +88,7 @@ impl CubicPath {
         }
     }
 
-    /// Convert this cubic path to a workspace contour (for saving).
+    /// Convert this path to a workspace contour (for saving).
     pub fn to_contour(&self) -> workspace::Contour {
         use crate::outline::path::hyper_model::{Contour, ContourPoint, PointType as WsPointType};
 

@@ -69,7 +69,7 @@ const APPLICATION_ORDER: &[&str] = &[
 /// Permitted back edges between library modules: the module that holds the reference, the
 /// module that it names, and the number of references.
 const LIBRARY_BACK_EDGES: &[(&str, &str, usize)] = &[
-    ("outline", "font", 39),
+    ("outline", "font", 38),
     ("font", "formats", 29),
     ("ui", "workflows", 5),
     ("font", "analysis", 4),

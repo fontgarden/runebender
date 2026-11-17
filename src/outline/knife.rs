@@ -6,16 +6,18 @@
 
 //! The knife tool's slicing: cut closed contours along a line.
 //!
-//! Cubic and quadratic paths slice in their own curve type;
-//! hyperbezier paths convert to explicit cubics when actually cut. A
-//! single hit on two nested contours joins them (cutting an O yields
-//! two Cs). Everything here is UI-free: paths in, paths out.
+//! Bezier paths slice in their own segment types: a cut cubic piece
+//! stays cubic and a cut quadratic piece stays quadratic. Hyperbezier
+//! paths convert to explicit cubics when actually cut. A single hit on
+//! two nested contours joins them (cutting an O yields two Cs), unless a
+//! contour is made of quadratic curves and lines only. Everything here
+//! is UI-free: paths in, paths out.
 
 use kurbo::{CubicBez, Line, ParamCurve, ParamCurveArclen, Point, Shape as _};
 
 use crate::font::model::EntityId;
 use crate::outline::path::{
-    CubicPath, Path, PathPoint, PathPoints, PointType, QuadraticPath, Segment, SegmentInfo,
+    BezierPath, Path, PathPoint, PathPoints, PointType, Segment, SegmentInfo,
 };
 
 const MAX_KNIFE_RECURSE: usize = 16;
@@ -30,15 +32,15 @@ struct Hit {
 }
 
 #[derive(Clone)]
-struct SingleHitCubicPath {
-    path: CubicPath,
+struct SingleHitPath {
+    path: BezierPath,
     hit: Hit,
 }
 
 #[derive(Clone)]
 enum SliceItem {
     Paths(Vec<Path>),
-    SingleCubic(SingleHitCubicPath),
+    SingleHit(SingleHitPath),
 }
 
 /// Cut every closed path in `paths` along `line` and return the
@@ -50,31 +52,32 @@ pub fn slice_paths(paths: &[Path], line: Line) -> Vec<Path> {
     let mut items = Vec::new();
     for path in paths {
         match path {
-            Path::Cubic(cubic_path) => {
-                if let Some(hit) = single_closed_cubic_hit(cubic_path, line) {
-                    items.push(SliceItem::SingleCubic(SingleHitCubicPath {
-                        path: cubic_path.clone(),
+            Path::Bezier(bezier_path) => {
+                // A contour of quadratic curves and lines is never joined to a nested contour.
+                let single = if is_quadratic(bezier_path) {
+                    None
+                } else {
+                    single_closed_hit(bezier_path, line)
+                };
+                if let Some(hit) = single {
+                    items.push(SliceItem::SingleHit(SingleHitPath {
+                        path: bezier_path.clone(),
                         hit,
                     }));
                 } else {
                     let mut sliced = Vec::new();
-                    slice_path(cubic_path, line, &mut sliced);
+                    slice_path(bezier_path, line, &mut sliced);
                     items.push(SliceItem::Paths(sliced));
                 }
             }
-            Path::Quadratic(quadratic_path) => {
-                let mut sliced = Vec::new();
-                slice_quadratic_path(quadratic_path, line, &mut sliced);
-                items.push(SliceItem::Paths(sliced));
-            }
             Path::Hyper(hyper_path) => {
                 let cubic_path = hyper_path.to_cubic();
-                if let Some(hit) = single_closed_cubic_hit(&cubic_path, line) {
-                    items.push(SliceItem::SingleCubic(SingleHitCubicPath {
+                if let Some(hit) = single_closed_hit(&cubic_path, line) {
+                    items.push(SliceItem::SingleHit(SingleHitPath {
                         path: cubic_path,
                         hit,
                     }));
-                } else if cubic_hit_count(&cubic_path, line) <= 1 {
+                } else if hit_count(&cubic_path, line) <= 1 {
                     items.push(SliceItem::Paths(vec![Path::Hyper(hyper_path.clone())]));
                 } else {
                     let mut sliced = Vec::new();
@@ -87,7 +90,21 @@ pub fn slice_paths(paths: &[Path], line: Line) -> Vec<Path> {
     coalesce_single_hit_compound_cuts(items)
 }
 
-fn collect_cubic_hits(path: &CubicPath, line: Line, hits: &mut Vec<Hit>) {
+/// Whether a path has a quadratic segment and no cubic segment, as a UFO contour with `qcurve`
+/// points and no `curve` point has.
+fn is_quadratic(path: &BezierPath) -> bool {
+    let mut quadratic = false;
+    for segment in path.iter_segments() {
+        match segment.segment {
+            Segment::Cubic(_) => return false,
+            Segment::Quadratic(_) => quadratic = true,
+            Segment::Line(_) => {}
+        }
+    }
+    quadratic
+}
+
+fn collect_hits(path: &BezierPath, line: Line, hits: &mut Vec<Hit>) {
     hits.clear();
     for segment in path.iter_segments() {
         for (segment_t, line_t) in intersect_line_segment(line, &segment.segment) {
@@ -102,18 +119,18 @@ fn collect_cubic_hits(path: &CubicPath, line: Line, hits: &mut Vec<Hit>) {
     sort_and_dedup_knife_hits(hits, line);
 }
 
-fn single_closed_cubic_hit(path: &CubicPath, line: Line) -> Option<Hit> {
+fn single_closed_hit(path: &BezierPath, line: Line) -> Option<Hit> {
     if !path.closed {
         return None;
     }
     let mut hits = Vec::new();
-    collect_cubic_hits(path, line, &mut hits);
+    collect_hits(path, line, &mut hits);
     if hits.len() == 1 { Some(hits[0]) } else { None }
 }
 
-fn cubic_hit_count(path: &CubicPath, line: Line) -> usize {
+fn hit_count(path: &BezierPath, line: Line) -> usize {
     let mut hits = Vec::new();
-    collect_cubic_hits(path, line, &mut hits);
+    collect_hits(path, line, &mut hits);
     hits.len()
 }
 
@@ -130,29 +147,29 @@ fn coalesce_single_hit_compound_cuts(items: Vec<SliceItem>) -> Vec<Path> {
             SliceItem::Paths(paths) => {
                 out.extend(paths.clone());
             }
-            SliceItem::SingleCubic(first) => {
+            SliceItem::SingleHit(first) => {
                 let mut paired = None;
                 for j in (i + 1)..items.len() {
                     if consumed[j] {
                         continue;
                     }
-                    let SliceItem::SingleCubic(second) = &items[j] else {
+                    let SliceItem::SingleHit(second) = &items[j] else {
                         continue;
                     };
-                    if cubic_paths_are_nested(&first.path, &second.path) {
+                    if paths_are_nested(&first.path, &second.path) {
                         paired = Some(j);
                         break;
                     }
                 }
 
                 if let Some(j) = paired {
-                    let SliceItem::SingleCubic(second) = &items[j] else {
-                        unreachable!("paired item must be a single-hit cubic path");
+                    let SliceItem::SingleHit(second) = &items[j] else {
+                        unreachable!("paired item must be a single-hit path");
                     };
-                    out.push(Path::Cubic(join_single_hit_cubic_paths(first, second)));
+                    out.push(Path::Bezier(join_single_hit_paths(first, second)));
                     consumed[j] = true;
                 } else {
-                    out.push(Path::Cubic(first.path.clone()));
+                    out.push(Path::Bezier(first.path.clone()));
                 }
             }
         }
@@ -161,67 +178,13 @@ fn coalesce_single_hit_compound_cuts(items: Vec<SliceItem>) -> Vec<Path> {
     out
 }
 
-fn slice_path(path: &CubicPath, line: Line, acc: &mut Vec<Path>) {
+fn slice_path(path: &BezierPath, line: Line, acc: &mut Vec<Path>) {
     let mut hits = Vec::new();
     slice_path_impl(path.clone(), line, acc, &mut hits, 0);
 }
 
-fn slice_quadratic_path(path: &QuadraticPath, line: Line, acc: &mut Vec<Path>) {
-    let mut hits = Vec::new();
-    slice_quadratic_path_impl(path.clone(), line, acc, &mut hits, 0);
-}
-
-fn slice_quadratic_path_impl(
-    path: QuadraticPath,
-    line: Line,
-    acc: &mut Vec<Path>,
-    hit_buf: &mut Vec<Hit>,
-    recurse: usize,
-) {
-    hit_buf.clear();
-    for segment in path.iter_segments() {
-        for (segment_t, line_t) in intersect_line_segment(line, &segment.segment) {
-            hit_buf.push(Hit {
-                line_t,
-                segment_t,
-                point: line.eval(line_t),
-                segment_info: segment,
-            });
-        }
-    }
-
-    if hit_buf.len() <= 1 || recurse == MAX_KNIFE_RECURSE {
-        acc.push(Path::Quadratic(path));
-        return;
-    }
-
-    sort_and_dedup_knife_hits(hit_buf, line);
-
-    if hit_buf.len() <= 1 {
-        acc.push(Path::Quadratic(path));
-        return;
-    }
-
-    let start = hit_buf[0];
-    let end = hit_buf[1];
-    let slice_ep = 1.0 / line.arclen(1e-6).max(1.0);
-    let next_line_start_t = (end.line_t + slice_ep).min(1.0);
-    let (start, end) = order_quadratic_points(&path, start, end);
-    let (path_one, path_two) = split_quadratic_path_at_intersections(&path, start, end);
-
-    if next_line_start_t >= 1.0 {
-        acc.push(Path::Quadratic(path_one));
-        acc.push(Path::Quadratic(path_two));
-        return;
-    }
-
-    let remaining_line = line_subsegment(line, next_line_start_t, 1.0);
-    slice_quadratic_path_impl(path_one, remaining_line, acc, hit_buf, recurse + 1);
-    slice_quadratic_path_impl(path_two, remaining_line, acc, hit_buf, recurse + 1);
-}
-
 fn slice_path_impl(
-    path: CubicPath,
+    path: BezierPath,
     line: Line,
     acc: &mut Vec<Path>,
     hit_buf: &mut Vec<Hit>,
@@ -240,14 +203,14 @@ fn slice_path_impl(
     }
 
     if hit_buf.len() <= 1 || recurse == MAX_KNIFE_RECURSE {
-        acc.push(Path::Cubic(path));
+        acc.push(Path::Bezier(path));
         return;
     }
 
     sort_and_dedup_knife_hits(hit_buf, line);
 
     if hit_buf.len() <= 1 {
-        acc.push(Path::Cubic(path));
+        acc.push(Path::Bezier(path));
         return;
     }
 
@@ -259,8 +222,8 @@ fn slice_path_impl(
     let (path_one, path_two) = split_path_at_intersections(&path, start, end);
 
     if next_line_start_t >= 1.0 {
-        acc.push(Path::Cubic(path_one));
-        acc.push(Path::Cubic(path_two));
+        acc.push(Path::Bezier(path_one));
+        acc.push(Path::Bezier(path_two));
         return;
     }
 
@@ -269,7 +232,7 @@ fn slice_path_impl(
     slice_path_impl(path_two, remaining_line, acc, hit_buf, recurse + 1);
 }
 
-fn order_points(path: &CubicPath, start: Hit, end: Hit) -> (Hit, Hit) {
+fn order_points(path: &BezierPath, start: Hit, end: Hit) -> (Hit, Hit) {
     for segment in path.iter_segments() {
         if segment.start_index == start.segment_info.start_index {
             if segment.start_index == end.segment_info.start_index
@@ -360,23 +323,11 @@ fn are_adjacent_endpoint_hits(a: Hit, b: Hit) -> bool {
     a_endpoint_index == b_endpoint_index
 }
 
-fn order_quadratic_points(path: &QuadraticPath, start: Hit, end: Hit) -> (Hit, Hit) {
-    for segment in path.iter_segments() {
-        if segment.start_index == start.segment_info.start_index {
-            if segment.start_index == end.segment_info.start_index
-                && end.segment_t < start.segment_t
-            {
-                return (end, start);
-            }
-            return (start, end);
-        } else if segment.start_index == end.segment_info.start_index {
-            return (end, start);
-        }
-    }
-    (start, end)
-}
-
-fn split_path_at_intersections(path: &CubicPath, start: Hit, end: Hit) -> (CubicPath, CubicPath) {
+fn split_path_at_intersections(
+    path: &BezierPath,
+    start: Hit,
+    end: Hit,
+) -> (BezierPath, BezierPath) {
     let mut one_points = Vec::new();
     let mut two_points = Vec::new();
     let mut two_is_done = false;
@@ -454,23 +405,20 @@ fn split_path_at_intersections(path: &CubicPath, start: Hit, end: Hit) -> (Cubic
     }
 
     (
-        CubicPath::new(PathPoints::from_vec(one_points), path.closed),
-        CubicPath::new(PathPoints::from_vec(two_points), true),
+        BezierPath::new(PathPoints::from_vec(one_points), path.closed),
+        BezierPath::new(PathPoints::from_vec(two_points), true),
     )
 }
 
-fn join_single_hit_cubic_paths(
-    first: &SingleHitCubicPath,
-    second: &SingleHitCubicPath,
-) -> CubicPath {
-    let mut points = open_cubic_path_at_hit(&first.path, first.hit);
+fn join_single_hit_paths(first: &SingleHitPath, second: &SingleHitPath) -> BezierPath {
+    let mut points = open_path_at_hit(&first.path, first.hit);
     push_path_point(
         &mut points,
         second.hit.point,
         PointType::OnCurve { smooth: false },
     );
 
-    for point in open_cubic_path_at_hit(&second.path, second.hit) {
+    for point in open_path_at_hit(&second.path, second.hit) {
         push_path_point(&mut points, point.point, point.typ);
     }
 
@@ -480,10 +428,10 @@ fn join_single_hit_cubic_paths(
         points.pop();
     }
 
-    CubicPath::new(PathPoints::from_vec(points), true)
+    BezierPath::new(PathPoints::from_vec(points), true)
 }
 
-fn open_cubic_path_at_hit(path: &CubicPath, hit: Hit) -> Vec<PathPoint> {
+fn open_path_at_hit(path: &BezierPath, hit: Hit) -> Vec<PathPoint> {
     let points = path.points.to_vec();
     let segments = path.iter_segments().collect::<Vec<_>>();
     let Some(hit_segment_index) = segments.iter().position(|segment| {
@@ -508,7 +456,7 @@ fn open_cubic_path_at_hit(path: &CubicPath, hit: Hit) -> Vec<PathPoint> {
     out
 }
 
-fn cubic_paths_are_nested(a: &CubicPath, b: &CubicPath) -> bool {
+fn paths_are_nested(a: &BezierPath, b: &BezierPath) -> bool {
     let Some(a_sample) = representative_oncurve(a) else {
         return false;
     };
@@ -519,128 +467,11 @@ fn cubic_paths_are_nested(a: &CubicPath, b: &CubicPath) -> bool {
     a.to_bezpath().contains(b_sample) || b.to_bezpath().contains(a_sample)
 }
 
-fn representative_oncurve(path: &CubicPath) -> Option<Point> {
+fn representative_oncurve(path: &BezierPath) -> Option<Point> {
     path.points
         .iter()
         .find(|point| point.is_on_curve())
         .map(|point| point.point)
-}
-
-fn split_quadratic_path_at_intersections(
-    path: &QuadraticPath,
-    start: Hit,
-    end: Hit,
-) -> (QuadraticPath, QuadraticPath) {
-    let mut one_points = Vec::new();
-    let mut two_points = Vec::new();
-    let mut two_is_done = false;
-
-    let points = path.points.to_vec();
-    let segments = path.iter_segments().collect::<Vec<_>>();
-
-    for segment in &segments {
-        if segment.start_index != start.segment_info.start_index {
-            append_segment_points(&mut one_points, &points, segment);
-        } else {
-            append_quadratic_subsegment_points(
-                &mut one_points,
-                &points,
-                segment,
-                0.0,
-                start.segment_t,
-            );
-
-            if segment.start_index == end.segment_info.start_index {
-                append_quadratic_subsegment_points(
-                    &mut one_points,
-                    &points,
-                    segment,
-                    end.segment_t,
-                    1.0,
-                );
-                append_quadratic_subsegment_points(
-                    &mut two_points,
-                    &points,
-                    segment,
-                    start.segment_t,
-                    end.segment_t,
-                );
-                two_is_done = true;
-            } else {
-                append_quadratic_subsegment_points(
-                    &mut two_points,
-                    &points,
-                    segment,
-                    start.segment_t,
-                    1.0,
-                );
-            }
-
-            if !path.closed {
-                two_points.push(PathPoint {
-                    id: EntityId::next(),
-                    point: start.point,
-                    typ: PointType::OnCurve { smooth: false },
-                });
-            }
-            break;
-        }
-    }
-
-    let mut found_start = false;
-    for segment in &segments {
-        if segment.start_index == start.segment_info.start_index {
-            found_start = true;
-            continue;
-        }
-        if !found_start {
-            continue;
-        }
-
-        if segment.start_index == end.segment_info.start_index {
-            append_quadratic_subsegment_points(
-                &mut one_points,
-                &points,
-                segment,
-                end.segment_t,
-                1.0,
-            );
-            if !two_is_done {
-                append_quadratic_subsegment_points(
-                    &mut two_points,
-                    &points,
-                    segment,
-                    0.0,
-                    end.segment_t,
-                );
-            }
-            break;
-        } else if !two_is_done {
-            append_segment_points(&mut two_points, &points, segment);
-        }
-    }
-
-    let mut found_end = false;
-    for segment in &segments {
-        if segment.start_index == end.segment_info.start_index {
-            found_end = true;
-            continue;
-        }
-        if found_end {
-            append_segment_points(&mut one_points, &points, segment);
-        }
-    }
-
-    if one_points.first().map(|p| p.point) == one_points.last().map(|p| p.point)
-        && one_points.len() > 1
-    {
-        one_points.pop();
-    }
-
-    (
-        QuadraticPath::new(PathPoints::from_vec(one_points), path.closed),
-        QuadraticPath::new(PathPoints::from_vec(two_points), true),
-    )
 }
 
 fn append_segment_points(dest: &mut Vec<PathPoint>, points: &[PathPoint], segment: &SegmentInfo) {
@@ -716,55 +547,10 @@ fn append_subsegment_points(
             push_path_point(dest, sub.p3, end_typ);
         }
         Segment::Quadratic(quad) => {
-            let sub = cubic_subsegment(quad.raise(), t_start, t_end);
-            push_path_point(dest, sub.p0, start_typ);
-            push_path_point(dest, sub.p1, PointType::OffCurve { auto: false });
-            push_path_point(dest, sub.p2, PointType::OffCurve { auto: false });
-            push_path_point(dest, sub.p3, end_typ);
-        }
-    }
-}
-
-fn append_quadratic_subsegment_points(
-    dest: &mut Vec<PathPoint>,
-    points: &[PathPoint],
-    segment: &SegmentInfo,
-    t_start: f64,
-    t_end: f64,
-) {
-    if t_start >= t_end {
-        return;
-    }
-
-    const T_EPS: f64 = 1e-9;
-    let start_typ = if t_start < T_EPS {
-        points[segment.start_index].typ
-    } else {
-        PointType::OnCurve { smooth: false }
-    };
-    let end_typ = if t_end > 1.0 - T_EPS {
-        points[segment.end_index].typ
-    } else {
-        PointType::OnCurve { smooth: false }
-    };
-
-    match segment.segment {
-        Segment::Line(line) => {
-            push_path_point(dest, line.eval(t_start), start_typ);
-            push_path_point(dest, line.eval(t_end), end_typ);
-        }
-        Segment::Quadratic(quad) => {
             let sub = quadratic_subsegment(quad, t_start, t_end);
             push_path_point(dest, sub.p0, start_typ);
             push_path_point(dest, sub.p1, PointType::OffCurve { auto: false });
             push_path_point(dest, sub.p2, end_typ);
-        }
-        Segment::Cubic(cubic) => {
-            let sub = cubic_subsegment(cubic, t_start, t_end);
-            push_path_point(dest, sub.p0, start_typ);
-            push_path_point(dest, sub.p1, PointType::OffCurve { auto: false });
-            push_path_point(dest, sub.p2, PointType::OffCurve { auto: false });
-            push_path_point(dest, sub.p3, end_typ);
         }
     }
 }
@@ -966,18 +752,7 @@ mod tests {
             path_point(Point::new(rect.max_x(), rect.max_y()), false),
             path_point(Point::new(rect.min_x(), rect.max_y()), false),
         ];
-        Path::Cubic(CubicPath::new(PathPoints::from_vec(points), true))
-    }
-
-    #[cfg(test)]
-    fn quadratic_rect_path(rect: Rect) -> Path {
-        let points = vec![
-            path_point(rect.origin(), false),
-            path_point(Point::new(rect.max_x(), rect.min_y()), false),
-            path_point(Point::new(rect.max_x(), rect.max_y()), false),
-            path_point(Point::new(rect.min_x(), rect.max_y()), false),
-        ];
-        Path::Quadratic(QuadraticPath::new(PathPoints::from_vec(points), true))
+        Path::Bezier(BezierPath::new(PathPoints::from_vec(points), true))
     }
 
     #[cfg(test)]
@@ -989,7 +764,7 @@ mod tests {
             path_point(Point::new(100.0, 100.0), false),
             path_point(Point::new(0.0, 100.0), false),
         ];
-        Path::Quadratic(QuadraticPath::new(PathPoints::from_vec(points), true))
+        Path::Bezier(BezierPath::new(PathPoints::from_vec(points), true))
     }
 
     #[cfg(test)]
@@ -1026,7 +801,7 @@ mod tests {
             off_curve(Point::new(103.5, 95.5)),
             off_curve(Point::new(95.5, 103.5)),
         ];
-        Path::Cubic(CubicPath::new(PathPoints::from_vec(points), true))
+        Path::Bezier(BezierPath::new(PathPoints::from_vec(points), true))
     }
     #[test]
     fn knife_splits_closed_rectangle_into_two_paths() {
@@ -1038,8 +813,8 @@ mod tests {
 
         assert_eq!(sliced.len(), 2);
         for path in sliced {
-            let Path::Cubic(path) = path else {
-                panic!("knife should preserve cubic path type");
+            let Path::Bezier(path) = path else {
+                panic!("knife should keep a bezier path");
             };
             assert!(path.closed);
             assert!(path.points.len() >= 4);
@@ -1056,8 +831,8 @@ mod tests {
 
         assert_eq!(sliced.len(), 2);
         for path in sliced {
-            let Path::Cubic(path) = path else {
-                panic!("knife should preserve cubic path type");
+            let Path::Bezier(path) = path else {
+                panic!("knife should keep a bezier path");
             };
             assert!(path.closed);
             assert!(path.points.len() >= 3);
@@ -1077,7 +852,7 @@ mod tests {
 
         assert_eq!(sliced.len(), 4);
         assert!(sliced.iter().all(|path| match path {
-            Path::Cubic(path) => path.closed,
+            Path::Bezier(path) => path.closed,
             _ => false,
         }));
     }
@@ -1094,8 +869,8 @@ mod tests {
         );
 
         assert_eq!(sliced.len(), 1);
-        let Path::Cubic(path) = &sliced[0] else {
-            panic!("nested cubic contours should stay cubic");
+        let Path::Bezier(path) = &sliced[0] else {
+            panic!("nested bezier contours should stay bezier");
         };
         assert!(path.closed);
         assert!(
@@ -1116,24 +891,6 @@ mod tests {
     }
 
     #[test]
-    fn knife_splits_closed_quadratic_rectangle_into_two_paths() {
-        let paths = vec![quadratic_rect_path(Rect::new(0.0, 0.0, 100.0, 100.0))];
-        let sliced = slice_paths(
-            &paths,
-            Line::new(Point::new(50.0, -10.0), Point::new(50.0, 110.0)),
-        );
-
-        assert_eq!(sliced.len(), 2);
-        for path in sliced {
-            let Path::Quadratic(path) = path else {
-                panic!("knife should preserve quadratic path type");
-            };
-            assert!(path.closed);
-            assert!(path.points.len() >= 4);
-        }
-    }
-
-    #[test]
     fn knife_splits_quadratic_curve_segments_without_raising_to_cubic() {
         let paths = vec![quadratic_curve_path()];
         let sliced = slice_paths(
@@ -1143,13 +900,14 @@ mod tests {
 
         assert_eq!(sliced.len(), 2);
         for path in sliced {
-            let Path::Quadratic(path) = path else {
-                panic!("knife should preserve quadratic path type");
+            let Path::Bezier(path) = path else {
+                panic!("knife should keep a bezier path");
             };
             assert!(
                 path.points.iter().any(PathPoint::is_off_curve),
                 "sliced quadratic curve should retain quadratic control points"
             );
+            assert!(is_quadratic(&path), "no quadratic piece may become cubic");
         }
     }
 
@@ -1163,7 +921,7 @@ mod tests {
 
         assert_eq!(sliced.len(), 2);
         for path in sliced {
-            let Path::Cubic(path) = path else {
+            let Path::Bezier(path) = path else {
                 panic!("knife should convert sliced hyperbeziers to cubic paths");
             };
             assert!(path.closed);
@@ -1182,7 +940,7 @@ mod tests {
             off_curve(Point::new(80.0, 100.0)),
             path_point(Point::new(100.0, 0.0), true),
         ];
-        let path = CubicPath::new(PathPoints::from_vec(points.clone()), false);
+        let path = BezierPath::new(PathPoints::from_vec(points.clone()), false);
         let segment = path
             .iter_segments()
             .next()
@@ -1199,7 +957,7 @@ mod tests {
             2,
             "endpoint-overlapping handles must not be deduped away"
         );
-        let rebuilt = CubicPath::new(PathPoints::from_vec(split_points), false);
+        let rebuilt = BezierPath::new(PathPoints::from_vec(split_points), false);
         assert!(
             rebuilt
                 .to_bezpath()
@@ -1207,6 +965,179 @@ mod tests {
                 .iter()
                 .any(|element| matches!(element, PathEl::CurveTo(_, _, _))),
             "the rebuilt segment should remain cubic, not collapse to a line"
+        );
+    }
+
+    /// A box from `min` to `max` whose bottom edge is one quadratic curve.
+    fn curved_quadratic_box(min: f64, max: f64) -> Path {
+        let points = vec![
+            path_point(Point::new(min, min), false),
+            off_curve(Point::new((min + max) / 2.0, min - 10.0)),
+            path_point(Point::new(max, min), false),
+            path_point(Point::new(max, max), false),
+            path_point(Point::new(min, max), false),
+        ];
+        Path::Bezier(BezierPath::new(PathPoints::from_vec(points), true))
+    }
+
+    /// Every sliced contour as saved: point types and coordinates, one contour per line.
+    fn saved_contours(paths: &[Path]) -> String {
+        paths
+            .iter()
+            .map(|path| {
+                path.to_contour()
+                    .points
+                    .iter()
+                    .map(|point| format!("{:?} {:.3} {:.3}", point.point_type, point.x, point.y))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Exact output of the knife for each contour kind. The expected values were recorded before
+    /// the quadratic path type was merged into the bezier path type, so they show that cutting a
+    /// cubic, a quadratic and a hyperbezier contour gives the same contours as before.
+    #[test]
+    fn knife_output_is_exact_for_cubic_quadratic_and_hyperbezier_contours() {
+        let vertical = Line::new(Point::new(50.0, -10.0), Point::new(50.0, 110.0));
+        let cubic = slice_paths(
+            &[rounded_icon_counter_path()],
+            Line::new(Point::new(256.0, 80.0), Point::new(256.0, 480.0)),
+        );
+        assert_eq!(
+            saved_contours(&cubic),
+            [
+                "OffCurve 95.500 103.500, Curve 96.000 128.000, Line 96.000 416.000, OffCurve 96.000 440.000, OffCurve 104.000 448.000, Curve 128.000 448.000, Line 256.000 448.000, Line 256.000 96.000, Line 128.000 96.000, OffCurve 103.500 95.500",
+                "Line 256.000 96.000, Line 256.000 448.000, Line 640.000 448.000, OffCurve 663.500 447.500, OffCurve 671.500 439.500, Curve 672.000 416.000, Line 672.000 128.000, OffCurve 671.500 103.500, OffCurve 663.500 95.500, Curve 640.000 96.000",
+            ]
+            .join("\n")
+        );
+        let quadratic = slice_paths(&[quadratic_curve_path()], vertical);
+        assert_eq!(
+            saved_contours(&quadratic),
+            [
+                "Line 0.000 100.000, Line 0.000 0.000, OffCurve 25.000 50.000, QCurve 50.000 50.000, Line 50.000 100.000",
+                "Line 50.000 100.000, Line 50.000 50.000, OffCurve 75.000 50.000, QCurve 100.000 0.000, Line 100.000 100.000",
+            ]
+            .join("\n")
+        );
+        // A hyperbezier cut: point types, and the sums of the coordinates of each contour.
+        let hyper = slice_paths(&[hyper_curve_path()], vertical);
+        assert_eq!(hyper.len(), 2);
+        for (path, (types, sum_x, sum_y)) in hyper.iter().zip([
+            (
+                "o c o o c o o c o o c o o c l o o c o o c o o c o o c o o c o o c o",
+                1_700.0,
+                535.839_278,
+            ),
+            (
+                "c l o o c o o c o o c o o c o o c o o c o o c o o c o o c o o c o o",
+                1_700.0,
+                2_864.160_722,
+            ),
+        ]) {
+            let contour = path.to_contour();
+            let kinds: Vec<_> = contour
+                .points
+                .iter()
+                .map(|point| match point.point_type {
+                    crate::outline::path::hyper_model::PointType::OffCurve => "o",
+                    crate::outline::path::hyper_model::PointType::Curve => "c",
+                    crate::outline::path::hyper_model::PointType::Line => "l",
+                    _ => "?",
+                })
+                .collect();
+            assert_eq!(kinds.join(" "), types);
+            let x: f64 = contour.points.iter().map(|point| point.x).sum();
+            let y: f64 = contour.points.iter().map(|point| point.y).sum();
+            assert!(
+                (x - sum_x).abs() < 1e-5 && (y - sum_y).abs() < 1e-5,
+                "{x} {y}"
+            );
+        }
+
+        // One hit on each of two nested contours joins contours that have a cubic segment or
+        // only lines, but not contours of quadratic curves and lines.
+        let nested = |outer: Path, inner: Path| {
+            saved_contours(&slice_paths(
+                &[outer, inner],
+                Line::new(Point::new(-10.0, 50.0), Point::new(50.0, 50.0)),
+            ))
+        };
+        assert_eq!(
+            nested(
+                curved_quadratic_box(0.0, 100.0),
+                curved_quadratic_box(25.0, 75.0)
+            ),
+            [
+                "Line 0.000 100.000, Line 0.000 0.000, OffCurve 50.000 -10.000, QCurve 100.000 0.000, Line 100.000 100.000",
+                "Line 25.000 75.000, Line 25.000 25.000, OffCurve 50.000 15.000, QCurve 75.000 25.000, Line 75.000 75.000",
+            ]
+            .join("\n")
+        );
+        assert_eq!(
+            nested(
+                rect_path(Rect::new(0.0, 0.0, 100.0, 100.0)),
+                rect_path(Rect::new(25.0, 25.0, 75.0, 75.0))
+            ),
+            [
+                "Line 25.000 50.000, Line 0.000 50.000, Line 0.000 0.000, Line 100.000 0.000, Line 100.000 100.000, Line 0.000 100.000, Line 0.000 50.000, Line 25.000 50.000, Line 25.000 25.000, Line 75.000 25.000, Line 75.000 75.000, Line 25.000 75.000",
+            ]
+            .join("\n")
+        );
+
+        let hits = knife_hit_points_for_paths(
+            &[quadratic_curve_path(), hyper_curve_path()],
+            Point::new(50.0, -10.0),
+            Point::new(50.0, 110.0),
+        );
+        assert_eq!(hits.len(), 2);
+        assert!((hits[0] - Point::new(50.0, 50.0)).hypot() < 1e-9);
+        assert!((hits[1] - Point::new(50.0, 100.0)).hypot() < 1e-9);
+    }
+
+    #[test]
+    fn knife_keeps_a_cut_quadratic_piece_of_a_mixed_contour_quadratic() {
+        let points = vec![
+            path_point(Point::new(0.0, 0.0), false),
+            off_curve(Point::new(50.0, -40.0)),
+            path_point(Point::new(100.0, 0.0), false),
+            off_curve(Point::new(110.0, 30.0)),
+            off_curve(Point::new(110.0, 70.0)),
+            path_point(Point::new(100.0, 100.0), false),
+            path_point(Point::new(0.0, 100.0), false),
+        ];
+        let mixed = Path::Bezier(BezierPath::new(PathPoints::from_vec(points), true));
+        let sliced = slice_paths(
+            &[mixed],
+            Line::new(Point::new(50.0, -50.0), Point::new(50.0, 150.0)),
+        );
+        assert_eq!(sliced.len(), 2);
+        let types = |path: &Path| -> Vec<_> {
+            path.to_contour()
+                .points
+                .iter()
+                .map(|point| point.point_type)
+                .collect()
+        };
+        use crate::outline::path::hyper_model::PointType as Saved;
+        for path in &sliced {
+            assert_eq!(
+                types(path)
+                    .iter()
+                    .filter(|kind| **kind == Saved::QCurve)
+                    .count(),
+                1,
+                "each half of the cut quadratic stays one quadratic segment"
+            );
+        }
+        assert!(
+            sliced
+                .iter()
+                .any(|path| types(path).contains(&Saved::Curve)),
+            "the uncut cubic segment stays cubic"
         );
     }
 
@@ -1220,7 +1151,7 @@ mod tests {
 
         assert_eq!(sliced.len(), 2);
         assert!(sliced.iter().all(|path| match path {
-            Path::Cubic(path) => path.closed,
+            Path::Bezier(path) => path.closed,
             _ => false,
         }));
     }
@@ -1240,19 +1171,11 @@ fn knife_hit_points_for_paths(paths: &[Path], p0: Point, p1: Point) -> Vec<Point
     let line = Line::new(p0, p1);
     let mut ts: Vec<f64> = Vec::new();
     for path in paths {
-        let cubic = match path {
-            Path::Cubic(c) => c.clone(),
-            Path::Hyper(h) => h.to_cubic(),
-            Path::Quadratic(q) => {
-                for segment in q.iter_segments() {
-                    for (_, line_t) in intersect_line_segment(line, &segment.segment) {
-                        ts.push(line_t);
-                    }
-                }
-                continue;
-            }
+        let bezier = match path {
+            Path::Bezier(bezier) => bezier.clone(),
+            Path::Hyper(hyper) => hyper.to_cubic(),
         };
-        for segment in cubic.iter_segments() {
+        for segment in bezier.iter_segments() {
             for (_, line_t) in intersect_line_segment(line, &segment.segment) {
                 ts.push(line_t);
             }
