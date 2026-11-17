@@ -239,7 +239,7 @@ fn rail_tabs(app: &Workspace, editing: bool) -> impl WidgetView<Workspace> + use
             icon_button(
                 ControlStyle::new(pal, ControlKind::Tab).selected(pal, is_active(which)),
                 icon,
-                icon,
+                rail_name(which, editing),
                 move |app: &mut Workspace| app.rail = which,
             )
             .icon_size(size)
@@ -344,9 +344,8 @@ fn editor_glyph_rail(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     .gap(Space::None)
 }
 
-/// What a rail panel is called, so the panels have names to talk about
-/// in tests and docs. The name is not drawn; the tab icon is the label.
-#[cfg(test)]
+/// What a rail panel is called: the accessible name of its tab, and its name in tests and docs.
+/// The name is not drawn; the tab icon is the visible label.
 pub(crate) fn rail_name(rail: Rail, editing: bool) -> &'static str {
     match rail {
         Rail::Glyphs if editing => "Glyph grid",

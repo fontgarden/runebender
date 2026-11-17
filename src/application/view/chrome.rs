@@ -101,15 +101,10 @@ pub(crate) fn header_tools(app: &Workspace) -> impl WidgetView<Workspace> + use<
     // the header as quiet as the adjacent outlined tabs while making the
     // selected tool the brightest mark on the bar.
     let editor_focus = app.editor_focus.clone();
-    let tile = move |icon: &'static str, tool: Tool| {
+    let tile = move |icon: &'static str, title: &'static str, tool: Tool| {
         let style = ControlStyle::new(pal, ControlKind::Tool)
             .on(pal, Ground::Header)
             .selected(pal, app.tool == tool);
-        let title = if tool == Tool::Interpolation {
-            "Edit Interpolation (I)"
-        } else {
-            icon
-        };
         let button = icon_button(style, icon, title, move |app: &mut Workspace| {
             app.review.pencil = false;
             app.select_tool(tool);
@@ -127,17 +122,21 @@ pub(crate) fn header_tools(app: &Workspace) -> impl WidgetView<Workspace> + use<
             tool_group(ToolGroup::Select, app.tool, app.palette.clone()),
             // The shared icon set calls this asset `preview`; its drawing is
             // the hand used by the viewport-pan tool.
-            tile("preview", Tool::Hand),
-            tile("pen", Tool::Pen),
-            tile("hyperpen", Tool::HyperPen),
-            tile("invert", Tool::Sketch),
+            tile("preview", "Hand", Tool::Hand),
+            tile("pen", "Pen", Tool::Pen),
+            tile("hyperpen", "Hyper Pen", Tool::HyperPen),
+            tile("invert", "Sketch", Tool::Sketch),
             tool_group(ToolGroup::Shapes, app.tool, app.palette.clone()),
-            tile("knife", Tool::Knife),
-            tile("measure", Tool::Measure),
-            tile("select-all-layers", Tool::Interpolation),
+            tile("knife", "Knife", Tool::Knife),
+            tile("measure", "Measure", Tool::Measure),
+            tile(
+                "select-all-layers",
+                "Edit Interpolation (I)",
+                Tool::Interpolation,
+            ),
             // No icon is drawn for it yet; two overlapping shapes are what a label is.
-            tile("intersect", Tool::Label),
-            tile("text", Tool::Text),
+            tile("intersect", "Label", Tool::Label),
+            tile("text", "Text", Tool::Text),
         ),
     )
 }
