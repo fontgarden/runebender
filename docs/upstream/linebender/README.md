@@ -49,6 +49,49 @@ An agent that receives dictated text corrects spelling and grammar and changes n
 7. **Submit.** The owner runs `scripts/upstream/submit_pull_request.sh <file>`. The script checks the approvals, shows the exact text, asks for typed confirmation, and then runs `gh pr create`.
 8. **After.** The link goes in the "Record" section. Replies to reviewers are the owner's. When the pull request merges, update the pinned revision in `Cargo.toml` and delete the workaround.
 
+## What every Xilem pull request needs
+
+Checked on 2026-11-17 against `linebender/xilem` `main` at `dc496876`.
+Read `.github/workflows/ci.yml` again before running the checks, because it changes.
+
+CI commands, from `.github/workflows/ci.yml`:
+
+- Formatting job: `cargo fmt --all --check`, `taplo fmt --check --diff` (Taplo 0.9.3), `bash .github/copyright.sh`, `bash .github/debug_assertions.sh`, and `cargo rdme --check --workspace-project=<crate>` (cargo-rdme 1.4.8) for `masonry`, `masonry_core`, `masonry_testing`, `masonry_winit`, `tree_arena`, `xilem`, `xilem_core`, `xilem_masonry`, `xilem_web` and `placehero`.
+- Clippy on Windows, macOS and Linux: `cargo hack clippy --workspace --locked --profile ci --optional-deps --each-feature -- -D warnings`, and the same with `--tests --benches --examples`.
+  Both run again with `CARGO_PROFILE_CI_DEBUG_ASSERTIONS=false`.
+- Clippy for wasm32: the same two commands with `--exclude` for the non-wasm crates and `--target wasm32-unknown-unknown`.
+- Tests on Windows, macOS and Linux: `cargo nextest run --workspace --locked --cargo-profile ci --all-features --no-fail-fast` with `CHECK_DOC_PATHS=true` (render tests are skipped on Windows with `SKIP_RENDER_TESTS`), `cargo nextest run -p tree_arena --locked --no-fail-fast --no-default-features`, and `cargo test --doc --workspace --locked --profile ci --all-features --no-fail-fast`.
+- Other jobs: `cargo miri test -p tree_arena` on nightly, `cargo test --no-run` for wasm32, `cargo apk check` for the Android examples with `RUSTFLAGS=-D warnings`, the MSRV check `cargo hack check --workspace --ignore-private --locked --profile ci --optional-deps --each-feature` on Rust 1.96 (native and wasm32), `cargo doc --workspace --locked --profile ci --all-features --no-deps --document-private-items` on nightly with `RUSTDOCFLAGS='--cfg docsrs -D warnings'`, and `crate-ci/typos` (configuration in `.typos.toml`).
+- Toolchains: stable `RUST_STABLE_VER` 1.97.1 and MSRV `RUST_MIN_VER` 1.96 (`ci.yml`); the workspace `rust-version` is 1.96 (`Cargo.toml`), and the README states the same MSRV.
+  A change that raises the MSRV updates all three places, per the comment in `ci.yml`.
+
+Conventions:
+
+- Copyright header: every `.rs` file starts with `// Copyright <year> the Xilem Authors` and `// SPDX-License-Identifier: Apache-2.0` (`.github/copyright.sh`).
+- Snapshot tests: Masonry render tests compare against PNG files in each package's `screenshots/` folder.
+  `MASONRY_TEST_BLESS=1` rewrites the references (`masonry_testing/README.md`).
+  Since [#1839](https://github.com/linebender/xilem/pull/1839) (2026-08-25) comparison is exact.
+  CI uploads `**/screenshots/*.png` when tests fail.
+- Changelog: `linebender/xilem` has no `CHANGELOG.md` at `dc496876`.
+  The Linebender [release process](https://linebender.org/wiki/process/release/) asks for changelog updates in projects that have one, such as Vello.
+- Lints and formatting: the Linebender [canonical lint set](https://linebender.org/wiki/canonical-lints/) and [formatting scheme](https://linebender.org/wiki/formatting-scheme/); CI denies warnings.
+- Merging: commits on `main` are single commits whose subject ends in the pull request number, for example `Text widget tests (#1857)`, so pull requests are squash-merged.
+  The [contributor guidelines](https://linebender.org/contributor-guidelines/) allow merge or squash and require approval by someone with write access.
+- Titles of recently merged pull requests (#1850 to #1862) are short imperative sentences in sentence case.
+  Some carry a crate prefix (`masonry: ...`, `xilem: ...`) or a type prefix (`fix(masonry): ...`, `perf: ...`); most have none.
+  Identifiers are in backticks.
+- LLM disclosure in recent merged pull requests is one plain sentence in the description, for example in [#1691](https://github.com/linebender/xilem/pull/1691), [#1821](https://github.com/linebender/xilem/pull/1821), [#1853](https://github.com/linebender/xilem/pull/1853) and [#1856](https://github.com/linebender/xilem/pull/1856).
+  [#1842](https://github.com/linebender/xilem/pull/1842) states that no AI was used, which the policy asks contributors not to do.
+- Agent files: the Xilem `.gitignore` lists `AGENT.md`, `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `research.md`, `plan.md`, `.mcp.json`, `.github/copilot-instructions.md` and `.codex` ([#1711](https://github.com/linebender/xilem/pull/1711)).
+  A branch must not add them.
+- Templates: `linebender/xilem` has no pull request or issue template at `dc496876`.
+- Nontrivial changes: the [contributor guidelines](https://linebender.org/contributor-guidelines/) say to file an issue before a pull request for a nontrivial change, and to use Zulip or office hours when consensus is unclear.
+  Design discussion for Xilem and Masonry is in the `#xilem` and `#masonry` Zulip channels (README of `linebender/xilem`).
+- Timing: Olivier FAURE has set a deadline for a major Masonry release before 2026-11-27 ([Zulip](https://xi.zulipchat.com/#narrow/channel/317477-masonry/topic/Linebender.202026.20roadmap.20-.20Masonry/near/636301246)).
+
+The Linebender Zulip archive is readable without an account through the web client and through `https://xi.zulipchat.com/json/messages` with a `web-public` narrow.
+Its messages are not indexed by search engines (contributor guidelines).
+
 ## Rules for agents
 
 - Do not write, draft, outline or reword the title, the description or the disclosure. The only permitted edit is a spelling or grammar correction that the owner asks for.
