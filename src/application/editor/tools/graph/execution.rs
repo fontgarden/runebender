@@ -18,6 +18,7 @@ use runebender::automation::agent_session::{AgentOperationRejection, AgentPayloa
 use runebender::automation::script_recipe::{self, ScriptRecipeInput, ScriptRecipeResult};
 use runebender::font::compiler::proof::{CompileProofInput, CompiledProofRecipe};
 use runebender::font::project::{CanonicalDocumentEditTransaction, Project};
+use runebender::workflows::digest::is_sha256_digest;
 use runebender::workflows::graph_session::{
     GraphCancelOutcome, GraphCancelRequest, GraphCancelResponse, GraphDocumentState,
     GraphFontCapture, GraphNodeOutput, GraphNodeOutputValue, GraphProofScope,
@@ -27,8 +28,6 @@ use runebender::workflows::graph_session::{
 };
 use runebender::workflows::receipt_ledger::ReceiptLedger;
 use serde_json::Value;
-#[cfg(test)]
-use sha2::{Digest, Sha256};
 
 use crate::application::platform::script_jobs::{
     ScriptJobFailure, ScriptJobHandle, ScriptJobOutcome, ScriptJobQueue, ScriptJobRequest,
@@ -398,8 +397,8 @@ impl LiveGraphExecution {
             ));
         }
         if proof.artifact_id.is_empty()
-            || !valid_sha(&proof.content_sha256)
-            || !valid_sha(&proof.font_sha256)
+            || !is_sha256_digest(&proof.content_sha256)
+            || !is_sha256_digest(&proof.font_sha256)
         {
             return Err(err(
                 LiveGraphExecutionErrorCode::Proof,
@@ -1378,7 +1377,7 @@ fn validate_submit_capture(
             "base proof capture does not match the current document revision",
         ));
     }
-    if !valid_sha(request.base_proof_input.canonical_input_sha256()) {
+    if !is_sha256_digest(request.base_proof_input.canonical_input_sha256()) {
         return Err(err(
             LiveGraphExecutionErrorCode::Capture,
             "base proof capture lacks a canonical SHA-256 identity",
@@ -1438,14 +1437,6 @@ fn append_bounded(target: &mut String, value: &str, bound: usize) {
     }
 }
 
-fn valid_sha(value: &str) -> bool {
-    let digest = value.strip_prefix("sha256:").unwrap_or(value);
-    digest.len() == 64
-        && digest
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
 trait CurrentProject {
     fn graph_document_state(&self, epoch: &str) -> GraphDocumentState;
 }
@@ -1501,14 +1492,9 @@ fn run_error(code: &str, message: &str, node: Option<u32>) -> GraphRunError {
     }
 }
 #[cfg(test)]
-fn sha256(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
 #[cfg(test)]
 mod tests {
+    use runebender::workflows::digest::sha256_hex;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
@@ -1613,9 +1599,9 @@ mod tests {
         LiveGraphProofOutputs {
             node: request.node,
             artifact_id: format!("proof-{}", request.node),
-            content_sha256: sha256(format!("proof-{}", request.node).as_bytes()),
+            content_sha256: sha256_hex(format!("proof-{}", request.node).as_bytes()),
             canonical_input_sha256: request.input.canonical_input_sha256().to_owned(),
-            font_sha256: sha256(b"font"),
+            font_sha256: sha256_hex(b"font"),
         }
     }
 
@@ -1878,7 +1864,7 @@ mod tests {
         assert_eq!(replay.graph.disposition, GraphReceiptDisposition::Replayed);
         assert_eq!(replay.graph.receipt, run.receipt);
         let mut changed = input(&project, "job-1");
-        changed.input_hash = sha256(b"changed input");
+        changed.input_hash = sha256_hex(b"changed input");
         let error = adapter
             .submit(
                 &mut session,

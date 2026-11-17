@@ -250,6 +250,7 @@ mod native {
     use std::thread::JoinHandle;
     use std::time::Duration;
 
+    use runebender::workflows::digest::hex_digest;
     use runebender::workflows::process::{
         OutputStream, ProcessCancellation, ProcessLimits, ProcessOutcome, run,
     };
@@ -808,14 +809,6 @@ mod native {
 
     fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         mutex.lock().unwrap_or_else(|error| error.into_inner())
-    }
-
-    fn hex_digest(digest: impl AsRef<[u8]>) -> String {
-        digest
-            .as_ref()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
     }
 
     #[cfg(test)]

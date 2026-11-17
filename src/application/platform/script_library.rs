@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
+use runebender::workflows::digest::hex_digest;
 use sha2::{Digest, Sha256};
 
 const MAX_SCRIPT_BYTES: usize = 256 * 1024;
@@ -337,14 +338,6 @@ fn sync_directory(path: &Path) -> Result<(), ScriptLibraryError> {
     #[cfg(not(unix))]
     let _ = path;
     Ok(())
-}
-
-fn hex_digest(digest: impl AsRef<[u8]>) -> String {
-    digest
-        .as_ref()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 #[cfg(test)]

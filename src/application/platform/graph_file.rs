@@ -13,6 +13,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use runebender::workflows::digest::hex_digest;
 use runebender::workflows::graph::{EXTENSION, FILE_VERSION, NodeGraph};
 use sha2::{Digest, Sha256};
 
@@ -319,14 +320,6 @@ fn sync_directory(path: &Path) -> Result<(), LiveGraphFileError> {
     #[cfg(unix)]
     File::open(path)?.sync_all()?;
     Ok(())
-}
-
-fn hex_digest(digest: impl AsRef<[u8]>) -> String {
-    digest
-        .as_ref()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 #[cfg(test)]

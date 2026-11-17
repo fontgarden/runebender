@@ -16,6 +16,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use super::digest::{hex_digest, is_sha256_digest, sha256_hex};
+
 use super::graph::{Link, Node, NodeGraph, NodeType, Problem, Registry};
 use super::receipt_ledger::ReceiptLedger;
 
@@ -1233,7 +1235,7 @@ impl GraphSession {
                     }
                     Ok(GraphScriptCapture {
                         node: step.node,
-                        script_sha256: sha256(code.as_bytes()),
+                        script_sha256: sha256_hex(code.as_bytes()),
                         input_sha256: input_sha256.clone(),
                         parameters_sha256: digest_json(&parameters)?,
                     })
@@ -2001,14 +2003,6 @@ fn digest_json(value: &impl Serialize) -> Result<String, GraphSessionError> {
     Ok(hex_digest(Sha256::digest(bytes)))
 }
 
-fn hex_digest(digest: impl AsRef<[u8]>) -> String {
-    digest
-        .as_ref()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
 fn execution_plan(
     graph: &NodeGraph,
     version: u32,
@@ -2238,7 +2232,7 @@ fn validate_capture(
                     "live.python code must be non-empty before Run",
                 )
             })?;
-        if sha256(code.as_bytes()) != script.script_sha256 {
+        if sha256_hex(code.as_bytes()) != script.script_sha256 {
             return Err(GraphSessionError::new(
                 GraphSessionErrorCode::CaptureMismatch,
                 "script capture does not match live.python code",
@@ -2297,22 +2291,13 @@ fn validate_capture(
 }
 
 fn validate_digest(name: &str, value: &str) -> Result<(), GraphSessionError> {
-    let digest = value.strip_prefix("sha256:").unwrap_or(value);
-    if digest.len() != 64
-        || !digest
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
+    if !is_sha256_digest(value) {
         return Err(GraphSessionError::new(
             GraphSessionErrorCode::CaptureMismatch,
             format!("{name} identity must be a lowercase SHA-256 digest"),
         ));
     }
     Ok(())
-}
-
-fn sha256(bytes: &[u8]) -> String {
-    hex_digest(Sha256::digest(bytes))
 }
 
 fn validate_outputs(
@@ -2685,9 +2670,9 @@ mod tests {
                     GraphFontCapture {
                         source: 3,
                         document_revision: 12,
-                        capture_sha256: sha256(b"font-capture"),
+                        capture_sha256: sha256_hex(b"font-capture"),
                     },
-                    sha256(b"recipe-input"),
+                    sha256_hex(b"recipe-input"),
                 )
                 .unwrap(),
         }
@@ -2695,7 +2680,7 @@ mod tests {
 
     fn outputs(identity: &GraphRunIdentity) -> Vec<GraphNodeOutput> {
         let recipe = identity.capture.proofs[0].recipe_sha256.clone();
-        let derived_input_sha256 = sha256(b"derived-input");
+        let derived_input_sha256 = sha256_hex(b"derived-input");
         vec![
             GraphNodeOutput {
                 node: 3,
@@ -2711,9 +2696,9 @@ mod tests {
                 node: 2,
                 value: GraphNodeOutputValue::Proof {
                     artifact_id: "proof-base".into(),
-                    content_sha256: sha256(b"base-png"),
+                    content_sha256: sha256_hex(b"base-png"),
                     canonical_input_sha256: identity.capture.font.capture_sha256.clone(),
-                    font_sha256: sha256(b"base-font"),
+                    font_sha256: sha256_hex(b"base-font"),
                     recipe_sha256: recipe.clone(),
                     scope: GraphProofScope::CompiledFamily,
                 },
@@ -2722,9 +2707,9 @@ mod tests {
                 node: 4,
                 value: GraphNodeOutputValue::Proof {
                     artifact_id: "proof-derived".into(),
-                    content_sha256: sha256(b"derived-png"),
+                    content_sha256: sha256_hex(b"derived-png"),
                     canonical_input_sha256: derived_input_sha256,
-                    font_sha256: sha256(b"derived-font"),
+                    font_sha256: sha256_hex(b"derived-font"),
                     recipe_sha256: recipe,
                     scope: GraphProofScope::CompiledFamily,
                 },
@@ -3502,7 +3487,7 @@ mod tests {
         assert_eq!(replay.disposition, GraphReceiptDisposition::Replayed);
         assert_eq!(replay.receipt.handle, first.receipt.handle);
         let mut changed = request;
-        changed.capture.font.capture_sha256 = sha256(b"another-font");
+        changed.capture.font.capture_sha256 = sha256_hex(b"another-font");
         assert_eq!(
             session.start_run(changed).unwrap_err().code,
             GraphSessionErrorCode::PayloadMismatch
@@ -3545,9 +3530,9 @@ mod tests {
                     GraphFontCapture {
                         source: 3,
                         document_revision: 12,
-                        capture_sha256: sha256(b"dag-root"),
+                        capture_sha256: sha256_hex(b"dag-root"),
                     },
-                    sha256(b"root-recipe-scope"),
+                    sha256_hex(b"root-recipe-scope"),
                     2,
                 )
                 .unwrap(),
@@ -3561,11 +3546,11 @@ mod tests {
                 source: 3,
                 version_id: format!("version-{node}"),
                 version_revision: 1,
-                content_sha256: sha256(format!("content-{node}").as_bytes()),
+                content_sha256: sha256_hex(format!("content-{node}").as_bytes()),
                 lineage: Some(GraphVersionLineage {
                     parent_node: parent,
                     parent_content_sha256: parent_hash.into(),
-                    recipe_input_sha256: sha256(format!("recipe-{node}").as_bytes()),
+                    recipe_input_sha256: sha256_hex(format!("recipe-{node}").as_bytes()),
                 }),
             },
         }
@@ -3576,9 +3561,9 @@ mod tests {
             node,
             value: GraphNodeOutputValue::Proof {
                 artifact_id: format!("proof-{node}"),
-                content_sha256: sha256(format!("png-{node}").as_bytes()),
+                content_sha256: sha256_hex(format!("png-{node}").as_bytes()),
                 canonical_input_sha256: parent_hash.into(),
-                font_sha256: sha256(format!("font-{node}").as_bytes()),
+                font_sha256: sha256_hex(format!("font-{node}").as_bytes()),
                 recipe_sha256: identity
                     .capture
                     .proofs
@@ -3746,7 +3731,7 @@ mod tests {
             ..
         } = &mut wrong[2].value
         {
-            lineage.parent_content_sha256 = sha256(b"wrong");
+            lineage.parent_content_sha256 = sha256_hex(b"wrong");
         }
         let result = session
             .complete_run(
@@ -3804,9 +3789,9 @@ mod tests {
                     GraphFontCapture {
                         source: 3,
                         document_revision: 12,
-                        capture_sha256: sha256(b"root")
+                        capture_sha256: sha256_hex(b"root")
                     },
-                    sha256(b"scope"),
+                    sha256_hex(b"scope"),
                     2
                 )
                 .unwrap()
