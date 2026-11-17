@@ -4,14 +4,10 @@
 //! Samples compact metaball fields and explicitly converts their boundaries to cubic contours.
 
 use std::collections::BTreeMap;
-#[cfg(test)]
-use std::collections::HashSet;
 
 use kurbo::{BezPath, Point, Vec2};
 
 use crate::formats::metadata::metaballs::{Metaball, MetaballGroup, Metaballs};
-#[cfg(test)]
-use crate::formats::metadata::metaballs::{read_metaballs, write_metaballs};
 
 /// Sampling and curve fitting settings, both in font units.
 #[derive(Clone, Copy, Debug)]
@@ -267,100 +263,11 @@ fn sample_outline(
 }
 
 #[cfg(test)]
-fn contours(paths: &[BezPath]) -> Vec<norad::Contour> {
-    paths
-        .iter()
-        .map(|path| {
-            let mut points = Vec::new();
-            for segment in path.segments() {
-                let c = segment.to_cubic();
-                for (p, typ) in [
-                    (c.p1, norad::PointType::OffCurve),
-                    (c.p2, norad::PointType::OffCurve),
-                    (c.p3, norad::PointType::Curve),
-                ] {
-                    let smooth = typ == norad::PointType::Curve;
-                    points.push(norad::ContourPoint::new(p.x, p.y, typ, smooth, None, None));
-                }
-            }
-            norad::Contour::new(points, None)
-        })
-        .collect()
-}
-
-/// Converts every metaball group in every layer of a font, returning groups converted.
-/// All changes are prepared on a clone first; an error leaves the entire font untouched.
-/// This does not write files. A live editor must supply a font-wide undo transaction.
-#[cfg(test)]
-pub fn collapse_font(font: &mut norad::Font, options: OutlineOptions) -> Result<usize, String> {
-    let mut candidate = font.clone();
-    let mut count = 0;
-    for layer in candidate.layers.iter_mut() {
-        for glyph in layer.iter_mut() {
-            count +=
-                collapse(glyph, None, options).map_err(|e| format!("{}: {e}", glyph.name()))?;
-        }
-    }
-    if count != 0 {
-        *font = candidate;
-    }
-    Ok(count)
-}
-
-/// Converts selected whole groups to cubic UFO contours and removes their live data.
-/// `None` converts every group; an empty slice converts none. Returns groups converted.
-/// All validation and geometry finish before mutation; any error preserves the glyph.
-/// Empty sampled outlines are rejected to avoid silently discarding live sources.
-/// Existing contours, anchors, components, lib keys and fractional coordinates are preserved.
-/// The editor must wrap this operation in its normal undo transaction.
-#[cfg(test)]
-pub fn collapse(
-    glyph: &mut norad::Glyph,
-    groups: Option<&[u32]>,
-    options: OutlineOptions,
-) -> Result<usize, String> {
-    let mut data = read_metaballs(glyph)?;
-    let selected: HashSet<_> = groups
-        .map(|ids| ids.iter().copied().collect())
-        .unwrap_or_else(|| data.groups.iter().map(|g| g.id).collect());
-    if selected
-        .iter()
-        .any(|id| !data.groups.iter().any(|g| g.id == *id))
-    {
-        return Err("unknown metaball group".into());
-    }
-    let mut generated = Vec::new();
-    for group in data.groups.iter().filter(|g| selected.contains(&g.id)) {
-        let paths = cubic_outline(group, options)?;
-        if paths.is_empty() {
-            return Err("metaball group has no sampled outline; source preserved".into());
-        }
-        generated.extend(contours(&paths));
-    }
-    data.groups.retain(|g| !selected.contains(&g.id));
-    write_metaballs(glyph, &data)?;
-    glyph.contours.extend(generated);
-    Ok(selected.len())
-}
-
-/// Builds the live metaball preview without changing the glyph or adding contours.
-/// Invalid source or a preview beyond the sampling budget returns an error.
-#[cfg(test)]
-pub fn glyph_preview(glyph: &norad::Glyph) -> Result<BezPath, String> {
-    let source = read_metaballs(glyph)?;
-    let mut path = BezPath::new();
-    for group in &source.groups {
-        for contour in preview(group, OutlineOptions::default())? {
-            path.extend(contour);
-        }
-    }
-    Ok(path)
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::formats::metadata::metaballs::{METABALLS_KEY, Metaball};
+    use crate::formats::metadata::metaballs::{
+        METABALLS_KEY, Metaball, read_metaballs, write_metaballs,
+    };
     use kurbo::{ParamCurve, Shape};
 
     fn ball(id: u32, x: f64) -> Metaball {
@@ -545,57 +452,30 @@ mod tests {
     }
 
     #[test]
-    fn source_survives_glif_save_and_selected_conversion_preserves_other_data() {
+    fn source_survives_glif_save() {
         let mut glyph = norad::Glyph::new("metaball-test");
         glyph.width = 500.0;
-        glyph.lib.insert("example.keep".into(), "untouched".into());
         let first = group(vec![ball(7, 0.25)]);
         let mut second = first.clone();
         second.id = 2;
         second.balls[0].x = 350.25;
         let source = Metaballs {
             version: 2,
-            groups: vec![first, second.clone()],
+            groups: vec![first, second],
         };
         assert!(write_metaballs(&mut glyph, &source).unwrap());
         assert!(!write_metaballs(&mut glyph, &source).unwrap());
         assert!(glyph.contours.is_empty());
         let bytes = glyph.encode_xml().unwrap();
-        let mut glyph = norad::Glyph::parse_raw(&bytes).unwrap();
+        let glyph = norad::Glyph::parse_raw(&bytes).unwrap();
         assert_eq!(read_metaballs(&glyph).unwrap(), source);
-        assert_eq!(
-            collapse(&mut glyph, Some(&[1]), OutlineOptions::default()).unwrap(),
-            1
-        );
-        assert_eq!(glyph.contours.len(), 1);
-        assert_eq!(read_metaballs(&glyph).unwrap().groups, vec![second]);
-        assert_eq!(glyph.width, 500.0);
-        assert_eq!(
-            glyph
-                .lib
-                .get("example.keep")
-                .and_then(plist::Value::as_string),
-            Some("untouched")
-        );
-        let first_contour = glyph.contours[0].clone();
-        assert_eq!(
-            collapse(&mut glyph, None, OutlineOptions::default()).unwrap(),
-            1
-        );
-        assert_eq!(glyph.contours[0], first_contour);
-        assert!(!glyph.lib.contains_key(METABALLS_KEY));
-        assert!(
-            glyph
-                .contours
-                .iter()
-                .flat_map(|c| &c.points)
-                .all(|p| matches!(p.typ, norad::PointType::Curve | norad::PointType::OffCurve))
-        );
-        assert!(norad::Glyph::parse_raw(&glyph.encode_xml().unwrap()).is_ok());
     }
 
     #[test]
-    fn failed_conversion_and_unknown_schema_leave_glyph_unchanged() {
+    fn failed_conversion_and_unknown_schema_leave_layer_unchanged() {
+        use crate::font::project::{Project, SourceInput};
+        use crate::font::variable::{GlyphLayerAddress, SourceId};
+
         let mut glyph = norad::Glyph::new("invalid");
         let good = group(vec![ball(1, 0.0)]);
         let mut invisible = good.clone();
@@ -610,15 +490,39 @@ mod tests {
         )
         .unwrap();
         let before = glyph.encode_xml().unwrap();
-        assert!(collapse(&mut glyph, None, OutlineOptions::default()).is_err());
-        assert_eq!(glyph.encode_xml().unwrap(), before);
-        assert!(collapse(&mut glyph, Some(&[99]), OutlineOptions::default()).is_err());
-        assert_eq!(glyph.encode_xml().unwrap(), before);
         let mut invalid = read_metaballs(&glyph).unwrap();
         invalid.groups[0].balls[0].x = f64::NAN;
         assert!(write_metaballs(&mut glyph, &invalid).is_err());
         assert_eq!(glyph.encode_xml().unwrap(), before);
-        glyph.lib.insert(
+
+        let mut font = norad::Font::new();
+        font.default_layer_mut().insert_glyph(glyph);
+        let project = Project::from_source(SourceInput::from_font(font, "Metaballs.ufo".into()))
+            .expect("valid source fixture");
+        let address = GlyphLayerAddress {
+            glyph: "invalid".into(),
+            layer: project
+                .document_source(SourceId(0))
+                .unwrap()
+                .default_layer(),
+        };
+        let mut transaction = project
+            .begin_document_layer_transaction(&address)
+            .expect("fixture transaction");
+        let draft = transaction.draft_mut();
+        let contours = draft.view().contours().count();
+        let source = draft.view().metaballs().unwrap();
+        // The invisible group samples no outline, so the whole conversion is refused.
+        assert!(
+            draft
+                .collapse_metaballs(None, OutlineOptions::default())
+                .is_err()
+        );
+        assert_eq!(draft.view().contours().count(), contours);
+        assert_eq!(draft.view().metaballs().unwrap(), source);
+
+        let mut unknown = norad::Glyph::new("unknown");
+        unknown.lib.insert(
             METABALLS_KEY.into(),
             plist::to_value(&Metaballs {
                 version: 3,
@@ -626,56 +530,12 @@ mod tests {
             })
             .unwrap(),
         );
-        let before = glyph.encode_xml().unwrap();
-        assert!(collapse(&mut glyph, None, OutlineOptions::default()).is_err());
-        assert_eq!(glyph.encode_xml().unwrap(), before);
+        assert!(read_metaballs(&unknown).is_err());
     }
 
     #[test]
     fn work_budget_rejects_excessive_grids_before_allocation() {
         let g = group(vec![ball(1, -100_000.0), ball(2, 100_000.0)]);
         assert!(preview(&g, OutlineOptions::default()).is_err());
-    }
-
-    #[test]
-    fn whole_font_conversion_is_atomic_across_glyphs() {
-        let mut font = norad::Font::new();
-        for name in ["a", "b"] {
-            let mut glyph = norad::Glyph::new(name);
-            let mut g = group(vec![ball(1, 0.0)]);
-            if name == "b" {
-                g.threshold = 10.0;
-            }
-            write_metaballs(
-                &mut glyph,
-                &Metaballs {
-                    version: 2,
-                    groups: vec![g],
-                },
-            )
-            .unwrap();
-            font.default_layer_mut().insert_glyph(glyph);
-        }
-        assert!(collapse_font(&mut font, OutlineOptions::default()).is_err());
-        assert!(
-            font.default_layer()
-                .get_glyph("a")
-                .unwrap()
-                .contours
-                .is_empty()
-        );
-        let glyph = font.default_layer_mut().get_glyph_mut("b").unwrap();
-        let mut data = read_metaballs(glyph).unwrap();
-        data.groups[0].threshold = 0.5;
-        write_metaballs(glyph, &data).unwrap();
-        assert_eq!(
-            collapse_font(&mut font, OutlineOptions::default()).unwrap(),
-            2
-        );
-        assert!(
-            font.default_layer()
-                .iter()
-                .all(|g| !g.lib.contains_key(METABALLS_KEY))
-        );
     }
 }

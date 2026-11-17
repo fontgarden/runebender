@@ -1226,99 +1226,6 @@ mod tests {
     }
 }
 
-// ---- norad bridge ----
-
-/// Cut a norad glyph's contours along the line from `p0` to `p1`.
-///
-/// Hyperbezier contours, detected through the workspace conversion
-/// by the shared identifier convention, become explicit cubics when
-/// sliced. Returns false when nothing was cut.
-#[cfg(test)]
-pub fn knife_cut_glyph(glyph: &mut norad::Glyph, p0: Point, p1: Point) -> bool {
-    let paths: Vec<Path> = glyph
-        .contours
-        .iter()
-        .map(|c| Path::from_contour(&crate::outline::path::hyper_model::Contour::from_norad(c)))
-        .collect();
-    if paths.is_empty() {
-        return false;
-    }
-    let sliced = slice_paths(&paths, Line::new(p0, p1));
-    if sliced.len() == paths.len() {
-        // Nothing split and nothing joined: leave the glyph alone.
-        return false;
-    }
-    glyph.contours = sliced.iter().map(|p| p.to_contour().to_norad()).collect();
-    true
-}
-
-#[cfg(test)]
-mod norad_tests {
-    use super::*;
-
-    #[test]
-    fn knife_cuts_fixture_zero_into_four_contours() {
-        let path = crate::testing::fonts::regular_ufo();
-        let font = norad::Font::load(path).expect("fixture UFO loads");
-        let mut glyph = font.get_glyph("zero").expect("zero exists").clone();
-        assert_eq!(glyph.contours.len(), 2);
-        let hits = knife_hit_points(&glyph, Point::new(340.0, -200.0), Point::new(340.0, 900.0));
-        assert_eq!(hits.len(), 4, "vertical line should cross zero 4 times");
-        assert!(knife_cut_glyph(
-            &mut glyph,
-            Point::new(340.0, -200.0),
-            Point::new(340.0, 900.0)
-        ));
-        assert_eq!(glyph.contours.len(), 4);
-    }
-
-    #[test]
-    fn knife_cuts_a_norad_rectangle_in_two() {
-        let mut glyph = norad::Glyph::new("test");
-        let points = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)].map(|(x, y)| {
-            norad::ContourPoint::new(x, y, norad::PointType::Line, false, None, None)
-        });
-        glyph
-            .contours
-            .push(norad::Contour::new(points.to_vec(), None));
-
-        // A miss changes nothing.
-        assert!(!knife_cut_glyph(
-            &mut glyph,
-            Point::new(200.0, -50.0),
-            Point::new(300.0, 150.0)
-        ));
-        assert_eq!(glyph.contours.len(), 1);
-
-        // A horizontal cut yields two closed contours.
-        assert!(knife_cut_glyph(
-            &mut glyph,
-            Point::new(-10.0, 50.0),
-            Point::new(110.0, 50.0)
-        ));
-        assert_eq!(glyph.contours.len(), 2);
-        for contour in &glyph.contours {
-            assert!(contour.points.len() >= 4);
-        }
-    }
-}
-
-/// Where the knife line crosses a glyph's contours, for the drag
-/// preview. Points come back in design space, ordered along the line.
-#[cfg(test)]
-pub fn knife_hit_points(glyph: &norad::Glyph, p0: Point, p1: Point) -> Vec<Point> {
-    let paths: Vec<_> = glyph
-        .contours
-        .iter()
-        .map(|contour| {
-            Path::from_contour(&crate::outline::path::hyper_model::Contour::from_norad(
-                contour,
-            ))
-        })
-        .collect();
-    knife_hit_points_for_paths(&paths, p0, p1)
-}
-
 /// Find where a knife line crosses canonical document contours.
 pub fn knife_hit_points_in_layer(
     layer: crate::font::LayerView<'_>,
@@ -1354,4 +1261,103 @@ fn knife_hit_points_for_paths(paths: &[Path], p0: Point, p1: Point) -> Vec<Point
     ts.sort_by(f64::total_cmp);
     ts.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
     ts.into_iter().map(|t| line.eval(t)).collect()
+}
+
+#[cfg(test)]
+mod layer_tests {
+    use super::*;
+    use crate::font::project::{Project, SourceInput};
+    use crate::font::variable::{GlyphLayerAddress, SourceId};
+
+    /// Cut one glyph of a project along a line and report whether its topology changed.
+    fn knife_cut(project: &mut Project, glyph: &str, p0: Point, p1: Point) -> bool {
+        let layer = project
+            .document_source(SourceId(0))
+            .expect("default source")
+            .default_layer();
+        let mut transaction = project
+            .begin_document_layer_transaction(&GlyphLayerAddress {
+                glyph: glyph.into(),
+                layer,
+            })
+            .expect("fixture transaction");
+        let changed = transaction
+            .draft_mut()
+            .knife_cut(p0, p1)
+            .expect("finite knife line");
+        project
+            .commit_document_layer_transaction(transaction)
+            .expect("knife commit");
+        changed
+    }
+
+    fn contour_count(project: &Project, glyph: &str) -> usize {
+        let layer = project
+            .document_source(SourceId(0))
+            .unwrap()
+            .default_layer();
+        project
+            .document_layer(glyph, &layer)
+            .unwrap()
+            .contours()
+            .count()
+    }
+
+    #[test]
+    fn knife_cuts_fixture_zero_into_four_contours() {
+        let mut project = Project::load(&crate::testing::fonts::regular_ufo()).expect("fixture");
+        let layer = project
+            .document_source(SourceId(0))
+            .unwrap()
+            .default_layer();
+        assert_eq!(contour_count(&project, "zero"), 2);
+        let (p0, p1) = (Point::new(340.0, -200.0), Point::new(340.0, 900.0));
+        let hits =
+            knife_hit_points_in_layer(project.document_layer("zero", &layer).unwrap(), p0, p1);
+        assert_eq!(hits.len(), 4, "vertical line should cross zero 4 times");
+        assert!(knife_cut(&mut project, "zero", p0, p1));
+        assert_eq!(contour_count(&project, "zero"), 4);
+    }
+
+    #[test]
+    fn knife_cuts_a_rectangle_in_two() {
+        let mut glyph = norad::Glyph::new("test");
+        let points = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)].map(|(x, y)| {
+            norad::ContourPoint::new(x, y, norad::PointType::Line, false, None, None)
+        });
+        glyph
+            .contours
+            .push(norad::Contour::new(points.to_vec(), None));
+        let mut font = norad::Font::new();
+        font.default_layer_mut().insert_glyph(glyph);
+        let mut project = Project::from_source(SourceInput::from_font(font, "Knife.ufo".into()))
+            .expect("valid source fixture");
+
+        // A miss changes nothing.
+        assert!(!knife_cut(
+            &mut project,
+            "test",
+            Point::new(200.0, -50.0),
+            Point::new(300.0, 150.0)
+        ));
+        assert_eq!(contour_count(&project, "test"), 1);
+
+        // A horizontal cut yields two closed contours.
+        assert!(knife_cut(
+            &mut project,
+            "test",
+            Point::new(-10.0, 50.0),
+            Point::new(110.0, 50.0)
+        ));
+        let layer = project
+            .document_source(SourceId(0))
+            .unwrap()
+            .default_layer();
+        let view = project.document_layer("test", &layer).unwrap();
+        assert_eq!(view.contours().count(), 2);
+        for contour in view.contours() {
+            assert!(contour.is_closed());
+            assert!(contour.points().count() >= 4);
+        }
+    }
 }

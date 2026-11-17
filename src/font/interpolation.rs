@@ -528,7 +528,7 @@ mod tests {
 
         assert_eq!(
             result.contours_to_bezpath(),
-            crate::outline::glyph_paths::contours_to_bezpath(&projected)
+            crate::testing::ufo_oracle::contours_to_bezpath(&projected)
         );
     }
 }

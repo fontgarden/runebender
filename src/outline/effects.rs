@@ -5,19 +5,11 @@
 //!
 //! Expand a stroke, offset, extrude, roughen, apply a corner component,
 //! and bolden by a learned per-point offset.
-//! Geometry helpers operate on Kurbo paths so canonical edits and test-only UFO behavior oracles
-//! share the same algorithms.
-
-#[cfg(test)]
-use std::collections::{HashMap, HashSet};
+//! The geometry kernels operate on Kurbo paths; the canonical edits in `LayerEditDraft` call them.
 
 use kurbo::{Affine, BezPath, PathEl};
 
-#[cfg(test)]
-use crate::formats::ufo::bezpath_to_contour;
 use crate::outline::glyph_paths::round_units;
-#[cfg(test)]
-use crate::outline::glyph_paths::{contour_to_bezpath, point_key};
 
 fn split_subpaths(path: &BezPath) -> Vec<BezPath> {
     let mut paths = Vec::new();
@@ -231,444 +223,91 @@ pub fn roughened_path(
     Some(output)
 }
 
-/// Replace targeted contours with the outline of a stroke of the
-/// given width.
-///
-/// The stroke uses round joins and caps. This is the Make Stroke
-/// half of Offset Curve in Glyphs.
-///
-/// If `selected` is empty, every contour is targeted. Returns false
-/// when nothing changed.
-#[cfg(test)]
-pub fn expand_stroke_contours(
-    glyph: &mut norad::Glyph,
-    selected: &HashSet<usize>,
-    width: f64,
-) -> bool {
-    let empty = HashMap::new();
-    let mut out: Vec<norad::Contour> = Vec::new();
-    let mut any = false;
-    for (ci, contour) in glyph.contours.iter().enumerate() {
-        let targeted = selected.is_empty() || selected.contains(&ci);
-        if !targeted {
-            out.push(contour.clone());
-            continue;
-        }
-        let path = contour_to_bezpath(contour);
-        let mut made = false;
-        for output in expanded_stroke_paths(&path, width) {
-            if let Some(contour) = bezpath_to_contour(&output, &empty) {
-                out.push(contour);
-                made = true;
-            }
-        }
-        if made {
-            any = true;
-        } else {
-            out.push(contour.clone());
-        }
-    }
-    if any {
-        glyph.contours = out;
-    }
-    any
-}
-
-/// Offset every contour outward or inward.
-///
-/// A positive `delta` moves the outline outward and reads bolder; a
-/// negative one moves it inward and reads lighter. The whole glyph
-/// is unioned with, or cut by, a stroke band of width 2·delta
-/// around its own outline. That moves counters the opposite way
-/// automatically. This is the bolder/lighter half of Offset Curve
-/// in Glyphs.
-///
-/// Returns false when nothing changed.
-#[cfg(test)]
-pub fn offset_glyph_contours(glyph: &mut norad::Glyph, delta: f64) -> bool {
-    let paths: Vec<_> = glyph.contours.iter().map(contour_to_bezpath).collect();
-    let Some(result) = offset_paths(&paths, delta) else {
-        return false;
-    };
-    let smooth_at: HashMap<(i64, i64), bool> = glyph
-        .contours
-        .iter()
-        .flat_map(|c| c.points.iter())
-        .filter(|p| p.typ != norad::PointType::OffCurve)
-        .map(|p| (point_key(p.x, p.y), p.smooth))
-        .collect();
-    let mut contours: Vec<norad::Contour> = Vec::new();
-    for path in result {
-        if let Some(c) = bezpath_to_contour(&path, &smooth_at) {
-            contours.push(c);
-        }
-    }
-    if contours.is_empty() {
-        return false;
-    }
-    glyph.contours = contours;
-    true
-}
-
-/// Sweep the glyph along `angle` by `offset` units.
-///
-/// The sweep is the union of the shape, its translated copy, and a
-/// wall quad per segment. Unless `keep_front` is set, the front
-/// face is then cut away. Angle 0 extrudes right; 30 gives the
-/// downward-right shadow of the Glyphs default. This is the Extrude
-/// filter in Glyphs.
-#[cfg(test)]
-pub fn extrude_glyph_contours(
-    glyph: &mut norad::Glyph,
-    offset: f64,
-    angle_degrees: f64,
-    keep_front: bool,
-) -> bool {
-    let paths: Vec<_> = glyph.contours.iter().map(contour_to_bezpath).collect();
-    let Some(result) = extruded_paths(&paths, offset, angle_degrees, keep_front) else {
-        return false;
-    };
-    let empty_map = HashMap::new();
-    let mut contours: Vec<norad::Contour> = Vec::new();
-    for path in result {
-        if let Some(contour) = bezpath_to_contour(&path, &empty_map) {
-            contours.push(contour);
-        }
-    }
-    if contours.is_empty() {
-        return false;
-    }
-    glyph.contours = contours;
-    true
-}
-
-/// Flatten each targeted contour into straight segments and jitter
-/// the points.
-///
-/// Segments are roughly `segment_length` long. Every point moves by
-/// up to ±`h` horizontally and ±`v` vertically. `seed` varies run
-/// to run, so applying twice gives a different rough. This is the
-/// Roughen filter in Glyphs.
-#[cfg(test)]
-pub fn roughen_glyph_contours(
-    glyph: &mut norad::Glyph,
-    selected: &HashSet<usize>,
-    segment_length: f64,
-    h: f64,
-    v: f64,
-    seed: u64,
-) -> bool {
-    if !segment_length.is_finite() || !h.is_finite() || !v.is_finite() || segment_length < 1.0 {
-        return false;
-    }
-    // A tiny LCG: deterministic per seed, no clock, no dependency.
-    let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-    let mut changed = false;
-    for (ci, contour) in glyph.contours.iter_mut().enumerate() {
-        if !(selected.is_empty() || selected.contains(&ci)) {
-            continue;
-        }
-        let path = contour_to_bezpath(&*contour);
-        if let Some(path) = roughened_path(&path, segment_length, h, v, &mut state)
-            && let Some(replacement) = bezpath_to_contour(&path, &HashMap::new())
-        {
-            *contour = replacement;
-            changed = true;
-        }
-    }
-    changed
-}
-
-/// Apply a corner glyph to one on-curve node.
-///
-/// The corner's open path, drawn around its origin, is mapped into
-/// the node's frame and spliced in place of the node. Corner-space
-/// x runs back along the incoming segment, and y runs forward along
-/// the outgoing one. This is the fit Glyphs uses, which shears the
-/// corner to unequal angles.
-///
-/// Both neighbors must be on-curve, so this first slice handles
-/// line corners only. The result is a plain outline: pipelines see
-/// baked points.
-#[cfg(test)]
-pub fn apply_corner_at(
-    glyph: &mut norad::Glyph,
-    corner: &norad::Glyph,
-    ci: usize,
-    pi: usize,
-) -> bool {
-    use norad::PointType;
-    let Some(corner_contour) = corner.contours.first() else {
-        return false;
-    };
-    if corner_contour.points.len() < 2 {
-        return false;
-    }
-    let Some(contour) = glyph.contours.get(ci) else {
-        return false;
-    };
-    let n = contour.points.len();
-    if n < 3 || pi >= n {
-        return false;
-    }
-    let point = &contour.points[pi];
-    if point.typ == PointType::OffCurve {
-        return false;
-    }
-    let prev = &contour.points[(pi + n - 1) % n];
-    let next = &contour.points[(pi + 1) % n];
-    if prev.typ == PointType::OffCurve || next.typ == PointType::OffCurve {
-        return false; // curve corners come later
-    }
-    let node = (point.x, point.y);
-    let len_in = ((node.0 - prev.x).powi(2) + (node.1 - prev.y).powi(2)).sqrt();
-    let len_out = ((next.x - node.0).powi(2) + (next.y - node.1).powi(2)).sqrt();
-    if len_in < 1e-6 || len_out < 1e-6 {
-        return false;
-    }
-    let u = ((node.0 - prev.x) / len_in, (node.1 - prev.y) / len_in);
-    let v = ((next.x - node.0) / len_out, (next.y - node.1) / len_out);
-    let mapped: Vec<norad::ContourPoint> = corner_contour
-        .points
-        .iter()
-        .map(|p| {
-            let (x, y) = (
-                node.0 + p.x * u.0 + p.y * v.0,
-                node.1 + p.x * u.1 + p.y * v.1,
-            );
-            let typ = match p.typ {
-                PointType::Move => PointType::Line,
-                other => other,
-            };
-            norad::ContourPoint::new(x.round(), y.round(), typ, p.smooth, None, None)
-        })
-        .collect();
-    let contour = glyph.contours.get_mut(ci).expect("checked");
-    contour.points.splice(pi..=pi, mapped);
-    true
-}
-
-/// Move a glyph's points by the model's offsets, in the order the
-/// outline reader produced them.
-///
-/// Walks the same contours in the same rotation `font_ml::ufo` uses,
-/// so offset *n* lands on the point it was predicted for. Point types
-/// and smooth flags are left alone: this moves points and nothing
-/// else.
-#[cfg(test)]
-pub fn bolden_contours(
-    glyph: &norad::Glyph,
-    deltas: &[(i32, i32)],
-    center: (i32, i32),
-) -> Vec<norad::Contour> {
-    let mut next = deltas.iter();
-    let mut out = Vec::with_capacity(glyph.contours.len());
-    for contour in &glyph.contours {
-        let points = &contour.points;
-        let start = points
-            .iter()
-            .position(|p| p.typ != norad::PointType::OffCurve)
-            .unwrap_or(0);
-        let n = points.len();
-        let mut moved = points.clone();
-        // Visit in pen order, starting where the reader started.
-        for step in 0..n {
-            let i = (start + step) % n;
-            let Some((dx, dy)) = next.next().copied() else {
-                break;
-            };
-            moved[i].x += (dx + center.0) as f64;
-            moved[i].y += (dy + center.1) as f64;
-        }
-        // The reader ends a closed contour by returning to its start,
-        // so it yields one offset more than the contour has points.
-        // Drop it, or every later contour is shifted by one point.
-        next.next();
-        out.push(norad::Contour::new(moved, contour.identifier().cloned()));
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kurbo::Shape as _;
 
-    #[test]
-    fn corner_splices_the_chamfer() {
-        use norad::{Contour, ContourPoint, PointType};
-        // The ComponentDemo chamfer: open path (-60, 0) -> (0, 60)
-        // around the origin.
-        let corner_contour = Contour::new(
-            vec![
-                ContourPoint::new(-60.0, 0.0, PointType::Move, false, None, None),
-                ContourPoint::new(0.0, 60.0, PointType::Line, false, None, None),
-            ],
-            None,
-        );
-        let mut corner = norad::Glyph::new("_corner.chamfer");
-        corner.contours = vec![corner_contour];
-        // A square; apply at (100, 0): incoming runs +x, outgoing +y.
-        let square = Contour::new(
-            [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]
-                .iter()
-                .map(|&(x, y)| ContourPoint::new(x, y, PointType::Line, false, None, None))
-                .collect(),
-            None,
-        );
-        let mut glyph = norad::Glyph::new("square");
-        glyph.contours = vec![square];
-        assert!(apply_corner_at(&mut glyph, &corner, 0, 1));
-        let pts: Vec<(f64, f64)> = glyph.contours[0]
-            .points
-            .iter()
-            .map(|p| (p.x, p.y))
-            .collect();
-        // The node (100, 0) became two: 60 back along the incoming
-        // (+x) segment, and 60 up along the outgoing (+y) one.
-        assert_eq!(pts.len(), 5);
-        assert!(pts.contains(&(40.0, 0.0)), "{pts:?}");
-        assert!(pts.contains(&(100.0, 60.0)), "{pts:?}");
-        assert!(!pts.contains(&(100.0, 0.0)), "original corner replaced");
-        // Refuses off-curve neighbors and short segments untouched.
-        let mut tiny = norad::Glyph::new("tiny");
-        tiny.contours = vec![Contour::new(
-            vec![
-                ContourPoint::new(0.0, 0.0, PointType::Line, false, None, None),
-                ContourPoint::new(0.0, 0.0, PointType::Line, false, None, None),
-                ContourPoint::new(1.0, 1.0, PointType::Line, false, None, None),
-            ],
-            None,
-        )];
-        assert!(!apply_corner_at(&mut tiny, &corner, 0, 1));
+    fn square() -> BezPath {
+        let mut path = BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.line_to((100.0, 0.0));
+        path.line_to((100.0, 100.0));
+        path.line_to((0.0, 100.0));
+        path.close_path();
+        path
     }
+
+    fn bounds(paths: &[BezPath]) -> kurbo::Rect {
+        paths
+            .iter()
+            .map(|path| path.bounding_box())
+            .reduce(|a, b| a.union(b))
+            .expect("at least one path")
+    }
+
     #[test]
     fn extrude_and_roughen_transform_a_square() {
-        use norad::{Contour, ContourPoint, PointType};
-        let square = || {
-            Contour::new(
-                [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]
-                    .iter()
-                    .map(|&(x, y)| ContourPoint::new(x, y, PointType::Line, false, None, None))
-                    .collect(),
-                None,
-            )
-        };
-        let bbox = |g: &norad::Glyph| {
-            let (mut min, mut max) = ((f64::MAX, f64::MAX), (f64::MIN, f64::MIN));
-            for p in g.contours.iter().flat_map(|c| c.points.iter()) {
-                min = (min.0.min(p.x), min.1.min(p.y));
-                max = (max.0.max(p.x), max.1.max(p.y));
-            }
-            (min, max)
-        };
         // Extrude right-down at 30° by 40: the box grows +40·cos30 in
         // x and −40·sin30 in y, and the front face is cut away.
-        let mut g = norad::Glyph::new("extrude-test");
-        g.contours = vec![square()];
-        assert!(extrude_glyph_contours(&mut g, 40.0, 30.0, false));
-        let (min, max) = bbox(&g);
-        assert!((max.0 - (100.0 + 40.0 * (30_f64).to_radians().cos())).abs() <= 2.0);
-        assert!((min.1 - (-40.0 * (30_f64).to_radians().sin())).abs() <= 2.0);
+        let extruded = extruded_paths(&[square()], 40.0, 30.0, false).expect("extrudes");
+        let bbox = bounds(&extruded);
+        assert!((bbox.x1 - (100.0 + 40.0 * (30_f64).to_radians().cos())).abs() <= 2.0);
+        assert!((bbox.y0 - (-40.0 * (30_f64).to_radians().sin())).abs() <= 2.0);
 
         // Roughen: many short jittered segments replace the four.
-        let mut r = norad::Glyph::new("roughen-test");
-        r.contours = vec![square()];
-        let all = HashSet::new();
-        assert!(roughen_glyph_contours(&mut r, &all, 10.0, 4.0, 4.0, 7));
+        let mut state = 7_u64.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let rough = roughened_path(&square(), 10.0, 4.0, 4.0, &mut state).expect("roughens");
         assert!(
-            r.contours[0].points.len() >= 30,
+            rough.segments().count() >= 30,
             "flattened into short segments: {}",
-            r.contours[0].points.len()
+            rough.segments().count()
         );
         // Different seed, different rough.
-        let mut r2 = norad::Glyph::new("roughen-test-2");
-        r2.contours = vec![square()];
-        assert!(roughen_glyph_contours(&mut r2, &all, 10.0, 4.0, 4.0, 8));
-        assert_ne!(
-            r.contours[0]
-                .points
-                .iter()
-                .map(|p| (p.x, p.y))
-                .collect::<Vec<_>>(),
-            r2.contours[0]
-                .points
-                .iter()
-                .map(|p| (p.x, p.y))
-                .collect::<Vec<_>>(),
-        );
+        let mut other_state = 8_u64.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let other = roughened_path(&square(), 10.0, 4.0, 4.0, &mut other_state).expect("roughens");
+        assert_ne!(rough, other);
     }
+
     #[test]
     fn offset_bolder_and_lighter() {
-        use norad::{Contour, ContourPoint, PointType};
-        // A closed 100x100 square, counter-clockwise (postscript
-        // outer direction).
-        let square = |pts: &[(f64, f64)]| {
-            Contour::new(
-                pts.iter()
-                    .map(|&(x, y)| ContourPoint::new(x, y, PointType::Line, false, None, None))
-                    .collect(),
-                None,
-            )
-        };
-        let outer = square(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]);
-        let mut glyph = norad::Glyph::new("offset-test");
-        glyph.contours = vec![outer.clone()];
-        assert!(offset_glyph_contours(&mut glyph, 10.0));
-        let bbox = |g: &norad::Glyph| {
-            let (mut min, mut max) = ((f64::MAX, f64::MAX), (f64::MIN, f64::MIN));
-            for p in g.contours.iter().flat_map(|c| c.points.iter()) {
-                min = (min.0.min(p.x), min.1.min(p.y));
-                max = (max.0.max(p.x), max.1.max(p.y));
-            }
-            (max.0 - min.0, max.1 - min.1)
-        };
-        let (w, h) = bbox(&glyph);
+        let bolder = offset_paths(&[square()], 10.0).expect("offsets outward");
+        let bbox = bounds(&bolder);
         assert!(
-            (w - 120.0).abs() <= 2.0 && (h - 120.0).abs() <= 2.0,
-            "bolder grows: {w}x{h}"
+            (bbox.width() - 120.0).abs() <= 2.0 && (bbox.height() - 120.0).abs() <= 2.0,
+            "bolder grows: {}x{}",
+            bbox.width(),
+            bbox.height()
         );
-        let mut glyph2 = norad::Glyph::new("offset-test-2");
-        glyph2.contours = vec![outer];
-        assert!(offset_glyph_contours(&mut glyph2, -10.0));
-        let (w2, h2) = bbox(&glyph2);
+        let lighter = offset_paths(&[square()], -10.0).expect("offsets inward");
+        let bbox = bounds(&lighter);
         assert!(
-            (w2 - 80.0).abs() <= 2.0 && (h2 - 80.0).abs() <= 2.0,
-            "lighter shrinks: {w2}x{h2}"
+            (bbox.width() - 80.0).abs() <= 2.0 && (bbox.height() - 80.0).abs() <= 2.0,
+            "lighter shrinks: {}x{}",
+            bbox.width(),
+            bbox.height()
         );
     }
+
     #[test]
     fn expand_stroke_makes_outlines() {
-        use norad::{Contour, ContourPoint, PointType};
         // An open two-point skeleton line from (0,0) to (100,0).
-        let line = Contour::new(
-            vec![
-                ContourPoint::new(0.0, 0.0, PointType::Move, false, None, None),
-                ContourPoint::new(100.0, 0.0, PointType::Line, false, None, None),
-            ],
-            None,
-        );
-        let mut glyph = norad::Glyph::new("stroke-test");
-        glyph.contours = vec![line];
-        let all = HashSet::new();
-        assert!(expand_stroke_contours(&mut glyph, &all, 40.0));
+        let mut line = BezPath::new();
+        line.move_to((0.0, 0.0));
+        line.line_to((100.0, 0.0));
+        let outlines = expanded_stroke_paths(&line, 40.0);
         // The skeleton became a closed outline that spans the stroke:
         // 100 long plus round caps of radius 20 each side, 40 tall.
-        assert_eq!(glyph.contours.len(), 1);
-        let ys: Vec<f64> = glyph.contours[0].points.iter().map(|p| p.y).collect();
-        let xs: Vec<f64> = glyph.contours[0].points.iter().map(|p| p.x).collect();
-        let (min_y, max_y) = ys
-            .iter()
-            .fold((f64::MAX, f64::MIN), |a, &v| (a.0.min(v), a.1.max(v)));
-        let (min_x, max_x) = xs
-            .iter()
-            .fold((f64::MAX, f64::MIN), |a, &v| (a.0.min(v), a.1.max(v)));
-        assert!((max_y - min_y - 40.0).abs() <= 2.0, "stroke height ~40");
-        assert!(
-            (max_x - min_x - 140.0).abs() <= 2.0,
-            "length plus caps ~140"
-        );
-        // Width zero refuses.
-        let mut untouched = norad::Glyph::new("no-op");
-        assert!(!expand_stroke_contours(&mut untouched, &all, 40.0));
+        assert_eq!(outlines.len(), 1);
+        assert!(matches!(
+            outlines[0].elements().last(),
+            Some(PathEl::ClosePath)
+        ));
+        let bbox = outlines[0].bounding_box();
+        assert!((bbox.height() - 40.0).abs() <= 2.0, "stroke height ~40");
+        assert!((bbox.width() - 140.0).abs() <= 2.0, "length plus caps ~140");
+        // Width zero and an empty path refuse.
+        assert!(expanded_stroke_paths(&line, 0.0).is_empty());
+        assert!(expanded_stroke_paths(&BezPath::new(), 40.0).is_empty());
     }
 }

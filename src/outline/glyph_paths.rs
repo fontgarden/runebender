@@ -3,21 +3,14 @@
 
 //! Font outline contours → kurbo `BezPath`, shared by all Runebender editors.
 //!
-//! New document callers read canonical layers directly.
-//! Norad entry points remain for compatibility callers and format adapters.
+//! Every entry point reads canonical document layers.
+//! The historical UFO conversions used as test oracles are in `crate::testing::ufo_oracle`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use kurbo::{Affine, BezPath, Point};
-#[cfg(test)]
-use norad::{Contour, ContourPoint, Font, Glyph, PointType};
 
 use crate::font::model::smart_components::SmartComponentAxes;
-#[cfg(test)]
-use crate::font::model::smart_components::{
-    SMART_COMPONENT_AXES_KEY, SMART_COMPONENT_POLE_KEY, SMART_COMPONENT_VALUES_KEY,
-    SmartComponentPole, SmartComponentValues,
-};
 use crate::font::{ComponentView, ContourView, LayerPointType, LayerShapeView, LayerView};
 use crate::outline::drawing::{self, DrawingContour};
 
@@ -134,34 +127,6 @@ pub fn point_key(x: f64, y: f64) -> (i64, i64) {
     (round_units(x), round_units(y))
 }
 
-/// Build a `BezPath` for a glyph, with components resolved
-/// recursively through `font`.
-///
-/// Component transforms apply in full. A missing base glyph
-/// contributes nothing.
-#[cfg(test)]
-pub fn glyph_to_bezpath(glyph: &Glyph, font: &Font) -> BezPath {
-    let mut path = BezPath::new();
-    for contour in &glyph.contours {
-        append_contour(&mut path, contour);
-    }
-    if let Ok(preview) = super::metaballs::glyph_preview(glyph) {
-        path.extend(preview);
-    }
-    append_components(&mut path, glyph, font, Affine::IDENTITY, 0);
-    path
-}
-
-/// Only the glyph's own contours (no components).
-#[cfg(test)]
-pub fn contours_to_bezpath(glyph: &Glyph) -> BezPath {
-    let mut path = BezPath::new();
-    for contour in &glyph.contours {
-        append_contour(&mut path, contour);
-    }
-    path
-}
-
 /// Convert one canonical document layer's contours without constructing a UFO glyph.
 ///
 /// Hyperbezier contours use their spline solver; ordinary cubic and quadratic contours use their
@@ -246,118 +211,12 @@ pub fn canonical_component_to_bezpath<'a>(
     Ok(path)
 }
 
-/// One contour as a `BezPath`.
-#[cfg(test)]
-pub fn contour_to_bezpath(contour: &Contour) -> BezPath {
-    let mut path = BezPath::new();
-    append_contour(&mut path, contour);
-    path
-}
-
-/// Only the glyph's components, recursively resolved.
-#[cfg(test)]
-pub fn components_to_bezpath(glyph: &Glyph, font: &Font) -> BezPath {
-    let mut path = BezPath::new();
-    append_components(&mut path, glyph, font, Affine::IDENTITY, 0);
-    path
-}
-
 /// A sparse-layer pole: the axis tags it sits at the top of, and its
 /// point coordinates in that layer.
-type Pole = (BTreeSet<String>, Vec<(f64, f64)>);
+pub(crate) type Pole = (BTreeSet<String>, Vec<(f64, f64)>);
 
-/// The affine of a norad component transform.
-#[cfg(test)]
-pub fn component_affine(t: &norad::AffineTransform) -> Affine {
-    Affine::new([
-        t.x_scale, t.xy_scale, t.yx_scale, t.y_scale, t.x_offset, t.y_offset,
-    ])
-}
-
-/// Interpolated contours for a smart part at the given axis values.
-///
-/// Each smart axis has a bottom pole and a top pole. The bottom
-/// pole is the default glyph, or a layer marked `{axis: 1}`. The
-/// top pole is a layer marked `{axis: 2}`. A layer marked 2 on
-/// several axes is a corner pole.
-///
-/// The blend is the standard corner-delta (variation) model: the
-/// default plus, per pole layer, its inclusion-exclusion delta
-/// scaled by the product of the normalized values on that layer's
-/// top axes. For one axis that is plain linear interpolation; for
-/// two axes with all corners, bilinear.
-///
-/// Only point-compatible layers take part. Anything else falls
-/// back to the default outline.
-#[cfg(test)]
-fn smart_contours(
-    base: &Glyph,
-    font: &Font,
-    axes: &SmartComponentAxes,
-    values: &BTreeMap<String, f64>,
-) -> Option<Vec<Contour>> {
-    let flat = |glyph: &Glyph| -> Option<Vec<(f64, f64)>> {
-        if glyph.contours.len() != base.contours.len() {
-            return None;
-        }
-        let mut coords = Vec::new();
-        for (a, b) in base.contours.iter().zip(glyph.contours.iter()) {
-            if a.points.len() != b.points.len() {
-                return None;
-            }
-            for p in &b.points {
-                coords.push((p.x, p.y));
-            }
-        }
-        Some(coords)
-    };
-    let default_coords = flat(base)?;
-    let mut poles: Vec<Pole> = Vec::new();
-    for layer in font.layers.iter() {
-        let Some(candidate) = layer.get_glyph(base.name()) else {
-            continue;
-        };
-        let Some(pole) = candidate
-            .lib
-            .get(SMART_COMPONENT_POLE_KEY)
-            .and_then(|value| SmartComponentPole::from_plist(value).ok())
-        else {
-            continue;
-        };
-        let tops: BTreeSet<String> = axes
-            .axes()
-            .iter()
-            .filter(|axis| {
-                (axis.top_value() - axis.bottom_value()).abs() >= 1e-9 && pole.is_top(axis.name())
-            })
-            .map(|axis| axis.name().to_owned())
-            .collect();
-        if tops.is_empty() {
-            continue;
-        }
-        let coords = flat(candidate)?;
-        poles.push((tops, coords));
-    }
-    let coords = interpolate_smart_coordinates(axes, values, default_coords, poles)?;
-    // Reassemble along the default glyph's structure.
-    let mut out = Vec::with_capacity(base.contours.len());
-    let mut cursor = 0_usize;
-    for contour in &base.contours {
-        let points = contour
-            .points
-            .iter()
-            .map(|p| {
-                let (x, y) = coords[cursor];
-                cursor += 1;
-                ContourPoint::new(x, y, p.typ, p.smooth, None, None)
-            })
-            .collect();
-        out.push(Contour::new(points, None));
-    }
-    Some(out)
-}
-
-fn interpolate_smart_coordinates(
+/// Blend smart-component pole coordinates at the given axis values.
+pub(crate) fn interpolate_smart_coordinates(
     axes: &SmartComponentAxes,
     values: &BTreeMap<String, f64>,
     default_coords: Vec<(f64, f64)>,
@@ -497,81 +356,6 @@ fn canonical_smart_contours(
     Some(contours)
 }
 
-#[cfg(test)]
-fn append_components(
-    path: &mut BezPath,
-    glyph: &Glyph,
-    font: &Font,
-    parent_transform: Affine,
-    depth: u8,
-) {
-    // Guard against reference cycles in malformed UFOs.
-    if depth > 8 {
-        return;
-    }
-    let component_order: Vec<_> = (0..glyph.components.len()).collect();
-    let smart_values = glyph
-        .lib
-        .get(SMART_COMPONENT_VALUES_KEY)
-        .and_then(|value| SmartComponentValues::from_plist(value, &component_order).ok());
-    for (index, component) in glyph.components.iter().enumerate() {
-        let Some(base) = font.get_glyph(&component.base) else {
-            continue;
-        };
-        let t = component.transform;
-        let combined = parent_transform
-            * Affine::new([
-                t.x_scale, t.xy_scale, t.yx_scale, t.y_scale, t.x_offset, t.y_offset,
-            ]);
-        // A smart part with values interpolates between its poles.
-        let axes = base
-            .lib
-            .get(SMART_COMPONENT_AXES_KEY)
-            .and_then(|value| SmartComponentAxes::from_plist(value).ok());
-        let values = axes.as_ref().map(|axes| {
-            axes.axes()
-                .iter()
-                .filter_map(|axis| {
-                    smart_values
-                        .as_ref()?
-                        .value(index, axis.name())
-                        .map(|value| (axis.name().to_owned(), value))
-                })
-                .collect::<BTreeMap<_, _>>()
-        });
-        let smart = axes
-            .as_ref()
-            .zip(values)
-            .filter(|(_, values)| !values.is_empty())
-            .and_then(|(axes, values)| smart_contours(base, font, axes, &values));
-        match smart {
-            Some(contours) => {
-                for contour in &contours {
-                    let mut contour_path = BezPath::new();
-                    append_contour(&mut contour_path, contour);
-                    path.extend((combined * &contour_path).elements().iter().cloned());
-                }
-            }
-            None => {
-                for contour in &base.contours {
-                    let mut contour_path = BezPath::new();
-                    append_contour(&mut contour_path, contour);
-                    path.extend((combined * &contour_path).elements().iter().cloned());
-                }
-            }
-        }
-        if let Ok(preview) = super::metaballs::glyph_preview(base) {
-            path.extend(combined * preview);
-        }
-        append_components(path, base, font, combined, depth + 1);
-    }
-}
-
-#[cfg(test)]
-fn pt(p: &ContourPoint) -> Point {
-    Point::new(p.x, p.y)
-}
-
 #[derive(Clone, Copy)]
 struct OutlinePoint {
     position: Point,
@@ -614,6 +398,7 @@ fn append_document_contour(path: &mut BezPath, contour: ContourView<'_>) {
     append_points(path, &points, contour.is_closed());
 }
 
+/// Append canonical points of one contour, expanding implied quadratic on-curves.
 pub(crate) fn append_canonical_points(
     path: &mut BezPath,
     points: impl IntoIterator<Item = (Point, LayerPointType)>,
@@ -796,41 +581,6 @@ fn path_element_is_finite(element: &kurbo::PathEl) -> bool {
     }
 }
 
-#[cfg(test)]
-fn append_contour(path: &mut BezPath, contour: &Contour) {
-    let points = &contour.points;
-    if points.is_empty() {
-        return;
-    }
-    // Hyperbezier contours carry only on-curve points; their curves
-    // come from the spline solver, not the point list.
-    if crate::outline::path::hyper_model::norad_contour_is_hyper(contour) {
-        let ws = crate::outline::path::hyper_model::Contour::from_norad(contour);
-        crate::outline::path::Path::from_contour(&ws).append_to_bezpath(path);
-        return;
-    }
-    let points: Vec<_> = points
-        .iter()
-        .map(|point| OutlinePoint {
-            position: pt(point),
-            kind: match point.typ {
-                PointType::Move => LayerPointType::Move,
-                PointType::Line => LayerPointType::Line,
-                PointType::OffCurve => LayerPointType::OffCurve,
-                PointType::Curve => LayerPointType::Curve,
-                PointType::QCurve => LayerPointType::QCurve,
-            },
-        })
-        .collect();
-    append_points(
-        path,
-        &points,
-        points
-            .first()
-            .is_none_or(|point| point.kind != LayerPointType::Move),
-    );
-}
-
 fn append_points(path: &mut BezPath, points: &[OutlinePoint], closed: bool) {
     if points.is_empty() {
         return;
@@ -917,12 +667,17 @@ fn append_points(path: &mut BezPath, points: &[OutlinePoint], closed: bool) {
 mod canonical_render_tests {
     use super::*;
     use crate::font::model::glyph_metadata::{Metaball, MetaballGroup, Metaballs};
+    use crate::font::model::smart_components::{
+        SMART_COMPONENT_AXES_KEY, SMART_COMPONENT_POLE_KEY, SMART_COMPONENT_VALUES_KEY,
+    };
     use crate::font::project::Project;
     use crate::font::source::SourceInput;
     use crate::font::variable::{GlyphLayerAddress, LayerId, SourceId};
     use crate::formats::metadata::metaballs::write_metaballs;
+    use crate::testing::ufo_oracle::{contours_to_bezpath, glyph_to_bezpath};
     use kurbo::Shape;
     use norad::{AffineTransform, Component, Name};
+    use norad::{Contour, ContourPoint, Font, Glyph, PointType};
 
     fn rectangle(name: &str, x1: f64, y1: f64) -> Glyph {
         let mut glyph = Glyph::new(name);
@@ -1493,7 +1248,27 @@ mod canonical_render_tests {
 
 #[cfg(test)]
 mod smart_component_tests {
-    use super::*;
+    use crate::font::project::{Project, SourceInput};
+    use crate::font::variable::{GlyphLayerAddress, SourceId};
+    use kurbo::{BezPath, Shape as _};
+    use norad::{Font, Glyph};
+
+    /// Render one glyph of the font's default layer through the canonical document.
+    fn rendered(font: &Font, glyph: &str) -> BezPath {
+        let project =
+            Project::from_source(SourceInput::from_font(font.clone(), "Smart.ufo".into()))
+                .expect("valid source fixture");
+        let layer = project
+            .document_source(SourceId(0))
+            .expect("default source")
+            .default_layer();
+        project
+            .document_layer_path(&GlyphLayerAddress {
+                glyph: glyph.into(),
+                layer,
+            })
+            .expect("renders")
+    }
 
     #[test]
     fn smart_component_interpolates_between_poles() {
@@ -1545,10 +1320,9 @@ mod smart_component_tests {
             "com.schriftgestaltung.Glyphs.componentsSmartComponentValues".into(),
             plist::Value::Array(vec![plist::Value::Dictionary(values)]),
         );
-        font.default_layer_mut().insert_glyph(user.clone());
-        use kurbo::Shape as _;
-        let path = components_to_bezpath(&user, &font);
-        let bbox = path.bounding_box();
+        let mut plain = user.clone();
+        font.default_layer_mut().insert_glyph(user);
+        let bbox = rendered(&font, "smartdemo").bounding_box();
         // Halfway between 200 and 500.
         assert!(
             (bbox.x1 - 350.0).abs() < 1.0,
@@ -1556,12 +1330,11 @@ mod smart_component_tests {
             bbox.x1
         );
         // No value -> the plain narrow base.
-        let mut plain = user.clone();
         plain
             .lib
             .remove("com.schriftgestaltung.Glyphs.componentsSmartComponentValues");
-        let plain_path = components_to_bezpath(&plain, &font);
-        assert!((plain_path.bounding_box().x1 - 200.0).abs() < 1.0);
+        font.default_layer_mut().insert_glyph(plain);
+        assert!((rendered(&font, "smartdemo").bounding_box().x1 - 200.0).abs() < 1.0);
     }
 
     #[test]
@@ -1628,9 +1401,8 @@ mod smart_component_tests {
             "com.schriftgestaltung.Glyphs.componentsSmartComponentValues".into(),
             plist::Value::Array(vec![plist::Value::Dictionary(values)]),
         );
-        font.default_layer_mut().insert_glyph(user.clone());
-        use kurbo::Shape as _;
-        let bbox = components_to_bezpath(&user, &font).bounding_box();
+        font.default_layer_mut().insert_glyph(user);
+        let bbox = rendered(&font, "boxdemo").bounding_box();
         // Bilinear at (.5,.5): w = 100 + .5*300 + .5*0 + .25*(500-400-100+100)
         //                        = 100 + 150 + 25 = 275
         //                      h = 100 + 0 + .5*200 + .25*(350-100-300+100)

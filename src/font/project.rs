@@ -2659,14 +2659,14 @@ mod tests {
         );
         let mut glyph = norad::Glyph::new("joined");
         glyph.contours = vec![stroke];
-        let path = crate::outline::glyph_paths::contour_to_bezpath(&glyph.contours[0]);
+        let path = crate::testing::ufo_oracle::contour_to_bezpath(&glyph.contours[0]);
         assert_eq!(joining_band(&path, 200.0, true, 2.0), Some((40.0, 120.0)));
         assert_eq!(joining_band(&path, 200.0, false, 2.0), Some((40.0, 120.0)));
         // Pull the ink off the edge: no band.
         for p in glyph.contours[0].points.iter_mut() {
             p.x += 10.0;
         }
-        let moved = crate::outline::glyph_paths::contour_to_bezpath(&glyph.contours[0]);
+        let moved = crate::testing::ufo_oracle::contour_to_bezpath(&glyph.contours[0]);
         assert_eq!(joining_band(&moved, 200.0, true, 2.0), None);
     }
 

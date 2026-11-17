@@ -9,14 +9,6 @@
 
 use std::collections::HashSet;
 
-#[cfg(test)]
-use kurbo::BezPath;
-
-#[cfg(test)]
-use crate::formats::ufo::bezpath_to_contour;
-#[cfg(test)]
-use crate::outline::glyph_paths::contour_to_bezpath;
-
 /// Font lib key recording which original foreign-source glyphs were imported.
 pub const FOREIGN_GLYPHS_KEY: &str = "com.runebender.foreignGlyphs";
 
@@ -161,50 +153,6 @@ pub fn write_masks(glyph: &mut norad::Glyph, masks: &HashSet<usize>) {
                 .collect(),
         ),
     );
-}
-
-/// Cut the mask contours out of the rest and drop them.
-///
-/// The result is the final outline every compiler understands.
-/// Returns false when the glyph has no masks or the boolean fails.
-#[cfg(test)]
-pub fn bake_masks(glyph: &mut norad::Glyph) -> bool {
-    let masks = read_masks(glyph);
-    if masks.is_empty() || masks.len() >= glyph.contours.len() {
-        return false;
-    }
-    let mut keep = BezPath::new();
-    let mut cut = BezPath::new();
-    for (ci, contour) in glyph.contours.iter().enumerate() {
-        let path = contour_to_bezpath(contour);
-        let target = if masks.contains(&ci) {
-            &mut cut
-        } else {
-            &mut keep
-        };
-        target.extend(path.elements().iter().copied());
-    }
-    let Ok(result) = linesweeper::binary_op(
-        &keep,
-        &cut,
-        linesweeper::FillRule::NonZero,
-        linesweeper::BinaryOp::Difference,
-    ) else {
-        return false;
-    };
-    let empty = std::collections::HashMap::new();
-    let mut contours = Vec::new();
-    for contour in result.contours() {
-        if let Some(c) = bezpath_to_contour(&contour.path, &empty) {
-            contours.push(c);
-        }
-    }
-    if contours.is_empty() {
-        return false;
-    }
-    glyph.contours = contours;
-    write_masks(glyph, &HashSet::new());
-    true
 }
 
 /// Font lib key for the saved sidebar filters.
@@ -501,7 +449,7 @@ mod tests {
         assert!(font.lib.get(SAVED_FILTERS_KEY).is_none());
     }
     #[test]
-    fn masks_roundtrip_and_bake() {
+    fn masks_roundtrip() {
         use norad::{Contour, ContourPoint, PointType};
         let square = |x0: f64, y0: f64, x1: f64, y1: f64| {
             Contour::new(
@@ -513,8 +461,6 @@ mod tests {
             )
         };
         let mut glyph = norad::Glyph::new("mask-test");
-        // A big square with a smaller mask square overlapping its
-        // right edge.
         glyph.contours = vec![
             square(0.0, 0.0, 100.0, 100.0),
             square(60.0, 20.0, 140.0, 80.0),
@@ -523,21 +469,8 @@ mod tests {
         masks.insert(1_usize);
         write_masks(&mut glyph, &masks);
         assert_eq!(read_masks(&glyph), masks);
-        assert!(bake_masks(&mut glyph));
-        // The bite is real: no point reaches past x=60 inside the
-        // mask's y-band, and the mask key is cleared.
+        write_masks(&mut glyph, &HashSet::new());
         assert!(read_masks(&glyph).is_empty());
-        let max_x_in_band = glyph
-            .contours
-            .iter()
-            .flat_map(|c| c.points.iter())
-            .filter(|p| p.y > 25.0 && p.y < 75.0)
-            .map(|p| p.x)
-            .fold(f64::MIN, f64::max);
-        assert!(
-            max_x_in_band <= 61.0,
-            "mask cut the right side: {max_x_in_band}"
-        );
     }
     #[test]
     fn annotations_roundtrip() {

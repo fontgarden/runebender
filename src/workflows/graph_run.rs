@@ -2594,13 +2594,19 @@ mod tests {
             .new_layer("preview")
             .unwrap()
             .insert_glyph(proposed);
-        let expected =
-            crate::formats::svg::proof_sheet(&font, Some("preview"), &["A".into()], 8).unwrap();
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("CanonicalProof.ufo"),
         ))
         .expect("valid source fixture");
+        let expected = crate::formats::svg::proof_sheet_project(
+            &project,
+            SourceId(0),
+            Some("preview"),
+            &["A".into()],
+            8,
+        )
+        .unwrap();
         let selected = LayerId {
             source: SourceId(0),
             name: "preview".into(),

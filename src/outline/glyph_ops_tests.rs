@@ -213,7 +213,10 @@ fn reverse_flips_winding_and_keeps_shape() {
         .project
         .encode_ufo_layer("test", &fixture.layer)
         .unwrap();
-    assert!(super::reverse_contours(&mut oracle, &HashSet::new()));
+    assert!(crate::testing::ufo_oracle::reverse_contours(
+        &mut oracle,
+        &HashSet::new()
+    ));
     fixture.edit(|draft| assert!(draft.reverse_contours(&[]).unwrap()));
     let after = fixture.path();
     assert!(
@@ -240,7 +243,7 @@ fn reverse_flips_winding_and_keeps_shape() {
     );
 
     // Storage starts may differ; compare oriented segments modulo a cyclic rotation.
-    let expected: Vec<_> = glyph_paths::contours_to_bezpath(&oracle)
+    let expected: Vec<_> = crate::testing::ufo_oracle::contours_to_bezpath(&oracle)
         .segments()
         .collect();
     let actual: Vec<_> = after.segments().collect();
