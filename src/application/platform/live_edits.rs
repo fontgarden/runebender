@@ -8,7 +8,7 @@ use runebender::automation::agent_cancellation::{
     AgentCancellationError, AgentCancellationIdentity, AgentCancellationTerminal, AgentCommitClaim,
 };
 use runebender::automation::agent_edit::{
-    AgentEditRequest,
+    AgentEditRequest, EditAuthorization,
     results::{AgentApplyResponse, AgentHistoryResponse, AgentReceiptResponse},
 };
 use runebender::automation::agent_session::{
@@ -40,7 +40,7 @@ struct HistoryRequest {
     expected_document_epoch: String,
     actor: String,
     operation_key: String,
-    authorization: String,
+    authorization: EditAuthorization,
     direction: ReplayDirection,
 }
 
@@ -170,7 +170,7 @@ impl Workspace {
             .expect("validated native endpoint remains available")
             .cancellations();
         let payload_digest = retained_digest.unwrap_or_else(|| request.payload_digest());
-        if request.authorization != "user-approved" {
+        if !request.authorization.is_user_approved() {
             let _ = cancellations.release_unqueued(&cancellation_identity, payload_digest);
             return failure(
                 "authorization_required",
@@ -303,7 +303,7 @@ impl Workspace {
     }
 
     fn replay_agent_edit(&mut self, request: HistoryRequest) -> Value {
-        if request.authorization != "user-approved" {
+        if !request.authorization.is_user_approved() {
             return failure(
                 "authorization_required",
                 "history replay requires existing user authorization",

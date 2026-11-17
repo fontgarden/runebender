@@ -3,8 +3,10 @@
 
 //! Agent operations on the editor-owned project, with no filesystem reads or saves.
 
+use serde::Deserialize as _;
 use serde_json::{Value, json};
 
+use super::agent_edit::EditAuthorization;
 use super::{agent, script_recipe};
 use crate::font::{
     LayerView,
@@ -431,7 +433,10 @@ fn handle(project: &mut Project, name: &str, args: &Value) -> Result<Value, Stri
     if matches!(
         name,
         "proposal_install" | "experiment_apply" | "experiment_undo_apply"
-    ) && object.get("authorization").and_then(Value::as_str) != Some("user-approved")
+    ) && !object
+        .get("authorization")
+        .and_then(|value| EditAuthorization::deserialize(value).ok())
+        .is_some_and(EditAuthorization::is_user_approved)
     {
         return Err(
             "explicit user authorization required: set authorization to user-approved only after the user asks"

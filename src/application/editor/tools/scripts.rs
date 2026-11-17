@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 #[cfg(unix)]
 use runebender::automation::agent::ToolCall;
 #[cfg(unix)]
-use runebender::automation::agent_edit::AgentEditRequest;
+use runebender::automation::agent_edit::{AgentEditRequest, EditAuthorization};
 use runebender::automation::script_recipe::{ScriptRecipeInput, ScriptRecipeResult};
 use serde_json::Value;
 #[cfg(unix)]
@@ -552,7 +552,7 @@ impl Workspace {
             expected_document_epoch: epoch,
             actor: "scripts-panel".into(),
             operation_key: proposal.input.job_id.clone(),
-            authorization: "user-approved".into(),
+            authorization: EditAuthorization::UserApproved,
             source: proposal.input.source,
             history_name: format!(
                 "Apply {}",

@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use runebender::automation::agent_edit::AgentEditRequest;
+use runebender::automation::agent_edit::{AgentEditRequest, EditAuthorization};
 use runebender::automation::agent_session::{AgentOperationRejection, AgentPayloadDigest};
 use runebender::automation::script_recipe::{self, ScriptRecipeInput, ScriptRecipeResult};
 use runebender::font::compiler::proof::{CompileProofInput, CompiledProofRecipe};
@@ -663,7 +663,7 @@ impl LiveGraphExecution {
         node: Option<u32>,
         actor: impl Into<String>,
         operation_key: impl Into<String>,
-        authorization: impl Into<String>,
+        authorization: EditAuthorization,
     ) -> Result<LiveGraphApplyRequest, LiveGraphExecutionError> {
         let record = self.records.get(&handle).ok_or_else(|| {
             err(
@@ -718,7 +718,7 @@ impl LiveGraphExecution {
             expected_document_epoch: identity.graph.document_epoch.clone(),
             actor: actor.into(),
             operation_key: operation_key.into(),
-            authorization: authorization.into(),
+            authorization,
             source: identity.capture.font.source,
             history_name: "Apply Graph Python result".into(),
             reads: result.reads.clone(),
@@ -1091,7 +1091,7 @@ fn stage_result(
         expected_document_epoch: record.work.identity.graph.document_epoch.clone(),
         actor: record.actor.clone(),
         operation_key: format!("{}-{node}", record.operation_key),
-        authorization: "preview-only".into(),
+        authorization: EditAuthorization::PreviewOnly,
         source: record.work.identity.capture.font.source,
         history_name: "Apply Graph Python result".into(),
         reads: result.reads.clone(),
@@ -1728,7 +1728,7 @@ mod tests {
                 None,
                 "test",
                 "apply",
-                "approved",
+                EditAuthorization::UserApproved,
             )
             .unwrap();
         assert_eq!(apply.request.edits.len(), 1);
@@ -2143,7 +2143,7 @@ mod tests {
                 Some(3),
                 "test",
                 "apply-first",
-                "approved",
+                EditAuthorization::UserApproved,
             )
             .unwrap();
         let last = adapter
@@ -2154,7 +2154,7 @@ mod tests {
                 Some(next),
                 "test",
                 "apply-last",
-                "approved",
+                EditAuthorization::UserApproved,
             )
             .unwrap();
         assert_ne!(first.payload_digest, last.payload_digest);
@@ -2304,7 +2304,7 @@ mod tests {
                     Some(bad),
                     "test",
                     "bad",
-                    "approved"
+                    EditAuthorization::UserApproved
                 )
                 .is_err()
         );

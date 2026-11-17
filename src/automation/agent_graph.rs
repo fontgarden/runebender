@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::agent::Tool;
-use super::agent_edit::AgentLayerGuard;
+use super::agent_edit::{AgentLayerGuard, EditAuthorization};
 use super::glyph_grading::GradingReferenceRequest;
 use crate::font::project::Project;
 use crate::font::variable::SourceId;
@@ -202,7 +202,7 @@ pub struct GraphApplyRequest {
     /// New actor-local operation key for the common edit receipt.
     pub operation_key: String,
     /// Must be `user-approved`, reflecting existing user authorization.
-    pub authorization: String,
+    pub authorization: EditAuthorization,
 }
 
 /// Comparison proof branch returned by `graph_image`.
@@ -438,7 +438,7 @@ impl GraphApplyRequest {
         validate_epoch(&self.expected_document_epoch, &self.identity)?;
         validate_handle(self.handle)?;
         validate_actor_key(&self.actor, &self.operation_key)?;
-        if self.authorization != "user-approved" {
+        if !self.authorization.is_user_approved() {
             return Err("graph_apply requires user-approved authorization".into());
         }
         Ok(())

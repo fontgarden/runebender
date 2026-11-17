@@ -1005,6 +1005,7 @@ mod tests {
     use super::*;
     use crate::application::font_model::FontModel;
     use runebender::automation::agent::ToolCall;
+    use runebender::automation::agent_edit::EditAuthorization;
     use runebender::font::project::Project;
     use runebender::workflows::graph_session::{
         GraphEdit, GraphGuard, GraphInteractiveMutationRequest, GraphMutation,
@@ -2025,7 +2026,7 @@ json.dump({"schema_version":1,"job_id":p["job_id"],"input_hash":p["input_hash"],
                 None,
                 "graph-test",
                 "apply-one",
-                "user-approved",
+                EditAuthorization::UserApproved,
             )
             .unwrap();
         let preview = app

@@ -15,7 +15,7 @@ use std::time::Duration;
 use base64::Engine as _;
 use runebender::automation::agent::ToolCall;
 use runebender::automation::agent_edit::{
-    AgentEditOperation, AgentEditRequest, AgentLayerEdits, AgentLayerGuard,
+    AgentEditOperation, AgentEditRequest, AgentLayerEdits, AgentLayerGuard, EditAuthorization,
 };
 use runebender::automation::agent_graph::results::{
     GraphTraceBackend, GraphTracePhase, GraphTraceReleaseResult, GraphTraceStartResult,
@@ -371,7 +371,7 @@ impl Workspace {
             expected_document_epoch: trace.intent.epoch.clone(),
             actor: "brush-panel".into(),
             operation_key: format!("use-draft-{}", trace.handle),
-            authorization: "user-approved".into(),
+            authorization: EditAuthorization::UserApproved,
             source: trace.intent.source,
             history_name: format!("Use brush draft for {}", trace.intent.target.glyph),
             reads: trace
@@ -794,7 +794,7 @@ fn publish_trace(
         expected_document_epoch: intent.epoch.clone(),
         actor: intent.actor.clone(),
         operation_key: intent.operation_key.clone(),
-        authorization: "preview-only".into(),
+        authorization: EditAuthorization::PreviewOnly,
         source: intent.source,
         history_name: history_name.into(),
         reads: Vec::new(),
