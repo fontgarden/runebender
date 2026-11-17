@@ -1,4 +1,4 @@
-# Upstream pull requests
+# Overview of planned pull requests
 
 Runebender carries changes and workarounds that belong in its dependencies.
 This document lists each one as a planned pull request to the upstream project.
@@ -8,37 +8,21 @@ Status on 2026-11-17: nothing in this list has been proposed upstream yet.
 The facts below were checked against `linebender/xilem` `main` at `dc496876` (2026-11-03).
 Check each item against current `main` again before starting it.
 
-## The Linebender policy on LLM use
+The rules and the steps are in [README.md](README.md).
+Each item below has its own working file:
 
-Xilem, Masonry, Vello and `spline` are Linebender projects.
-Their policy is at <https://linebender.org/wiki/llm-policy/>.
-Read it before each pull request, because it can change.
-The rules that affect this work:
-
-- Not allowed: a pull request generated end to end by an LLM.
-- Not allowed: a pull request description written by an LLM. A translation of your own text is allowed with disclosure.
-- Not allowed: LLM-written analysis in review comments, issues or Zulip, even if you checked it.
-- Not allowed: agent instruction files (Markdown written for agents) in the pull request.
-- Required: disclose LLM use in the pull request description, before a reviewer asks. This covers code an agent wrote, code pasted from a chat tool, and code you wrote by hand from a plan an LLM proposed.
-- No disclosure needed: LLM use for debugging, exploring code, running tests, and spelling or grammar checks of your own text.
-- Do not state that a pull request has no LLM content.
-- Review your own pull request with full effort before you ask anyone to read it.
-
-## How each pull request is made
-
-These steps keep the work inside the policy.
-
-1. The owner reads the item below and the upstream code, and decides the API. An agent can answer questions about the code at this step.
-2. The owner raises the change on the Linebender Zulip or in an upstream issue first when it adds public API, in the owner's own words.
-3. The change is written on a branch of the fork, from current upstream `main`, one change per branch. If an agent writes any part of the code, the owner reads every line, changes what is not right, and can explain each line to a reviewer.
-4. Tests are written or reviewed line by line by the owner. Agent-generated test files count as LLM code and are disclosed.
-5. The upstream checks pass locally: the commands in the upstream `README` and CI, including `cargo fmt`, Clippy and the tests.
-6. The owner writes the title and description personally, with no draft from an agent. The description includes an LLM disclosure that says what the LLM did, for example which parts it wrote.
-7. The owner answers review comments personally.
-8. An agent does not open the pull request, push the branch, or post comments.
-
-An agent can prepare for a pull request in these ways: locate the upstream code, check whether upstream already has the option, build Runebender against the branch, run the tests, and measure the result.
-Notes from an agent stay in this repository and are not pasted into upstream text.
+| Item | File |
+| --- | --- |
+| 1 | [xilem-dropped-files.md](xilem-dropped-files.md) |
+| 2 | [masonry-concentric-borders.md](masonry-concentric-borders.md) |
+| 3 | [wgpu-metal-premultiplied-alpha.md](wgpu-metal-premultiplied-alpha.md) |
+| 4 | [masonry-split-without-bar.md](masonry-split-without-bar.md) |
+| 5 | [masonry-portal-scrollbar-visibility.md](masonry-portal-scrollbar-visibility.md) |
+| 6 | [xilem-text-input-color-on-rebuild.md](xilem-text-input-color-on-rebuild.md) |
+| 7 | [xilem-prose-font-family.md](xilem-prose-font-family.md) |
+| 8 | [masonry-winit-frame-latency.md](masonry-winit-frame-latency.md) |
+| 9 | [vello-buffer-sizes.md](vello-buffer-sizes.md) |
+| 10 | [spline-update-kurbo.md](spline-update-kurbo.md) |
 
 ## Changes the fork carries today
 
