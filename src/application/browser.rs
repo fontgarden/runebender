@@ -688,10 +688,10 @@ impl BrowserEditor {
 /// Open and Save become host requests the page answers with the File System Access API.
 /// Returns the status note to show, or `None` when the command runs in the widget tree.
 pub(crate) fn intercept(
-    action: crate::application::widgets::shortcuts::AppAction,
+    action: crate::application::actions::AppAction,
     modified: bool,
 ) -> Option<String> {
-    use crate::application::widgets::shortcuts::AppAction as A;
+    use crate::application::actions::AppAction as A;
     let (request, note) = match action {
         A::OpenFont if modified => {
             return Some("Save first (Ctrl+S), or reload the page to discard the changes".into());

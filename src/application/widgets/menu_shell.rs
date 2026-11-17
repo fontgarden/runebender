@@ -28,11 +28,11 @@ use xilem::style::Style as _;
 use xilem::view::{FlexExt as _, flex_col, sized_box};
 use xilem::{Pod, ViewCtx, WidgetView};
 
+use crate::application::actions::AppAction;
 use crate::application::actions::{MENUS, actions};
 use crate::application::design::Space;
 use crate::application::design::theme::Palette;
 use crate::application::widgets::icon_paint;
-use crate::application::widgets::shortcuts::AppAction;
 use crate::application::widgets::text_label::{self, Anchor};
 use crate::application::workspace::AppState;
 use runebender::outline::glyph_paths::round_units;

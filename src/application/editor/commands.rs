@@ -3,12 +3,12 @@
 
 //! What the menus and shortcuts call. One method is the whole of one user-facing command.
 
+use crate::application::actions;
 use crate::application::design::theme::Palette;
 use crate::application::editor::session;
 use crate::application::editor::session::{Session, SessionSyncOutcome};
 use crate::application::platform::dialogs;
 use crate::application::view::canvas::grid::cells_of;
-use crate::application::widgets::shortcuts;
 use crate::application::workspace::{
     DocumentGroupScope, MetadataEdit, Mode, Sel, Sort, Tool, Workspace,
 };
@@ -985,7 +985,7 @@ impl Workspace {
         }
     }
 
-    pub(crate) fn dispatch(&mut self, action: shortcuts::AppAction) {
+    pub(crate) fn dispatch(&mut self, action: actions::AppAction) {
         let previous_message = self.note.clone();
         let revision = self.font.project.document_revision();
         self.dispatch_inner(action);
@@ -997,7 +997,7 @@ impl Workspace {
         );
     }
 
-    fn dispatch_inner(&mut self, action: shortcuts::AppAction) {
+    fn dispatch_inner(&mut self, action: actions::AppAction) {
         if self.interpolation_is_active() && matches!(self.mode, Mode::Editor(_)) {
             use super::tools::interpolation::{InterpolationEvent, command_allowed};
             if !command_allowed(action) {
@@ -1005,9 +1005,9 @@ impl Workspace {
                 return;
             }
             let selection = match action {
-                shortcuts::AppAction::SelectAll => Some(InterpolationEvent::SelectAll),
-                shortcuts::AppAction::DeselectAll => Some(InterpolationEvent::Select(Vec::new())),
-                shortcuts::AppAction::InvertSelection => {
+                actions::AppAction::SelectAll => Some(InterpolationEvent::SelectAll),
+                actions::AppAction::DeselectAll => Some(InterpolationEvent::Select(Vec::new())),
+                actions::AppAction::InvertSelection => {
                     self.interpolation_canvas().ok().map(|canvas| {
                         InterpolationEvent::Select(
                             (0..canvas.connections.len())
@@ -1028,7 +1028,7 @@ impl Workspace {
             self.note = note;
             return;
         }
-        use shortcuts::AppAction as A;
+        use actions::AppAction as A;
         match action {
             A::Quit => unreachable!("Quit is handled at the application shell"),
             A::Save => {
@@ -2098,7 +2098,7 @@ mod tests {
             .collect(),
         );
         assert_eq!(workspace.selected_glyph_text(), "hn");
-        workspace.dispatch(shortcuts::AppAction::UpdateMetrics);
+        workspace.dispatch(actions::AppAction::UpdateMetrics);
         let h = workspace.font.index_of("h").expect("h remains present");
         assert_eq!(workspace.font.glyphs[h].ink.x0, 60.0);
         assert_eq!(
@@ -2106,7 +2106,7 @@ mod tests {
             510.0
         );
         let address = workspace.font.active_layer_address("h").unwrap();
-        workspace.dispatch(shortcuts::AppAction::Undo);
+        workspace.dispatch(actions::AppAction::Undo);
         assert_eq!(
             workspace
                 .font
@@ -2126,7 +2126,7 @@ mod tests {
                 .x0,
             0.0
         );
-        workspace.dispatch(shortcuts::AppAction::Redo);
+        workspace.dispatch(actions::AppAction::Redo);
         assert!(workspace.modified);
         assert!(workspace.save());
         let reopened = Workspace::open(&path).expect("the saved fixture reopens");
@@ -2222,7 +2222,7 @@ mod tests {
         let mut app = two_source_workspace(fonts);
         app.selected = None;
         let before = app.font.project.document_snapshot();
-        app.dispatch(shortcuts::AppAction::UpdateMetrics);
+        app.dispatch(actions::AppAction::UpdateMetrics);
         assert_eq!(app.metadata_undo.len(), 1);
         for (source, (left, width)) in app
             .font
@@ -2259,26 +2259,26 @@ mod tests {
         app.set_master(1);
         app.mode = Mode::Graph;
         assert!(app.can_overview_history_step(false));
-        app.dispatch(shortcuts::AppAction::Undo);
+        app.dispatch(actions::AppAction::Undo);
         assert_eq!(app.font.project.document_snapshot(), before);
-        app.dispatch(shortcuts::AppAction::Redo);
+        app.dispatch(actions::AppAction::Redo);
         assert_eq!(app.font.project.document_snapshot(), after);
-        app.dispatch(shortcuts::AppAction::UpdateMetrics);
+        app.dispatch(actions::AppAction::UpdateMetrics);
         assert_eq!(
             app.metadata_undo.len(),
             1,
             "an in-sync command adds no history"
         );
         app.open_glyph(app.font.index_of("n").unwrap());
-        app.dispatch(shortcuts::AppAction::Undo);
+        app.dispatch(actions::AppAction::Undo);
         assert_eq!(app.font.project.document_snapshot(), before);
-        app.dispatch(shortcuts::AppAction::UpdateMetrics);
+        app.dispatch(actions::AppAction::UpdateMetrics);
         assert_eq!(app.metadata_undo.len(), 1);
         assert_eq!(app.font.project.document_snapshot(), after);
         assert!(app.can_metadata_history_step(false));
-        app.dispatch(shortcuts::AppAction::Undo);
+        app.dispatch(actions::AppAction::Undo);
         assert_eq!(app.font.project.document_snapshot(), before);
-        app.dispatch(shortcuts::AppAction::Redo);
+        app.dispatch(actions::AppAction::Redo);
         assert_eq!(app.font.project.document_snapshot(), after);
     }
 
@@ -2308,7 +2308,7 @@ mod tests {
                     app.open_glyph(app.selected.unwrap());
                 }
                 let before = app.font.project.document_snapshot();
-                app.dispatch(shortcuts::AppAction::BakeMasks);
+                app.dispatch(actions::AppAction::BakeMasks);
                 let after = app.font.project.document_snapshot();
                 assert_ne!(before, after);
                 assert_eq!(app.metadata_undo.len(), 1);
@@ -2322,11 +2322,11 @@ mod tests {
                         app.font.project.source_id(0).unwrap()
                     );
                 }
-                app.dispatch(shortcuts::AppAction::Undo);
+                app.dispatch(actions::AppAction::Undo);
                 assert_eq!(app.font.project.document_snapshot(), before);
-                app.dispatch(shortcuts::AppAction::Redo);
+                app.dispatch(actions::AppAction::Redo);
                 assert_eq!(app.font.project.document_snapshot(), after);
-                app.dispatch(shortcuts::AppAction::BakeMasks);
+                app.dispatch(actions::AppAction::BakeMasks);
                 assert_eq!(app.metadata_undo.len(), 1, "already baked adds no history");
             }
         }
@@ -2336,7 +2336,7 @@ mod tests {
     fn stale_multi_source_command_undo_never_replays_a_partial_group() {
         let mut app = two_source_workspace([mask_font(true), mask_font(true)]);
         app.selected = app.font.index_of("A");
-        app.dispatch(shortcuts::AppAction::BakeMasks);
+        app.dispatch(actions::AppAction::BakeMasks);
         let source = app.font.project.source_id(1).unwrap();
         let layer = app
             .font
@@ -2354,7 +2354,7 @@ mod tests {
         let before = app.font.project.document_snapshot();
         let revision = app.font.project.document_revision();
         assert!(!app.can_overview_history_step(false));
-        app.dispatch(shortcuts::AppAction::Undo);
+        app.dispatch(actions::AppAction::Undo);
         assert_eq!(app.font.project.document_snapshot(), before);
         assert_eq!(app.font.project.document_revision(), revision);
         assert_eq!(app.metadata_undo.len(), 1);
@@ -2366,7 +2366,7 @@ mod tests {
         let mut app = two_source_workspace([mask_font(false), mask_font(true)]);
         app.open_glyph(app.font.index_of("A").unwrap());
         app.set_advance_from_buf("650".into());
-        app.dispatch(shortcuts::AppAction::BakeMasks);
+        app.dispatch(actions::AppAction::BakeMasks);
         assert_eq!(app.metadata_undo.len(), 2);
         let source = app.font.project.source_id(1).unwrap();
         let layer = app
@@ -2384,7 +2384,7 @@ mod tests {
             .unwrap();
         let before = app.font.project.document_snapshot();
         assert!(!app.can_metadata_history_step(false));
-        app.dispatch(shortcuts::AppAction::Undo);
+        app.dispatch(actions::AppAction::Undo);
         assert_eq!(app.font.project.document_snapshot(), before);
         assert_eq!(app.metadata_undo.len(), 2);
         assert!(app.metadata_redo.is_empty());
@@ -2428,14 +2428,14 @@ mod tests {
             app.mode = Mode::Overview;
             app.selected = app.font.index_of("A");
             assert!(app.can_overview_history_step(false));
-            app.dispatch(shortcuts::AppAction::Undo);
+            app.dispatch(actions::AppAction::Undo);
             assert_eq!(app.font.project.document_snapshot(), before);
             assert!(app.metadata_undo.is_empty());
             assert_eq!(app.metadata_redo.len(), 1);
             assert!(Arc::ptr_eq(&app.session, &unrelated));
             assert_eq!(app.tabs[0].session.advance(), 500.0);
             assert!(app.can_overview_history_step(true));
-            app.dispatch(shortcuts::AppAction::Redo);
+            app.dispatch(actions::AppAction::Redo);
             assert_eq!(app.font.project.document_snapshot(), after);
             assert_eq!(app.metadata_undo.len(), 1);
             assert!(app.metadata_redo.is_empty());
@@ -2476,7 +2476,7 @@ mod tests {
                     .unwrap();
             }
             assert!(app.can_overview_history_step(false));
-            app.dispatch(shortcuts::AppAction::Undo);
+            app.dispatch(actions::AppAction::Undo);
             assert_eq!(
                 app.font.glyphs[app.font.index_of("B").unwrap()].advance,
                 500.0
@@ -2486,7 +2486,7 @@ mod tests {
                 Some(EditHistoryGroupState::Applied)
             );
             assert!(app.can_overview_history_step(true));
-            app.dispatch(shortcuts::AppAction::Redo);
+            app.dispatch(actions::AppAction::Redo);
             assert_eq!(
                 app.font.glyphs[app.font.index_of("B").unwrap()].advance,
                 650.0
@@ -2495,7 +2495,7 @@ mod tests {
             if stale {
                 let before = app.font.project.document_snapshot();
                 assert!(!app.can_overview_history_step(false));
-                app.dispatch(shortcuts::AppAction::Undo);
+                app.dispatch(actions::AppAction::Undo);
                 assert_eq!(app.font.project.document_snapshot(), before);
                 assert!(
                     app.font
@@ -2505,7 +2505,7 @@ mod tests {
                 );
             } else {
                 assert!(app.can_overview_history_step(false));
-                app.dispatch(shortcuts::AppAction::Undo);
+                app.dispatch(actions::AppAction::Undo);
                 assert_eq!(
                     app.font.project.document_edit_history_group_state(group),
                     Some(EditHistoryGroupState::Undone)
@@ -2519,18 +2519,18 @@ mod tests {
         let mut app = command_history_workspace();
         app.selected = app.font.index_of("A");
         let before = app.font.project.document_snapshot();
-        app.dispatch(shortcuts::AppAction::UpdateMetrics);
+        app.dispatch(actions::AppAction::UpdateMetrics);
         let metrics = app.font.project.document_snapshot();
         app.overview_set_advance("700".into());
         let advance = app.font.project.document_snapshot();
         app.open_glyph(app.font.index_of("A").unwrap());
         for (action, expected) in [
-            (shortcuts::AppAction::Undo, &metrics),
-            (shortcuts::AppAction::Undo, &before),
-            (shortcuts::AppAction::Redo, &metrics),
-            (shortcuts::AppAction::Redo, &advance),
+            (actions::AppAction::Undo, &metrics),
+            (actions::AppAction::Undo, &before),
+            (actions::AppAction::Redo, &metrics),
+            (actions::AppAction::Redo, &advance),
         ] {
-            assert!(app.can_editor_history_step(action == shortcuts::AppAction::Redo));
+            assert!(app.can_editor_history_step(action == actions::AppAction::Redo));
             app.dispatch(action);
             assert_eq!(&app.font.project.document_snapshot(), expected);
             assert_eq!(
@@ -2547,7 +2547,7 @@ mod tests {
         let mut app = command_history_workspace();
         app.open_glyph(app.font.index_of("A").unwrap());
         app.set_advance_from_buf("600".into());
-        app.dispatch(shortcuts::AppAction::Undo);
+        app.dispatch(actions::AppAction::Undo);
         let address = app.font.active_layer_address("A").unwrap();
         assert_eq!(
             app.font
@@ -2555,7 +2555,7 @@ mod tests {
                 .document_layer_history_depth(&address, HistoryDirection::Redo),
             1
         );
-        app.dispatch(shortcuts::AppAction::UpdateMetrics);
+        app.dispatch(actions::AppAction::UpdateMetrics);
         assert_eq!(
             app.font
                 .project
@@ -2568,14 +2568,14 @@ mod tests {
                 .document_layer_history_depth(&address, HistoryDirection::Undo),
             0
         );
-        app.dispatch(shortcuts::AppAction::Undo);
+        app.dispatch(actions::AppAction::Undo);
         app.open_glyph(app.font.index_of("B").unwrap());
         app.set_advance_from_buf("650".into());
         assert!(app.metadata_redo.is_empty());
         app.open_glyph(app.font.index_of("A").unwrap());
         let before_redo = app.font.project.document_snapshot();
         assert!(!app.can_editor_history_step(true));
-        app.dispatch(shortcuts::AppAction::Redo);
+        app.dispatch(actions::AppAction::Redo);
         assert_eq!(app.font.project.document_snapshot(), before_redo);
     }
 }

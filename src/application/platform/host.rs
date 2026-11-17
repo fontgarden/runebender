@@ -627,7 +627,7 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::widgets::shortcuts;
+    use crate::application::actions;
     use masonry::kurbo::Point;
 
     fn projected_glyph(session: &Session) -> norad::Glyph {
@@ -2259,7 +2259,7 @@ mod tests {
         workspace.filter = "A".into();
         workspace.new_glyph();
 
-        workspace.dispatch(shortcuts::AppAction::ShowAllMasters);
+        workspace.dispatch(actions::AppAction::ShowAllMasters);
         assert!(workspace.show_all_masters);
         assert_eq!(workspace.reference_layers.len(), 1);
         assert!(
@@ -2274,21 +2274,21 @@ mod tests {
                 .reference_layers
                 .contains(&workspace.font.active())
         );
-        workspace.dispatch(shortcuts::AppAction::NextSampleString);
+        workspace.dispatch(actions::AppAction::NextSampleString);
         assert_eq!(workspace.sample_index, 1);
         assert_eq!(workspace.preview_text, "nnonoonoo");
-        workspace.dispatch(shortcuts::AppAction::PreviousSampleString);
+        workspace.dispatch(actions::AppAction::PreviousSampleString);
         assert_eq!(workspace.sample_index, 0);
         assert_eq!(workspace.preview_text, "HHOHOHOO");
 
-        workspace.dispatch(shortcuts::AppAction::GridLines);
+        workspace.dispatch(actions::AppAction::GridLines);
         assert!(workspace.view.grid_lines);
-        workspace.dispatch(shortcuts::AppAction::GridDots);
+        workspace.dispatch(actions::AppAction::GridDots);
         assert!(!workspace.view.grid_lines);
-        workspace.dispatch(shortcuts::AppAction::MeasureSizes);
-        workspace.dispatch(shortcuts::AppAction::MeasureSpans);
+        workspace.dispatch(actions::AppAction::MeasureSizes);
+        workspace.dispatch(actions::AppAction::MeasureSpans);
         assert!(workspace.view.sizes && workspace.view.spans);
-        workspace.dispatch(shortcuts::AppAction::MeasureAllOff);
+        workspace.dispatch(actions::AppAction::MeasureAllOff);
         assert!(!workspace.view.sizes && !workspace.view.spans);
 
         std::fs::remove_dir_all(dir).expect("the designspace fixture is removed");

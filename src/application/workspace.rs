@@ -3,6 +3,7 @@
 
 //! The editor's state: the `Workspace` struct and the types it is made of.
 
+use crate::application::actions;
 use crate::application::design::theme::Palette;
 use crate::application::editor::session::Session;
 use crate::application::editor::tools::{chat, graph, local_ai, scripts, sketch, voice};
@@ -11,7 +12,6 @@ use crate::application::platform::{dialogs, export, script_jobs};
 use crate::application::view::canvas;
 use crate::application::view::canvas::grid::Cell;
 use crate::application::view::panels::tabs::Rail;
-use crate::application::widgets::shortcuts;
 use runebender::GlyphCategory;
 use std::sync::Arc;
 
@@ -498,7 +498,7 @@ impl AppState {
                 notice: None,
                 running: true,
             };
-            app.dispatch(shortcuts::AppAction::NewFont);
+            app.dispatch(actions::AppAction::NewFont);
             return app;
         };
         let mut app = Self {
@@ -592,7 +592,7 @@ impl AppState {
     /// Dispatch an application command, routing document commands to the live
     /// workspace while keeping application-level theme state available on the
     /// welcome screen.
-    pub(crate) fn dispatch(&mut self, action: shortcuts::AppAction) {
+    pub(crate) fn dispatch(&mut self, action: actions::AppAction) {
         #[cfg(target_arch = "wasm32")]
         {
             let modified = self
@@ -606,24 +606,24 @@ impl AppState {
                 return;
             }
         }
-        if action == shortcuts::AppAction::Quit {
+        if action == actions::AppAction::Quit {
             self.request_quit();
             return;
         }
-        if action == shortcuts::AppAction::ToggleTranslucency {
+        if action == actions::AppAction::ToggleTranslucency {
             // The native window follows the palette on the next view rebuild; the theme's
             // own setting applies again after a restart.
             crate::application::design::theme::set_translucency_override(Some(
                 !self.palette.blur_background,
             ));
-            self.dispatch(shortcuts::AppAction::Theme(self.theme_id));
+            self.dispatch(actions::AppAction::Theme(self.theme_id));
             return;
         }
-        if let shortcuts::AppAction::Theme(id) = action {
+        if let actions::AppAction::Theme(id) = action {
             self.theme_id = id;
             self.palette = Arc::new(Palette::load(id));
         }
-        if action == shortcuts::AppAction::OpenFont {
+        if action == actions::AppAction::OpenFont {
             let directory = self
                 .workspace
                 .as_ref()
@@ -639,7 +639,7 @@ impl AppState {
             }
             return;
         }
-        if action == shortcuts::AppAction::NewFont && self.workspace.is_none() {
+        if action == actions::AppAction::NewFont && self.workspace.is_none() {
             match Workspace::untitled() {
                 Ok(mut workspace) => {
                     if workspace.theme_id != self.theme_id {
@@ -654,8 +654,7 @@ impl AppState {
             }
             return;
         }
-        if action == shortcuts::AppAction::NewFont
-            && !self.confirm_replacement("creating a new font")
+        if action == actions::AppAction::NewFont && !self.confirm_replacement("creating a new font")
         {
             return;
         }
@@ -825,8 +824,8 @@ mod tests {
     #[test]
     fn welcome_new_font_opens_the_canonical_project() {
         let mut app = AppState::open(None);
-        app.dispatch(shortcuts::AppAction::Theme("dark"));
-        app.dispatch(shortcuts::AppAction::NewFont);
+        app.dispatch(actions::AppAction::Theme("dark"));
+        app.dispatch(actions::AppAction::NewFont);
         let workspace = app.workspace.as_ref().expect("the new project opens");
         assert_eq!(workspace.theme_id, "dark");
         let source = workspace.font.project.source_id(0).unwrap();
@@ -866,7 +865,7 @@ mod tests {
             .save(&path)
             .expect("the empty UFO fixture saves");
         let mut app = AppState::open(None);
-        app.dispatch(shortcuts::AppAction::Theme("dark"));
+        app.dispatch(actions::AppAction::Theme("dark"));
 
         assert!(app.open_path(&path));
         assert_eq!(app.theme_id, "dark");
