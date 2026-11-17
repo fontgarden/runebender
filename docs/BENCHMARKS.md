@@ -164,7 +164,23 @@ cargo test --release --locked --features integration-fonts --bin runebender \
 
 The probe records input handling and scene construction separately over 240 point moves.
 It compiles the preview font before the timed rebuilds, because the window compiles it on a worker thread, so the rebuild figures are the interface thread's own work.
-Measured on 2026-11-16 on Virtua Grotesk (about 900 glyphs): an idle rebuild takes 0.29 ms, the rebuild after an edit 3.4 ms, a pointer move during a drag 41 microseconds, and building one frame of the edit canvas 139 microseconds.
+Set `RUNEBENDER_BENCH_FONT` to a designspace or UFO to probe another font, and `RUNEBENDER_BENCH_GLYPH` to the glyph to open in it.
+`RUNEBENDER_BENCH_KEEP=<folder>` makes the `large_font` benchmark leave its fixtures in that folder for this purpose.
+`RUNEBENDER_BENCH_REPEAT=<count>` repeats the edit and its rebuild, so a sampling profiler attached to the test process sees that work.
+
+Measured on 2026-11-17 with Rust 1.96, macOS arm64, Apple M4 Pro:
+
+| Measurement | Virtua Grotesk, 863 glyphs | Synthetic, 16,000 glyphs |
+| --- | ---: | ---: |
+| Open in the application | 197 ms | 1,932 ms |
+| Idle interface rebuild | 0.28 ms | 1.37 ms |
+| Interface rebuild after an edit | 0.93 ms | 5.1 ms |
+| Pointer move during a drag | 41 us | 40 us |
+| Build one frame of the edit canvas | 139 us | 115 us |
+
+Both fonts have two masters.
+Before the work of 2026-11-16 and 2026-11-17, the rebuild after an edit took 4.0 ms on Virtua Grotesk and 83 ms at 16,000 glyphs.
+Most of the 83 ms was reading the compiled preview font's glyph names one at a time, which costs glyphs squared.
 It does not rasterize or present those scenes, so its paint measurements cannot establish native frame rate.
 Its test-only preview compilation is synchronous; the native window compiles that preview on a worker.
 Use `RUNEBENDER_FRAME_STATS=1` in an agreed native interactive session to observe display cadence, and use the browser checks in [web/README.md](../web/README.md) for browser input and rendering.
