@@ -185,8 +185,17 @@ pub(crate) struct GraphWidget {
     code_font_size: f32,
 }
 
-fn code_editor(text: &str, colors: CodeColors) -> (WidgetPod<CodeEditor>, WidgetId) {
-    let editor = NewWidget::new(CodeEditor::new(text, TextSize::Caption.px(), colors));
+fn code_editor(
+    text: &str,
+    syntax: runebender::ui::syntax::Syntax,
+    colors: CodeColors,
+) -> (WidgetPod<CodeEditor>, WidgetId) {
+    let editor = NewWidget::new(CodeEditor::new(
+        text,
+        syntax,
+        TextSize::Caption.px(),
+        colors,
+    ));
     let id = editor.id();
     (editor.to_pod(), id)
 }
@@ -329,7 +338,7 @@ fn content_children(content: &NodeContentMap, colors: CodeColors) -> ContentChil
     for (&node, content) in &content.by_node {
         match content {
             nl::NodeContent::Script(script) => {
-                let (editor, area_id) = code_editor(&script.text, colors);
+                let (editor, area_id) = code_editor(&script.text, script.syntax, colors);
                 editors.insert(node, editor);
                 area_ids.insert(node, area_id);
             }
@@ -1680,7 +1689,7 @@ impl<F: Fn(&mut Workspace, GraphEvent) + 'static> View<Workspace, (), ViewCtx> f
                         .get_mut(&node)
                         .expect("script node has an editor child");
                     let mut editor = element.ctx.get_mut(editor);
-                    CodeEditor::replace_external_content(&mut editor, &script.text);
+                    CodeEditor::replace_external_content(&mut editor, &script.text, script.syntax);
                 }
             }
             if projected_images(&self.content) != projected_images(&prev.content) {
@@ -1798,6 +1807,7 @@ mod tests {
                         node.id,
                         NodeContent::Script(ScriptContent {
                             text: "print('A')\n".into(),
+                            syntax: runebender::ui::syntax::Syntax::Python,
                             content_hash: "script".into(),
                             state: ContentState::Current,
                             size: [240.0, 112.0],

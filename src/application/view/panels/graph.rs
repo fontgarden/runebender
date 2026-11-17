@@ -34,6 +34,7 @@ use runebender::ui::graph::{
     ContentState, ImageAction, ImageContent, ImmutablePng, NodeContent, NodeContentMap,
     ScriptContent,
 };
+use runebender::ui::syntax::Syntax;
 use runebender::workflows::graph::{NodeGraph, Registry};
 use runebender::workflows::graph_session::GraphGuard;
 use std::sync::Arc;
@@ -128,6 +129,7 @@ fn legacy_projection(app: &Workspace) -> Option<CanvasProjection> {
                     NodeContent::Script(ScriptContent {
                         content_hash: if fixture { "ui-fixture" } else { "" }.into(),
                         text,
+                        syntax: Syntax::Python,
                         state: if fixture {
                             ContentState::Current
                         } else {
@@ -353,6 +355,7 @@ fn live_projection(app: &Workspace) -> Option<CanvasProjection> {
                             .and_then(serde_json::Value::as_str)
                             .unwrap_or_default()
                             .into(),
+                        syntax: Syntax::Python,
                         content_hash,
                         state: node_state.clone(),
                         size: content_size(app, node.id, runebender::ui::graph::CODE_H),
@@ -381,6 +384,10 @@ fn live_projection(app: &Workspace) -> Option<CanvasProjection> {
                             .and_then(serde_json::Value::as_str)
                             .unwrap_or(language.starter())
                             .into(),
+                        syntax: match language {
+                            ScriptLanguage::Designbot => Syntax::Rust,
+                            ScriptLanguage::Drawbot => Syntax::Python,
+                        },
                         content_hash: snapshot.semantic_hash.clone(),
                         state: node_state.clone(),
                         size: app

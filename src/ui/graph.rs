@@ -21,6 +21,7 @@ use kurbo::{Affine, BezPath, Point, Rect, Shape as _};
 use serde_json::Value;
 
 use crate::ui::editing::viewport::ViewPort;
+use crate::ui::syntax::Syntax;
 use crate::workflows::graph::{Kind, Node, NodeGraph, Registry};
 
 /// The dot grid pitch, in canvas units. Node edges sit on it: the
@@ -68,7 +69,7 @@ impl NodeContentMap {
 /// Presentation content a canvas node can host.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeContent {
-    /// A Python source view backed by the shared script-artifact buffer.
+    /// A script source view backed by the shared script-artifact buffer.
     Script(ScriptContent),
     /// An immutable PNG proof image and its visible run state.
     Image(ImageContent),
@@ -98,6 +99,8 @@ impl PartialEq for GlyphsContent {
 pub struct ScriptContent {
     /// The source text from the shared script buffer.
     pub text: String,
+    /// The language the code editor highlights.
+    pub syntax: Syntax,
     /// Stable content identity captured with the run.
     pub content_hash: String,
     /// Current status and bounded diagnostic for the node.
@@ -782,6 +785,7 @@ mod tests {
             node,
             NodeContent::Script(ScriptContent {
                 text: "print('specimen')\n".into(),
+                syntax: Syntax::Python,
                 content_hash: "script-1".into(),
                 state: ContentState::Current,
                 size: [240.0, 112.0],
@@ -830,6 +834,7 @@ mod tests {
                         node.id,
                         NodeContent::Script(ScriptContent {
                             text: String::new(),
+                            syntax: Syntax::Python,
                             content_hash: String::new(),
                             state: ContentState::Idle,
                             size: [240.0, 112.0],

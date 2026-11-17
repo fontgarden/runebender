@@ -15,25 +15,6 @@ pub enum Syntax {
     Python,
 }
 
-impl Syntax {
-    /// Choose the language a script is most likely written in.
-    pub fn detect(text: &str) -> Self {
-        let rust = ["fn ", "let ", "use ", "pub ", "impl ", "//"];
-        let python = ["def ", "import ", "elif ", "print(", "#"];
-        let score = |markers: &[&str]| {
-            text.lines()
-                .map(str::trim_start)
-                .filter(|line| markers.iter().any(|marker| line.starts_with(marker)))
-                .count()
-        };
-        if score(&python) > score(&rust) {
-            Self::Python
-        } else {
-            Self::Rust
-        }
-    }
-}
-
 /// What a run of characters is, for coloring.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
@@ -402,17 +383,5 @@ mod tests {
                 assert_eq!(pair[0].end, pair[1].start);
             }
         }
-    }
-
-    #[test]
-    fn the_language_is_detected_from_the_script() {
-        assert_eq!(
-            Syntax::detect("use designbot::*;\nfn main() {\n    let a = 1;\n}"),
-            Syntax::Rust
-        );
-        assert_eq!(
-            Syntax::detect("import drawBot\n# page\ndef draw():\n    pass"),
-            Syntax::Python
-        );
     }
 }

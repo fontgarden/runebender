@@ -156,11 +156,11 @@ pub(crate) struct CodeEditor {
 }
 
 impl CodeEditor {
-    /// Create an editor in normal mode.
-    pub(crate) fn new(contents: &str, text_size: f32, colors: CodeColors) -> Self {
+    /// Create an editor in normal mode that highlights `contents` as `syntax`.
+    pub(crate) fn new(contents: &str, syntax: Syntax, text_size: f32, colors: CodeColors) -> Self {
         Self {
             buffer: VimBuffer::new(contents),
-            syntax: Syntax::detect(contents),
+            syntax,
             text_size,
             colors,
             top: 0,
@@ -172,10 +172,17 @@ impl CodeEditor {
     }
 
     /// Replace a genuinely external value; matching text keeps the cursor, mode and history.
-    pub(crate) fn replace_external_content(this: &mut WidgetMut<'_, Self>, contents: &str) {
+    pub(crate) fn replace_external_content(
+        this: &mut WidgetMut<'_, Self>,
+        contents: &str,
+        syntax: Syntax,
+    ) {
+        if this.widget.syntax != syntax {
+            this.widget.syntax = syntax;
+            this.ctx.request_render();
+        }
         if this.widget.buffer.text() != contents {
             this.widget.buffer.set_text(contents);
-            this.widget.syntax = Syntax::detect(contents);
             this.widget.reveal_cursor();
             this.ctx.request_render();
         }
