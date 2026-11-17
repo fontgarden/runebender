@@ -4,30 +4,31 @@
 //! The panel language gate.
 //!
 //! A panel module describes its section in `recipes::rows` and nothing
-//! else. This test reads the panel sources and fails when one reaches
-//! past the vocabulary to a bare label, column, or button, so a wrong
-//! panel does not build. Modules written before the vocabulary are
-//! listed below and leave the list as they move.
+//! else. This test reads the panel sources and counts the lines that
+//! reach past the vocabulary to a bare label, column, or button.
+//! A module written before the vocabulary has its count in [`BUDGET`].
+//! A count may only go down: when you remove a raw call, lower its number
+//! here; a module that is not listed may make none.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-/// Panel modules that predate `recipes::rows`. Shrink, never grow.
-const LEGACY_PANELS: &[&str] = &[
-    "chat.rs",
-    "editor.rs",
-    "editor_info.rs",
-    "graph.rs",
-    "image.rs",
-    "info.rs",
-    "label.rs",
-    "metaballs.rs",
-    "neural.rs",
-    "preview.rs",
-    "scripts.rs",
-    "sections.rs",
-    "sketch.rs",
-    "tabs.rs",
+/// Raw view calls in each panel module that predates `recipes::rows`.
+const BUDGET: &[(&str, usize)] = &[
+    ("chat.rs", 22),
+    ("editor_info.rs", 24),
+    ("graph.rs", 20),
+    ("image.rs", 9),
+    ("info.rs", 3),
+    ("label.rs", 2),
+    ("metaballs.rs", 8),
+    ("neural.rs", 6),
+    ("preview.rs", 4),
+    ("scripts.rs", 18),
+    ("sections.rs", 53),
+    ("sketch.rs", 13),
+    ("tabs.rs", 49),
 ];
 
 /// What a panel module may not call. Each is owned by a row.
@@ -65,35 +66,49 @@ fn panels_dir() -> std::path::PathBuf {
 
 #[test]
 fn panels_are_built_from_the_row_vocabulary() {
+    let budget: BTreeMap<&str, usize> = BUDGET.iter().copied().collect();
     let mut failures = Vec::new();
     for entry in fs::read_dir(panels_dir()).expect("panels directory") {
         let path = entry.expect("entry").path();
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if !name.ends_with(".rs") || name == "mod.rs" || LEGACY_PANELS.contains(&name) {
+        if !name.ends_with(".rs") || name == "mod.rs" {
             continue;
         }
         let source = fs::read_to_string(&path).expect("panel source");
+        let mut found = Vec::new();
         for (number, line) in source.lines().enumerate() {
             let code = line.split("//").next().unwrap_or("");
             for raw in RAW_VIEWS {
                 if calls(code, raw) {
-                    failures.push(format!(
-                        "{name}:{}: `{raw}` — build this from recipes::Row; see src/application/design/recipes/rows.rs",
-                        number + 1
-                    ));
+                    found.push(format!("{name}:{}: `{raw}`", number + 1));
                 }
             }
+        }
+        let allowed = budget.get(name).copied().unwrap_or(0);
+        if found.len() > allowed {
+            failures.push(format!(
+                "{name}: {} raw view calls, {allowed} allowed; build these from recipes::Row \
+                 (see src/application/design/recipes/rows.rs):\n{}",
+                found.len(),
+                found.join("\n")
+            ));
+        } else if found.len() < allowed {
+            failures.push(format!(
+                "{name}: down to {} raw view calls from {allowed}; lower its BUDGET entry to {}",
+                found.len(),
+                found.len()
+            ));
         }
     }
     assert!(failures.is_empty(), "\n{}\n", failures.join("\n"));
 }
 
 #[test]
-fn legacy_panels_still_exist() {
-    for name in LEGACY_PANELS {
+fn budgeted_panels_still_exist() {
+    for (name, _) in BUDGET {
         assert!(
             panels_dir().join(name).exists(),
-            "{name} is listed as a legacy panel but is gone; remove it from the list"
+            "{name} has a BUDGET entry but is gone; remove the entry"
         );
     }
 }

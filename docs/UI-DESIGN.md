@@ -3,7 +3,7 @@
 A panel section is built from `recipes::Row` values grouped under captions.
 There is no other way to put content in a section.
 The vocabulary, its rules, and every measurement live in [`src/application/design/recipes/rows.rs`](../src/application/design/recipes/rows.rs); this page is the summary.
-`tests/panel_vocabulary.rs` fails the build when a panel module reaches past the vocabulary to a bare label, column, or button.
+`tests/panel_vocabulary.rs` counts the lines in each panel module that reach past the vocabulary to a bare label, column, or button, and fails the build when a count rises above its budget.
 
 ## The design system
 
@@ -84,7 +84,7 @@ Views read workspace state and forward edits to existing workspace intents; font
 ## Older sections
 
 Sections written before the vocabulary use `recipes::panel_section`, `recipes::section`, `recipes::panel_group`, `recipes::field`, and `design::column` and `design::row` with a `Region` directly.
-They are listed in `tests/panel_vocabulary.rs` and leave that list as they move.
+Each has a count of raw view calls in `tests/panel_vocabulary.rs`, and the count may only go down.
 Until then: `panel_group` owns an 8-pixel inset and the full-width divider; `section` owns the header and a 4-pixel gap; section bodies add no outer padding.
 Read colors from `design::theme::Palette` and measurements from `design` instead of assigning local colors, radii, or pixel values.
 Let the dock own its width; section contents fit the available width.
