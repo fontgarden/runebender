@@ -419,9 +419,6 @@ fn append_rendered_layer<'a>(
     stack: &mut Vec<String>,
     transform: Affine,
 ) -> Result<(), ComponentResolveError> {
-    if stack.len() > 64 {
-        return Err(ComponentResolveError::TooDeep);
-    }
     for contour in layer.contours() {
         let mut contour_path = BezPath::new();
         append_document_contour(&mut contour_path, contour);
@@ -439,9 +436,6 @@ fn append_rendered_components<'a>(
     stack: &mut Vec<String>,
     transform: Affine,
 ) -> Result<(), ComponentResolveError> {
-    if stack.len() > 64 {
-        return Err(ComponentResolveError::TooDeep);
-    }
     for component in layer.components() {
         append_rendered_component(path, layer, component, resolve, layers, stack, transform)?;
     }
@@ -457,36 +451,73 @@ fn append_rendered_component<'a>(
     stack: &mut Vec<String>,
     transform: Affine,
 ) -> Result<(), ComponentResolveError> {
-    if stack.len() > 64 {
-        return Err(ComponentResolveError::TooDeep);
-    }
     let name = component.reference();
+    let combined = transform * component.transform();
+    let base = resolve(name);
+    enter_component(
+        stack,
+        name,
+        base,
+        finite_transform(combined),
+        |base, stack| {
+            let candidates = layers(name);
+            match canonical_smart_contours(parent, component, base, &candidates) {
+                Some(contours) => {
+                    for contour in contours {
+                        let mut contour_path = BezPath::new();
+                        append_points(&mut contour_path, &contour.points, contour.closed);
+                        append_transformed_path(path, combined, contour_path)?;
+                    }
+                    append_document_metaballs(path, base, combined)?;
+                    append_rendered_components(path, base, resolve, layers, stack, combined)
+                }
+                None => append_rendered_layer(path, base, resolve, layers, stack, combined),
+            }
+        },
+    )
+}
+
+/// The deepest chain of nested components a layer may have.
+const MAX_COMPONENT_DEPTH: usize = 64;
+
+/// Enter one component reference and visit its base layer with the reference on `stack`.
+///
+/// `stack` holds the glyph names being resolved, outermost first, and `base` is the caller's
+/// resolution of `name`.
+/// The checks run in a fixed order: a name already on the stack is a cycle, an unresolved base is
+/// missing, then the caller's `ready` result applies, then a stack deeper than
+/// `MAX_COMPONENT_DEPTH` is too deep.
+pub(crate) fn enter_component<'a, T>(
+    stack: &mut Vec<String>,
+    name: &str,
+    base: Option<LayerView<'a>>,
+    ready: Result<(), ComponentResolveError>,
+    visit: impl FnOnce(LayerView<'a>, &mut Vec<String>) -> Result<T, ComponentResolveError>,
+) -> Result<T, ComponentResolveError> {
     if let Some(start) = stack.iter().position(|entry| entry == name) {
         let mut cycle = stack[start..].to_vec();
         cycle.push(name.to_owned());
         return Err(ComponentResolveError::Cycle(cycle));
     }
-    let base = resolve(name).ok_or_else(|| ComponentResolveError::Missing(name.to_owned()))?;
-    let combined = transform * component.transform();
-    if !combined.as_coeffs().iter().all(|value| value.is_finite()) {
-        return Err(ComponentResolveError::NonFinite);
-    }
-    let candidates = layers(name);
-    let smart = canonical_smart_contours(parent, component, base, &candidates);
+    let base = base.ok_or_else(|| ComponentResolveError::Missing(name.to_owned()))?;
+    ready?;
     stack.push(name.to_owned());
-    let result = if let Some(contours) = smart {
-        for contour in contours {
-            let mut contour_path = BezPath::new();
-            append_points(&mut contour_path, &contour.points, contour.closed);
-            append_transformed_path(path, combined, contour_path)?;
-        }
-        append_document_metaballs(path, base, combined)?;
-        append_rendered_components(path, base, resolve, layers, stack, combined)
+    let result = if stack.len() > MAX_COMPONENT_DEPTH {
+        Err(ComponentResolveError::TooDeep)
     } else {
-        append_rendered_layer(path, base, resolve, layers, stack, combined)
+        visit(base, stack)
     };
     stack.pop();
     result
+}
+
+/// Reject a component transform with a nonfinite coefficient.
+fn finite_transform(transform: Affine) -> Result<(), ComponentResolveError> {
+    if transform.as_coeffs().iter().all(|value| value.is_finite()) {
+        Ok(())
+    } else {
+        Err(ComponentResolveError::NonFinite)
+    }
 }
 
 fn append_document_metaballs(
@@ -532,37 +563,24 @@ fn append_document_shapes<'a>(
     stack: &mut Vec<String>,
     transform: Affine,
 ) -> Result<(), ComponentResolveError> {
-    if stack.len() > 64 {
-        return Err(ComponentResolveError::TooDeep);
-    }
     for shape in layer.shapes() {
         match shape {
             LayerShapeView::Contour(contour) => {
                 let mut contour_path = BezPath::new();
                 append_document_contour(&mut contour_path, contour);
-                let transformed = transform * contour_path;
-                if !transformed.elements().iter().all(path_element_is_finite) {
-                    return Err(ComponentResolveError::NonFinite);
-                }
-                path.extend(transformed.elements().iter().copied());
+                append_transformed_path(path, transform, contour_path)?;
             }
             LayerShapeView::Component(component) => {
                 let name = component.reference();
-                if let Some(start) = stack.iter().position(|entry| entry == name) {
-                    let mut cycle = stack[start..].to_vec();
-                    cycle.push(name.to_owned());
-                    return Err(ComponentResolveError::Cycle(cycle));
-                }
-                let base =
-                    resolve(name).ok_or_else(|| ComponentResolveError::Missing(name.to_owned()))?;
                 let combined = transform * component.transform();
-                if !combined.as_coeffs().iter().all(|value| value.is_finite()) {
-                    return Err(ComponentResolveError::NonFinite);
-                }
-                stack.push(name.to_owned());
-                let result = append_document_shapes(path, base, resolve, stack, combined);
-                stack.pop();
-                result?;
+                let base = resolve(name);
+                enter_component(
+                    stack,
+                    name,
+                    base,
+                    finite_transform(combined),
+                    |base, stack| append_document_shapes(path, base, resolve, stack, combined),
+                )?;
             }
         }
     }

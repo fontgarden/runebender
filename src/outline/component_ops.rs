@@ -29,9 +29,6 @@ fn collect_document_component_contours<'a>(
     stack: &mut Vec<String>,
     output: &mut Vec<crate::font::CopiedContour>,
 ) -> Result<(), glyph_paths::ComponentResolveError> {
-    if stack.len() > 64 {
-        return Err(glyph_paths::ComponentResolveError::TooDeep);
-    }
     for shape in layer.shapes() {
         match shape {
             crate::font::LayerShapeView::Contour(contour) => {
@@ -44,23 +41,16 @@ fn collect_document_component_contours<'a>(
             }
             crate::font::LayerShapeView::Component(component) => {
                 let name = component.reference();
-                if let Some(start) = stack.iter().position(|entry| entry == name) {
-                    let mut cycle = stack[start..].to_vec();
-                    cycle.push(name.to_owned());
-                    return Err(glyph_paths::ComponentResolveError::Cycle(cycle));
-                }
-                let base = resolve(name)
-                    .ok_or_else(|| glyph_paths::ComponentResolveError::Missing(name.to_owned()))?;
-                stack.push(name.to_owned());
-                let result = collect_document_component_contours(
-                    base,
-                    transform * component.transform(),
-                    resolve,
-                    stack,
-                    output,
-                );
-                stack.pop();
-                result?;
+                let base = resolve(name);
+                glyph_paths::enter_component(stack, name, base, Ok(()), |base, stack| {
+                    collect_document_component_contours(
+                        base,
+                        transform * component.transform(),
+                        resolve,
+                        stack,
+                        output,
+                    )
+                })?;
             }
         }
     }
@@ -80,23 +70,16 @@ pub fn resolved_document_component_contours<'a>(
     let mut stack = vec![layer.glyph_name().to_owned()];
     for component in layer.components() {
         let name = component.reference();
-        if let Some(start) = stack.iter().position(|entry| entry == name) {
-            let mut cycle = stack[start..].to_vec();
-            cycle.push(name.to_owned());
-            return Err(glyph_paths::ComponentResolveError::Cycle(cycle));
-        }
-        let base = resolve(name)
-            .ok_or_else(|| glyph_paths::ComponentResolveError::Missing(name.to_owned()))?;
-        stack.push(name.to_owned());
-        let result = collect_document_component_contours(
-            base,
-            component.transform(),
-            &mut resolve,
-            &mut stack,
-            &mut output,
-        );
-        stack.pop();
-        result?;
+        let base = resolve(name);
+        glyph_paths::enter_component(&mut stack, name, base, Ok(()), |base, stack| {
+            collect_document_component_contours(
+                base,
+                component.transform(),
+                &mut resolve,
+                stack,
+                &mut output,
+            )
+        })?;
     }
     Ok(output)
 }
@@ -120,17 +103,18 @@ pub fn resolved_document_components<'a>(
             &mut layers,
         )?;
         let name = component.reference();
-        let base = resolve(name)
-            .ok_or_else(|| glyph_paths::ComponentResolveError::Missing(name.to_owned()))?;
+        let base = resolve(name);
         let mut contours = Vec::new();
-        let mut stack = vec![layer.glyph_name().to_owned(), name.to_owned()];
-        collect_document_component_contours(
-            base,
-            component.transform(),
-            &mut resolve,
-            &mut stack,
-            &mut contours,
-        )?;
+        let mut stack = vec![layer.glyph_name().to_owned()];
+        glyph_paths::enter_component(&mut stack, name, base, Ok(()), |base, stack| {
+            collect_document_component_contours(
+                base,
+                component.transform(),
+                &mut resolve,
+                stack,
+                &mut contours,
+            )
+        })?;
         output.push(ResolvedDocumentComponent {
             id: component.id(),
             path,
