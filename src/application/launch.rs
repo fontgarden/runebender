@@ -3,6 +3,7 @@
 
 //! The launch path: the event loop, the window, and the first frame.
 
+use crate::application::launch_options::LaunchOptions;
 use crate::application::platform::screenshot;
 use crate::application::view::render::root_logic;
 use crate::application::view::{UI_FONT, default_property_set};
@@ -24,6 +25,7 @@ pub(crate) fn run(
     path: Option<&FsPath>,
 ) -> Result<(), EventLoopError> {
     crate::application::platform::config::load().apply();
+    let options = LaunchOptions::current();
     let mut app = AppState::open(path);
     // RUNEBENDER_GLYPH=<name> starts in the editor on that glyph, so
     // a headless screenshot reaches edit mode without clicks.
@@ -106,7 +108,7 @@ pub(crate) fn run(
         workspace.refresh_proof_files();
     }
     // Headless: render one frame and exit. No window, no event loop.
-    if let Ok(path) = std::env::var("RUNEBENDER_SCREENSHOT") {
+    if let Some(capture) = &options.capture {
         if let Ok(name) = std::env::var("RUNEBENDER_SELECTED")
             && let Some(workspace) = app.workspace.as_mut()
             && let Some(index) = workspace.font.index_of(&name)
@@ -201,30 +203,16 @@ pub(crate) fn run(
 
         // The harness needs a root widget with a concrete type, so wrap
         // the app's root view in a sized box.
-        // RUNEBENDER_SIZE=1000x680 renders at a chosen logical size for
-        // repeatable review captures.
-        let size = std::env::var("RUNEBENDER_SIZE")
-            .ok()
-            .and_then(|spec| {
-                let (w, h) = spec.split_once('x')?;
-                Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
-            })
-            .unwrap_or((1100, 720));
-        // Keep the logical layout fixed while exercising device-pixel scaling.
-        // This produces a true 2x proof rather than a larger, reflowed window.
-        let scale = std::env::var("RUNEBENDER_SCALE")
-            .ok()
-            .and_then(|value| value.parse::<f64>().ok())
-            .filter(|value| value.is_finite() && *value > 0.0)
-            .unwrap_or(1.0);
+        // The capture keeps the logical layout fixed at its size and applies the device-pixel
+        // scale to it, so a scale of 2 is a true 2x proof and not a larger, reflowed window.
         let background = app.background();
         screenshot::render_to(
             app,
             background,
             |app: &mut AppState| sized_box(root_logic(app)),
-            size,
-            scale,
-            &path,
+            capture.size,
+            capture.scale,
+            &capture.path,
         );
         return Ok(());
     }
@@ -262,11 +250,12 @@ pub(crate) fn run(
         };
         let content = root_logic(app);
         // RUNEBENDER_FRAME_STATS=1 renders every frame and reports the cadence on stderr.
-        let content = match std::env::var_os(crate::application::widgets::frame_stats::ENV) {
-            Some(_) => xilem::core::one_of::OneOf2::A(
-                crate::application::widgets::frame_stats::frame_stats(content),
-            ),
-            None => xilem::core::one_of::OneOf2::B(content),
+        let content = if options.frame_stats {
+            xilem::core::one_of::OneOf2::A(crate::application::widgets::frame_stats::frame_stats(
+                content,
+            ))
+        } else {
+            xilem::core::one_of::OneOf2::B(content)
         };
         #[cfg(target_os = "macos")]
         let content = xilem::view::resize_observer(
