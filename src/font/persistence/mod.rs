@@ -190,19 +190,38 @@ impl ImportPlan {
         {
             let document = crate::formats::designspace::load(path)?;
             let directory = path.parent().unwrap_or(Path::new("."));
-            let mut sources = BTreeMap::new();
-            for source in document
+            // Each master is its own UFO on disk, so the masters are read in parallel.
+            let filenames: std::collections::BTreeSet<&String> = document
                 .sources
                 .iter()
                 .filter(|source| source.layer.is_none())
-            {
-                if sources.contains_key(&source.filename) {
-                    continue;
-                }
-                let source_path = directory.join(&source.filename);
-                let imported = load_ufo(&source_path)
-                    .map_err(|error| format!("{}: {error}", source_path.display()))?;
-                sources.insert(source.filename.clone(), imported);
+                .map(|source| &source.filename)
+                .collect();
+            let loaded: Vec<(String, Result<ImportedUfo, String>)> = std::thread::scope(|scope| {
+                let workers: Vec<_> = filenames
+                    .iter()
+                    .map(|filename| {
+                        let source_path = directory.join(filename);
+                        let worker = scope.spawn(move || {
+                            load_ufo(&source_path)
+                                .map_err(|error| format!("{}: {error}", source_path.display()))
+                        });
+                        ((*filename).clone(), worker)
+                    })
+                    .collect();
+                workers
+                    .into_iter()
+                    .map(|(filename, worker)| {
+                        let result = worker.join().unwrap_or_else(|_| {
+                            Err(format!("{filename}: reading the UFO stopped unexpectedly"))
+                        });
+                        (filename, result)
+                    })
+                    .collect()
+            });
+            let mut sources = BTreeMap::new();
+            for (filename, imported) in loaded {
+                sources.insert(filename, imported?);
             }
             Ok(Self::Designspace {
                 path: path.to_path_buf(),
