@@ -24,8 +24,9 @@ The repository records its stable rustfmt settings in `.rustfmt.toml`, and CI ve
 
 ## Architecture
 
-Read [the architecture guide](https://runebender.org/docs/architecture.html) before moving code or adding a subsystem.
-It is the canonical source map and change-routing guide for humans and agents.
+Read [the module map](docs/ARCHITECTURE.md) and [the architecture guide](https://runebender.org/docs/architecture.html) before moving code or adding a subsystem.
+The module map is the canonical source map and change-routing guide for humans and agents.
+`tests/architecture_map.rs` checks its paths against the source tree, so a change that adds, moves or removes a file it names updates it in the same commit.
 
 The root package produces the `runebender` executable and its library target.
 A font path starts the Xilem editor; a subcommand runs headlessly before window setup.
