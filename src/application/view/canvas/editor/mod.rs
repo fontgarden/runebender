@@ -53,7 +53,9 @@ use xilem::{Pod, ViewCtx};
 
 use crate::application::design::theme::Palette;
 use crate::application::editor::component_host::PartOwner;
-use crate::application::editor::session::{Session, SessionSyncOutcome};
+use crate::application::editor::session::{
+    LabelModifiers, LabelPress, SelectionShape, SelectionTarget, Session, SessionSyncOutcome,
+};
 use crate::application::editor::tools::ai_shapes::ShapeGhost;
 use crate::application::editor::tools::label::LABEL_GRID;
 use crate::application::editor::tools::sketch::SketchLayer;

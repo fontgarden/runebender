@@ -126,7 +126,7 @@ impl EditorWidget {
             let locked = self.session.image_locked();
             let (handled, edited) = match &key.key {
                 Key::Named(NamedKey::Escape) => {
-                    self.session.image_selected = false;
+                    self.session.set_image_selected(false);
                     (true, false)
                 }
                 // A locked picture can be selected and nothing more.
@@ -190,7 +190,7 @@ impl EditorWidget {
                     true
                 }
                 Key::Named(NamedKey::Escape) if self.session.label.selected.is_some() => {
-                    self.session.label.selected = None;
+                    self.session.clear_label_selection();
                     true
                 }
                 Key::Named(NamedKey::Escape) if self.session.label.sample.is_some() => {
@@ -248,8 +248,7 @@ impl EditorWidget {
                     true
                 }
                 Key::Named(NamedKey::Escape) => {
-                    self.session.metaballs =
-                        crate::application::editor::tools::metaballs::MetaballSelection::default();
+                    self.session.clear_metaball_selection();
                     true
                 }
                 _ => false,

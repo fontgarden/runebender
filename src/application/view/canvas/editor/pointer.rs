@@ -242,169 +242,52 @@ impl EditorWidget {
                         return;
                     }
                     Some(PointerButton::Primary) if self.tool == Tool::Label => {
-                        use crate::application::editor::tools::label::{
-                            LabelHit, LabelMoving, LabelSelection,
-                        };
                         ctx.request_focus();
                         let design = self.screen_to_glyph_design(at);
                         let reach = HIT_RADIUS_PX / self.session.viewport.zoom;
-                        // A new press starts fresh: the last gesture's hint goes away.
-                        self.session.label.error = None;
-                        match self.session.label_hit(design, reach) {
-                            LabelHit::Corner { region, corner } => {
-                                self.session.activate_label_region(region);
-                                let shift = state.modifiers.shift();
-                                let mut picked = self.session.selected_corners();
-                                if shift {
-                                    // Shift adds a corner to the set, or takes it out.
-                                    match picked.iter().position(|c| *c == (region, corner)) {
-                                        Some(at) => {
-                                            picked.remove(at);
-                                        }
-                                        None => picked.push((region, corner)),
-                                    }
-                                    self.session.label.selected =
-                                        Some(LabelSelection::Corners(picked));
-                                    self.emit(ctx, false);
-                                } else {
-                                    if state.modifiers.alt() || !picked.contains(&(region, corner))
-                                    {
-                                        // Corners that meet here move as one; Option takes
-                                        // only the one on top, to pull it away.
-                                        let at = self.session.corner_point(region, corner);
-                                        picked = if state.modifiers.alt() {
-                                            Vec::new()
-                                        } else {
-                                            at.map(|at| self.session.corners_at(at))
-                                                .unwrap_or_default()
-                                        };
-                                        if picked.is_empty() {
-                                            picked.push((region, corner));
-                                        }
-                                        self.session.label.selected =
-                                            Some(LabelSelection::Corners(picked.clone()));
-                                    }
-                                    if picked.len() == 1 {
-                                        self.session.label.moving = Some(LabelMoving::Corner {
-                                            region,
-                                            corner,
-                                            to: design,
-                                        });
-                                        self.drag = Drag::LabelCorner {
-                                            region,
-                                            detach: state.modifiers.alt(),
-                                        };
-                                    } else {
-                                        self.session.label.moving = Some(LabelMoving::Corners {
-                                            by: kurbo::Vec2::ZERO,
-                                        });
-                                        self.drag = Drag::LabelCorners { start: design };
-                                    }
-                                    ctx.capture_pointer();
-                                    self.emit(ctx, false);
-                                }
-                            }
-                            LabelHit::Edge {
-                                region,
-                                after,
-                                at: on,
-                            } => {
-                                // A corner appears on the edge and follows the pointer.
-                                self.session.activate_label_region(region);
-                                if let Some(corner) =
-                                    self.session.add_label_corner(region, after, on)
-                                {
-                                    self.session.label.selected =
-                                        Some(LabelSelection::Corners(vec![(region, corner)]));
-                                    self.session.label.moving = Some(LabelMoving::Corner {
-                                        region,
-                                        corner,
-                                        to: on,
-                                    });
-                                    self.drag = Drag::LabelCorner {
-                                        region,
-                                        detach: false,
-                                    };
-                                    ctx.capture_pointer();
-                                    self.emit(ctx, true);
-                                }
-                            }
-                            LabelHit::CutEnd { cut, end } => {
-                                self.session.label.selected = Some(LabelSelection::Cut(cut));
-                                self.session.label.moving = Some(LabelMoving::CutEnd {
-                                    cut,
-                                    end,
-                                    to: design,
-                                });
-                                self.drag = Drag::LabelCut {
-                                    cut,
-                                    end: Some(end),
-                                    start: design,
-                                };
+                        let modifiers = LabelModifiers {
+                            shift: state.modifiers.shift(),
+                            alt: state.modifiers.alt(),
+                        };
+                        match self.session.label_press(design, reach, modifiers) {
+                            LabelPress::Selected => self.emit(ctx, false),
+                            LabelPress::Corner { region, detach } => {
+                                self.drag = Drag::LabelCorner { region, detach };
                                 ctx.capture_pointer();
                                 self.emit(ctx, false);
                             }
-                            LabelHit::Cut { cut } => {
-                                self.session.label.selected = Some(LabelSelection::Cut(cut));
-                                self.session.label.moving = Some(LabelMoving::Cut {
-                                    cut,
-                                    by: kurbo::Vec2::ZERO,
-                                });
-                                self.drag = Drag::LabelCut {
-                                    cut,
-                                    end: None,
-                                    start: design,
-                                };
-                                ctx.capture_pointer();
-                                self.emit(ctx, false);
-                            }
-                            LabelHit::Lasso { region } => {
-                                // A press inside a lasso picks it up: its letter becomes
-                                // active and its corners show. A drag moves the whole shape.
-                                self.session.activate_label_region(region);
-                                self.session.label.selected = Some(LabelSelection::Region(region));
-                                self.session.label.moving = Some(LabelMoving::Region {
+                            LabelPress::NewCorner { region } => {
+                                self.drag = Drag::LabelCorner {
                                     region,
-                                    by: kurbo::Vec2::ZERO,
-                                });
-                                self.drag = Drag::LabelRegion {
-                                    region,
-                                    start: design,
+                                    detach: false,
                                 };
+                                ctx.capture_pointer();
+                                self.emit(ctx, true);
+                            }
+                            LabelPress::Corners { start } => {
+                                self.drag = Drag::LabelCorners { start };
                                 ctx.capture_pointer();
                                 self.emit(ctx, false);
                             }
-                            LabelHit::Nothing
-                                if state.modifiers.shift()
-                                    && self.session.label.sample.is_some() =>
-                            {
-                                // Shift-drag: a box that selects corners.
+                            LabelPress::Cut { cut, end, start } => {
+                                self.drag = Drag::LabelCut { cut, end, start };
+                                ctx.capture_pointer();
+                                self.emit(ctx, false);
+                            }
+                            LabelPress::Region { region, start } => {
+                                self.drag = Drag::LabelRegion { region, start };
+                                ctx.capture_pointer();
+                                self.emit(ctx, false);
+                            }
+                            LabelPress::Marquee { start } => {
                                 self.drag = Drag::LabelMarquee {
-                                    start: design,
-                                    current: design,
+                                    start,
+                                    current: start,
                                 };
                                 ctx.capture_pointer();
                             }
-                            LabelHit::Nothing => {
-                                // Words are not a mode: a press outside the open word
-                                // opens the word under it, or closes the open one.
-                                let open = self.session.label.sample;
-                                let inside_open = open
-                                    .is_some_and(|open| self.session.sample_contains(open, design));
-                                let under = (!inside_open)
-                                    .then(|| self.session.sample_at(design))
-                                    .flatten();
-                                if open.is_some() && !inside_open && under.is_none() {
-                                    self.session.select_sample(None);
-                                }
-                                if let Some(sample) = under {
-                                    // A click on a word opens it.
-                                    self.session.select_sample(Some(sample));
-                                    self.emit(ctx, false);
-                                } else {
-                                    self.drag = Drag::Label { points: vec![at] };
-                                }
-                            }
+                            LabelPress::Freehand => self.drag = Drag::Label { points: vec![at] },
+                            LabelPress::Ignored => {}
                         }
                         ctx.request_render();
                         ctx.set_handled();
@@ -560,17 +443,7 @@ impl EditorWidget {
                             self.screen_to_glyph_design(at),
                             HIT_RADIUS_PX / self.session.viewport.zoom,
                         ) {
-                            self.session.metaballs.selected.clear();
-                            self.session.image_selected = false;
-                            self.session.selected_component = None;
-                            if shift {
-                                if !self.session.selected_anchors.remove(&anchor) {
-                                    self.session.selected_anchors.insert(anchor);
-                                }
-                            } else if !self.session.selected_anchors.contains(&anchor) {
-                                self.session.clear_selection();
-                                self.session.selected_anchors.insert(anchor);
-                            }
+                            self.session.press_anchor(anchor, shift);
                             self.session.begin_point_drag();
                             self.drag = Drag::Points { start: at };
                             self.emit(ctx, false);
@@ -605,21 +478,11 @@ impl EditorWidget {
                             // A double click on an on-curve point switches it between corner
                             // and smooth, as in Glyphs.
                             Some(id) if state.count >= 2 && self.session.toggle_smooth(id) => {
-                                self.session.selection = std::collections::HashSet::from([id]);
+                                self.session.replace_point_selection([id]);
                                 self.emit(ctx, true);
                             }
                             Some(id) => {
-                                self.session.metaballs.selected.clear();
-                                self.session.image_selected = false;
-                                if shift {
-                                    if !self.session.selection.remove(&id) {
-                                        self.session.selection.insert(id);
-                                    }
-                                } else if !self.session.selection.contains(&id) {
-                                    self.session.clear_selection();
-                                    self.session.selection.insert(id);
-                                }
-                                self.session.selected_component = None;
+                                self.session.press_point(id, shift);
                                 self.session.begin_point_drag();
                                 self.drag = Drag::Points { start: at };
                                 self.emit(ctx, false);
@@ -627,18 +490,15 @@ impl EditorWidget {
                             None => {
                                 let design = self.screen_to_glyph_design(at);
                                 if let Some(component) = self.session.component_at(design) {
-                                    self.session.metaballs.selected.clear();
-                                    self.session.select_component_id(component);
+                                    self.session
+                                        .select_only(SelectionTarget::Component(component));
                                     self.drag = Drag::Component { last: design };
                                     self.emit(ctx, false);
                                     ctx.set_handled();
                                     return;
                                 }
                                 if !shift && let Some(drag) = self.image_press(design) {
-                                    self.session.metaballs.selected.clear();
-                                    self.session.clear_selection();
-                                    self.session.selected_component = None;
-                                    self.session.image_selected = true;
+                                    self.session.select_only(SelectionTarget::Image);
                                     self.drag = drag;
                                     self.emit(ctx, false);
                                     ctx.request_render();
@@ -646,10 +506,7 @@ impl EditorWidget {
                                     return;
                                 }
                                 if !shift {
-                                    self.session.metaballs.selected.clear();
-                                    self.session.clear_selection();
-                                    self.session.selected_component = None;
-                                    self.session.image_selected = false;
+                                    self.session.select_only(SelectionTarget::Nothing);
                                     self.emit(ctx, false);
                                 }
                                 self.drag = Drag::Marquee {
@@ -812,33 +669,16 @@ impl EditorWidget {
                         ctx.request_render();
                     }
                     Drag::LabelCorner { region, detach } => {
-                        use crate::application::editor::tools::label::{LabelMoving, on_grid};
-                        let (region, detach) = (*region, *detach);
-                        if let Some(LabelMoving::Corner { corner, .. }) = self.session.label.moving
+                        let reach = HIT_RADIUS_PX / self.session.viewport.zoom;
+                        if self
+                            .session
+                            .drag_label_corner(*region, *detach, glyph_design, reach)
                         {
-                            let to = if detach {
-                                on_grid(glyph_design)
-                            } else {
-                                self.session.snapped_label_corner(
-                                    glyph_design,
-                                    HIT_RADIUS_PX / self.session.viewport.zoom,
-                                    Some(region),
-                                )
-                            };
-                            self.session.label.moving =
-                                Some(LabelMoving::Corner { region, corner, to });
                             ctx.request_render();
                         }
                     }
                     Drag::LabelCorners { start } => {
-                        use crate::application::editor::tools::label::LabelMoving;
-                        let start = *start;
-                        // Whole grid steps, so the shape shows where it will land.
-                        self.session.label.moving = Some(LabelMoving::Corners {
-                            by: crate::application::editor::tools::label::grid_step(
-                                glyph_design - start,
-                            ),
-                        });
+                        self.session.drag_label_corners(*start, glyph_design);
                         ctx.request_render();
                     }
                     Drag::LabelMarquee { current, .. } => {
@@ -846,30 +686,13 @@ impl EditorWidget {
                         ctx.request_render();
                     }
                     Drag::LabelRegion { region, start } => {
-                        use crate::application::editor::tools::label::LabelMoving;
-                        let (region, start) = (*region, *start);
-                        self.session.label.moving = Some(LabelMoving::Region {
-                            region,
-                            by: crate::application::editor::tools::label::grid_step(
-                                glyph_design - start,
-                            ),
-                        });
+                        self.session
+                            .drag_label_region(*region, *start, glyph_design);
                         ctx.request_render();
                     }
                     Drag::LabelCut { cut, end, start } => {
-                        use crate::application::editor::tools::label::LabelMoving;
-                        let (cut, end, start) = (*cut, *end, *start);
-                        self.session.label.moving = Some(match end {
-                            Some(end) => LabelMoving::CutEnd {
-                                cut,
-                                end,
-                                to: glyph_design,
-                            },
-                            None => LabelMoving::Cut {
-                                cut,
-                                by: glyph_design - start,
-                            },
-                        });
+                        self.session
+                            .drag_label_cut(*cut, *end, *start, glyph_design);
                         ctx.request_render();
                     }
                     Drag::Lasso { points, .. } | Drag::Label { points, .. } => {
@@ -955,31 +778,20 @@ impl EditorWidget {
                     } => {
                         let rect = Rect::from_points(*start, *current);
                         let additive = *additive;
-                        if !additive {
-                            self.session.clear_selection();
-                        }
-                        for (id, sp, _, _, _) in self.screen_points() {
-                            if rect.contains(sp) {
-                                self.session.selection.insert(id);
-                            }
-                        }
                         let affine = self.glyph_affine();
-                        for (id, position) in self.session.anchor_points() {
-                            if rect.contains(affine * position) {
-                                self.session.selected_anchors.insert(id);
-                            }
-                        }
+                        self.session
+                            .select_within(SelectionShape::Rect(rect), affine, additive);
                         // A locked picture cannot be moved, so a drag over it is a marquee;
                         // a click on it still selects it, to inspect or unlock it.
                         let clicked = rect.width().max(rect.height()) < 3.0;
                         if clicked && !additive && !self.session.has_selection() {
                             let design = self.screen_to_glyph_design(*start);
-                            self.session.image_selected =
-                                self.image_frame(true).is_some_and(|(t, w, h)| {
-                                    (t * Rect::new(0.0, 0.0, w, h).to_path(0.1))
-                                        .bounding_box()
-                                        .contains(design)
-                                });
+                            let on_image = self.image_frame(true).is_some_and(|(t, w, h)| {
+                                (t * Rect::new(0.0, 0.0, w, h).to_path(0.1))
+                                    .bounding_box()
+                                    .contains(design)
+                            });
+                            self.session.set_image_selected(on_image);
                         }
                         self.drag = Drag::None;
                         self.emit(ctx, false);
@@ -995,15 +807,9 @@ impl EditorWidget {
                         self.emit(ctx, changed);
                     }
                     Drag::LabelMarquee { start, current } => {
-                        use crate::application::editor::tools::label::LabelSelection;
                         let rect = Rect::from_points(*start, *current);
                         if !cancelled {
-                            let picked = self.session.corners_in(rect);
-                            self.session.label.selected = if picked.is_empty() {
-                                None
-                            } else {
-                                Some(LabelSelection::Corners(picked))
-                            };
+                            self.session.select_label_corners_in(rect);
                         }
                         self.drag = Drag::None;
                         self.emit(ctx, false);
@@ -1029,22 +835,8 @@ impl EditorWidget {
                                     r.union_pt(*p)
                                 });
                             let moved = travelled.width().max(travelled.height()) > 4.0;
-                            let contours = self.session.label_contours();
                             let near = 12.0 / self.session.viewport.zoom;
-                            if !moved {
-                                // A click on nothing lets go of the picked shape.
-                                self.session.label.selected = None;
-                            } else {
-                                // Labels are polygons: a loop makes one, any other drag
-                                // does nothing.
-                                use crate::application::editor::tools::label::{DragKind, drag_is};
-                                if drag_is(&design, &contours, near) == DragKind::Lasso {
-                                    changed = self.session.add_label_lasso(&design);
-                                } else {
-                                    self.session.label.error =
-                                        Some("Drag a loop: close it near where it began".into());
-                                }
-                            }
+                            changed = self.session.finish_label_freehand(&design, moved, near);
                         }
                         self.drag = Drag::None;
                         self.label_hover = None;
@@ -1053,43 +845,23 @@ impl EditorWidget {
                     Drag::Lasso { points, additive } => {
                         if !cancelled {
                             let additive = *additive;
-                            let mut path = kurbo::BezPath::new();
-                            if let Some(first) = points.first() {
-                                path.move_to(*first);
+                            if points.len() >= 3 {
+                                let mut path = kurbo::BezPath::new();
+                                path.move_to(points[0]);
                                 for point in &points[1..] {
                                     path.line_to(*point);
                                 }
                                 path.close_path();
-                            }
-                            let chosen: Vec<_> = if points.len() >= 3 {
-                                self.screen_points()
-                                    .into_iter()
-                                    .filter(|(_, point, _, _, _)| path.winding(*point) != 0)
-                                    .map(|(id, _, _, _, _)| id)
-                                    .collect()
+                                let affine = self.glyph_affine();
+                                self.session.select_within(
+                                    SelectionShape::Path(&path),
+                                    affine,
+                                    additive,
+                                );
                             } else {
-                                points
-                                    .last()
-                                    .and_then(|point| self.hit_point(*point))
-                                    .into_iter()
-                                    .collect()
-                            };
-                            let affine = self.glyph_affine();
-                            let anchors: Vec<_> = if points.len() >= 3 {
-                                self.session
-                                    .anchor_points()
-                                    .into_iter()
-                                    .filter(|(_, position)| path.winding(affine * *position) != 0)
-                                    .map(|(id, _)| id)
-                                    .collect()
-                            } else {
-                                Vec::new()
-                            };
-                            if !additive {
-                                self.session.clear_selection();
+                                let chosen = points.last().and_then(|point| self.hit_point(*point));
+                                self.session.select_points(chosen, additive);
                             }
-                            self.session.selection.extend(chosen);
-                            self.session.selected_anchors.extend(anchors);
                             self.emit(ctx, false);
                         }
                         self.drag = Drag::None;

@@ -2268,6 +2268,417 @@ impl Session {
     }
 }
 
+/// One object that a canvas press selects in place of every other object.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SelectionTarget {
+    /// A top-level component of the open glyph.
+    Component(ComponentId),
+    /// The picture of the layer.
+    Image,
+    /// Empty canvas.
+    Nothing,
+}
+
+/// An area that selects the points and anchors inside it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SelectionShape<'a> {
+    /// A marquee rectangle.
+    Rect(Rect),
+    /// A closed freehand boundary.
+    /// A position is inside when its winding number is not zero.
+    Path(&'a BezPath),
+}
+
+impl SelectionShape<'_> {
+    fn contains(self, position: Point) -> bool {
+        use kurbo::Shape as _;
+        match self {
+            Self::Rect(rect) => rect.contains(position),
+            Self::Path(path) => path.winding(position) != 0,
+        }
+    }
+}
+
+/// The modifier keys that change a press of the label tool.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LabelModifiers {
+    /// Shift is held: the press adds to the corner selection or starts a corner marquee.
+    pub shift: bool,
+    /// Option is held: the press takes one corner away from the corners that share its position.
+    pub alt: bool,
+}
+
+/// The gesture that a press of the label tool starts.
+/// The session already holds the selection and the moving shape.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum LabelPress {
+    /// The press changed the selection or opened a word, and no drag follows.
+    Selected,
+    /// One polygon corner follows the pointer.
+    Corner { region: usize, detach: bool },
+    /// The press added a corner to a polygon edge, and that corner follows the pointer.
+    NewCorner { region: usize },
+    /// The selected corners follow the pointer from `start`.
+    Corners { start: Point },
+    /// A cut, or the end `end` of it, follows the pointer from `start`.
+    Cut {
+        cut: usize,
+        end: Option<usize>,
+        start: Point,
+    },
+    /// A whole polygon follows the pointer from `start`.
+    Region { region: usize, start: Point },
+    /// A box that selects corners starts at `start`.
+    Marquee { start: Point },
+    /// A freehand boundary starts at the pointer.
+    Freehand,
+    /// The press was on a polygon edge that could not take a corner.
+    Ignored,
+}
+
+impl Session {
+    /// Select `target` and deselect every metaball.
+    /// A component target that the glyph does not hold leaves the point, anchor and component selection unchanged.
+    /// A component target does not change whether the picture is selected.
+    pub(crate) fn select_only(&mut self, target: SelectionTarget) {
+        self.metaballs.selected.clear();
+        match target {
+            SelectionTarget::Component(component) => {
+                self.select_component_id(component);
+            }
+            SelectionTarget::Image | SelectionTarget::Nothing => {
+                self.clear_selection();
+                self.selected_component = None;
+                self.image_selected = target == SelectionTarget::Image;
+            }
+        }
+    }
+
+    /// Apply a primary press on a point.
+    /// With `toggle`, the press adds the point to the selection or removes it.
+    /// Without `toggle`, a press on an unselected point selects only that point.
+    /// A press on a selected point keeps the selection, so that a drag moves all of it.
+    pub(crate) fn press_point(&mut self, point: PointId, toggle: bool) {
+        self.metaballs.selected.clear();
+        self.image_selected = false;
+        if toggle {
+            if !self.selection.remove(&point) {
+                self.selection.insert(point);
+            }
+        } else if !self.selection.contains(&point) {
+            self.clear_selection();
+            self.selection.insert(point);
+        }
+        self.selected_component = None;
+    }
+
+    /// Apply a primary press on an anchor.
+    /// The rules are those of [`Self::press_point`].
+    pub(crate) fn press_anchor(&mut self, anchor: AnchorId, toggle: bool) {
+        self.metaballs.selected.clear();
+        self.image_selected = false;
+        self.selected_component = None;
+        if toggle {
+            if !self.selected_anchors.remove(&anchor) {
+                self.selected_anchors.insert(anchor);
+            }
+        } else if !self.selected_anchors.contains(&anchor) {
+            self.clear_selection();
+            self.selected_anchors.insert(anchor);
+        }
+    }
+
+    /// Replace the point selection with `points`.
+    /// The anchor, component, picture and metaball selections stay as they are.
+    pub(crate) fn replace_point_selection(&mut self, points: impl IntoIterator<Item = PointId>) {
+        self.selection = points.into_iter().collect();
+    }
+
+    /// Add `points` to the selection.
+    /// Without `additive`, the point and anchor selection is cleared first.
+    pub(crate) fn select_points(
+        &mut self,
+        points: impl IntoIterator<Item = PointId>,
+        additive: bool,
+    ) {
+        if !additive {
+            self.clear_selection();
+        }
+        self.selection.extend(points);
+    }
+
+    /// Select the points and anchors that `shape` contains.
+    /// `to_shape` maps glyph design space to the space of `shape`.
+    /// Without `additive`, the point and anchor selection is cleared first.
+    pub(crate) fn select_within(
+        &mut self,
+        shape: SelectionShape<'_>,
+        to_shape: kurbo::Affine,
+        additive: bool,
+    ) {
+        if !additive {
+            self.clear_selection();
+        }
+        for point in self.points() {
+            if shape.contains(to_shape * point.point) {
+                self.selection.insert(point.id);
+            }
+        }
+        for (anchor, position) in self.anchor_points() {
+            if shape.contains(to_shape * position) {
+                self.selected_anchors.insert(anchor);
+            }
+        }
+    }
+
+    /// Set whether the picture of the layer is selected.
+    /// The other selections stay as they are.
+    pub(crate) fn set_image_selected(&mut self, selected: bool) {
+        self.image_selected = selected;
+    }
+
+    /// Deselect every metaball, and discard the drafts, active group and error of the metaball tool.
+    pub(crate) fn clear_metaball_selection(&mut self) {
+        self.metaballs = metaballs::MetaballSelection::default();
+    }
+
+    /// Deselect the picked label shape.
+    pub(crate) fn clear_label_selection(&mut self) {
+        self.label.selected = None;
+    }
+
+    /// Apply a primary press of the label tool at `design`.
+    /// `reach` is the hit radius in design units.
+    /// The return value names the drag that the widget starts.
+    pub(crate) fn label_press(
+        &mut self,
+        design: Point,
+        reach: f64,
+        modifiers: LabelModifiers,
+    ) -> LabelPress {
+        use label::{LabelHit, LabelMoving, LabelSelection};
+        // A new press starts fresh: the last gesture's hint goes away.
+        self.label.error = None;
+        match self.label_hit(design, reach) {
+            LabelHit::Corner { region, corner } => {
+                self.activate_label_region(region);
+                let mut picked = self.selected_corners();
+                if modifiers.shift {
+                    // Shift adds a corner to the set, or takes it out.
+                    match picked.iter().position(|c| *c == (region, corner)) {
+                        Some(at) => {
+                            picked.remove(at);
+                        }
+                        None => picked.push((region, corner)),
+                    }
+                    self.label.selected = Some(LabelSelection::Corners(picked));
+                    return LabelPress::Selected;
+                }
+                if modifiers.alt || !picked.contains(&(region, corner)) {
+                    // Corners that meet here move as one; Option takes
+                    // only the one on top, to pull it away.
+                    let at = self.corner_point(region, corner);
+                    picked = if modifiers.alt {
+                        Vec::new()
+                    } else {
+                        at.map(|at| self.corners_at(at)).unwrap_or_default()
+                    };
+                    if picked.is_empty() {
+                        picked.push((region, corner));
+                    }
+                    self.label.selected = Some(LabelSelection::Corners(picked.clone()));
+                }
+                if picked.len() == 1 {
+                    self.label.moving = Some(LabelMoving::Corner {
+                        region,
+                        corner,
+                        to: design,
+                    });
+                    LabelPress::Corner {
+                        region,
+                        detach: modifiers.alt,
+                    }
+                } else {
+                    self.label.moving = Some(LabelMoving::Corners {
+                        by: kurbo::Vec2::ZERO,
+                    });
+                    LabelPress::Corners { start: design }
+                }
+            }
+            LabelHit::Edge {
+                region,
+                after,
+                at: on,
+            } => {
+                // A corner appears on the edge and follows the pointer.
+                self.activate_label_region(region);
+                let Some(corner) = self.add_label_corner(region, after, on) else {
+                    return LabelPress::Ignored;
+                };
+                self.label.selected = Some(LabelSelection::Corners(vec![(region, corner)]));
+                self.label.moving = Some(LabelMoving::Corner {
+                    region,
+                    corner,
+                    to: on,
+                });
+                LabelPress::NewCorner { region }
+            }
+            LabelHit::CutEnd { cut, end } => {
+                self.label.selected = Some(LabelSelection::Cut(cut));
+                self.label.moving = Some(LabelMoving::CutEnd {
+                    cut,
+                    end,
+                    to: design,
+                });
+                LabelPress::Cut {
+                    cut,
+                    end: Some(end),
+                    start: design,
+                }
+            }
+            LabelHit::Cut { cut } => {
+                self.label.selected = Some(LabelSelection::Cut(cut));
+                self.label.moving = Some(LabelMoving::Cut {
+                    cut,
+                    by: kurbo::Vec2::ZERO,
+                });
+                LabelPress::Cut {
+                    cut,
+                    end: None,
+                    start: design,
+                }
+            }
+            LabelHit::Lasso { region } => {
+                // A press inside a lasso picks it up: its letter becomes
+                // active and its corners show. A drag moves the whole shape.
+                self.activate_label_region(region);
+                self.label.selected = Some(LabelSelection::Region(region));
+                self.label.moving = Some(LabelMoving::Region {
+                    region,
+                    by: kurbo::Vec2::ZERO,
+                });
+                LabelPress::Region {
+                    region,
+                    start: design,
+                }
+            }
+            // Shift-drag: a box that selects corners.
+            LabelHit::Nothing if modifiers.shift && self.label.sample.is_some() => {
+                LabelPress::Marquee { start: design }
+            }
+            LabelHit::Nothing => {
+                // Words are not a mode: a press outside the open word
+                // opens the word under it, or closes the open one.
+                let open = self.label.sample;
+                let inside_open = open.is_some_and(|open| self.sample_contains(open, design));
+                let under = (!inside_open).then(|| self.sample_at(design)).flatten();
+                if open.is_some() && !inside_open && under.is_none() {
+                    self.select_sample(None);
+                }
+                if let Some(sample) = under {
+                    // A click on a word opens it.
+                    self.select_sample(Some(sample));
+                    LabelPress::Selected
+                } else {
+                    LabelPress::Freehand
+                }
+            }
+        }
+    }
+
+    /// Move the dragged label corner of `region` to the pointer at `to`.
+    /// With `detach`, the corner goes to the grid and does not snap to a corner of another polygon.
+    /// Returns whether a corner is being dragged.
+    pub(crate) fn drag_label_corner(
+        &mut self,
+        region: usize,
+        detach: bool,
+        to: Point,
+        reach: f64,
+    ) -> bool {
+        let Some(label::LabelMoving::Corner { corner, .. }) = self.label.moving else {
+            return false;
+        };
+        let to = if detach {
+            label::on_grid(to)
+        } else {
+            self.snapped_label_corner(to, reach, Some(region))
+        };
+        self.label.moving = Some(label::LabelMoving::Corner { region, corner, to });
+        true
+    }
+
+    /// Move the selected label corners by the pointer travel from `start` to `to`, in whole grid steps.
+    pub(crate) fn drag_label_corners(&mut self, start: Point, to: Point) {
+        // Whole grid steps, so the shape shows where it will land.
+        self.label.moving = Some(label::LabelMoving::Corners {
+            by: label::grid_step(to - start),
+        });
+    }
+
+    /// Move the label polygon `region` by the pointer travel from `start` to `to`, in whole grid steps.
+    pub(crate) fn drag_label_region(&mut self, region: usize, start: Point, to: Point) {
+        self.label.moving = Some(label::LabelMoving::Region {
+            region,
+            by: label::grid_step(to - start),
+        });
+    }
+
+    /// Move the label cut `cut`, or its end `end`, with the pointer at `to`.
+    pub(crate) fn drag_label_cut(
+        &mut self,
+        cut: usize,
+        end: Option<usize>,
+        start: Point,
+        to: Point,
+    ) {
+        self.label.moving = Some(match end {
+            Some(end) => label::LabelMoving::CutEnd { cut, end, to },
+            None => label::LabelMoving::Cut {
+                cut,
+                by: to - start,
+            },
+        });
+    }
+
+    /// Select the label corners inside `rect`, or deselect when it holds none.
+    pub(crate) fn select_label_corners_in(&mut self, rect: Rect) {
+        let picked = self.corners_in(rect);
+        self.label.selected = if picked.is_empty() {
+            None
+        } else {
+            Some(label::LabelSelection::Corners(picked))
+        };
+    }
+
+    /// Finish a freehand drag of the label tool along `design`.
+    /// `moved` is false for a click, which deselects the picked shape.
+    /// A closed loop becomes a polygon, and any other drag sets the hint of the tool.
+    /// `near` is the distance in design units within which a loop counts as closed.
+    /// Returns whether the labels changed.
+    pub(crate) fn finish_label_freehand(
+        &mut self,
+        design: &[Point],
+        moved: bool,
+        near: f64,
+    ) -> bool {
+        let contours = self.label_contours();
+        if !moved {
+            // A click on nothing lets go of the picked shape.
+            self.label.selected = None;
+            return false;
+        }
+        // Labels are polygons: a loop makes one, any other drag
+        // does nothing.
+        if label::drag_is(design, &contours, near) == label::DragKind::Lasso {
+            self.add_label_lasso(design)
+        } else {
+            self.label.error = Some("Drag a loop: close it near where it began".into());
+            false
+        }
+    }
+}
+
 /// Whether an edit with this history label can move anchors, so anchor-locked components
 /// must be realigned when it commits or replays.
 pub(crate) fn moves_anchors(label: &str) -> bool {
@@ -3649,5 +4060,330 @@ mod tests {
         session.reload_from_project(&project, &address);
         assert_eq!(projected_glyph(&session).components.len(), 1);
         assert_eq!(session.components.bounding_box(), before_bounds);
+    }
+
+    /// `two_squares` with one anchor at (50, 300), far from every point.
+    fn two_squares_and_an_anchor() -> Session {
+        let mut font = norad::Font::new();
+        let mut glyph = norad::Glyph::new("test");
+        for offset in [0.0, 200.0] {
+            let mut contour = norad::Contour::default();
+            for (x, y) in [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)] {
+                contour.points.push(norad::ContourPoint::new(
+                    x + offset,
+                    y,
+                    norad::PointType::Line,
+                    false,
+                    None,
+                    None,
+                ));
+            }
+            glyph.contours.push(contour);
+        }
+        glyph.anchors.push(norad::Anchor::new(
+            50.0,
+            300.0,
+            Some(norad::Name::new("top").unwrap()),
+            None,
+            None,
+        ));
+        font.default_layer_mut().insert_glyph(glyph);
+        Session::new(&font, "test").expect("glyph is there")
+    }
+
+    fn point_ids_of_contour(session: &Session, contour: usize) -> HashSet<PointId> {
+        (0..4)
+            .map(|index| session.point_id_at(contour, index).expect("square point"))
+            .collect()
+    }
+
+    #[test]
+    fn select_only_nothing_or_the_image_clears_every_other_selection() {
+        let mut session = two_squares_and_an_anchor();
+        session.selection = point_ids_of_contour(&session, 0);
+        session.selected_anchors = session
+            .anchor_points()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        session.metaballs.selected.insert((0, 0));
+
+        session.select_only(SelectionTarget::Image);
+        assert!(session.image_selected);
+        assert!(!session.has_selection());
+        assert!(session.metaballs.selected.is_empty());
+        assert_eq!(session.selected_component, None);
+
+        session.selection = point_ids_of_contour(&session, 1);
+        session.select_only(SelectionTarget::Nothing);
+        assert!(!session.image_selected);
+        assert!(!session.has_selection());
+    }
+
+    #[test]
+    fn a_press_on_a_point_selects_it_and_keeps_a_selection_that_holds_it() {
+        let mut session = two_squares_and_an_anchor();
+        let first = session.point_id_at(0, 0).unwrap();
+        let second = session.point_id_at(0, 1).unwrap();
+        let anchor = session.anchor_points()[0].0;
+        session.selected_anchors.insert(anchor);
+        session.image_selected = true;
+        session.metaballs.selected.insert((0, 0));
+
+        session.press_point(first, false);
+        assert_eq!(session.selection, HashSet::from([first]));
+        assert!(
+            session.selected_anchors.is_empty(),
+            "a new selection drops the anchor"
+        );
+        assert!(!session.image_selected);
+        assert!(session.metaballs.selected.is_empty());
+
+        session.press_point(second, true);
+        assert_eq!(session.selection, HashSet::from([first, second]));
+        // A press on a selected point keeps the whole selection, so a drag moves all of it.
+        session.press_point(first, false);
+        assert_eq!(session.selection, HashSet::from([first, second]));
+        session.press_point(first, true);
+        assert_eq!(session.selection, HashSet::from([second]));
+    }
+
+    #[test]
+    fn a_press_on_an_anchor_follows_the_point_rules() {
+        let mut session = two_squares_and_an_anchor();
+        let point = session.point_id_at(0, 0).unwrap();
+        let anchor = session.anchor_points()[0].0;
+        session.selection.insert(point);
+
+        session.press_anchor(anchor, true);
+        assert_eq!(session.selection, HashSet::from([point]), "toggle adds");
+        assert_eq!(session.selected_anchors, HashSet::from([anchor]));
+        session.press_anchor(anchor, false);
+        assert_eq!(
+            session.selection,
+            HashSet::from([point]),
+            "already selected"
+        );
+        session.press_anchor(anchor, true);
+        assert!(session.selected_anchors.is_empty());
+        session.press_anchor(anchor, false);
+        assert!(session.selection.is_empty());
+        assert_eq!(session.selected_anchors, HashSet::from([anchor]));
+    }
+
+    #[test]
+    fn select_within_takes_the_points_and_anchors_inside_the_shape() {
+        let mut session = two_squares_and_an_anchor();
+        let anchor = session.anchor_points()[0].0;
+        let left = point_ids_of_contour(&session, 0);
+        let right = point_ids_of_contour(&session, 1);
+
+        // The left square and the anchor, in design space.
+        let rect = Rect::new(-10.0, -10.0, 110.0, 310.0);
+        session.select_within(SelectionShape::Rect(rect), kurbo::Affine::IDENTITY, false);
+        assert_eq!(session.selection, left);
+        assert_eq!(session.selected_anchors, HashSet::from([anchor]));
+
+        // A shape in another space: the transform maps design space into it.
+        let mut path = BezPath::new();
+        path.move_to((390.0, -20.0));
+        path.line_to((620.0, -20.0));
+        path.line_to((620.0, 220.0));
+        path.line_to((390.0, 220.0));
+        path.close_path();
+        let to_shape = kurbo::Affine::scale(2.0);
+        session.select_within(SelectionShape::Path(&path), to_shape, true);
+        let both: HashSet<PointId> = left.union(&right).copied().collect();
+        assert_eq!(session.selection, both, "additive keeps the left square");
+        assert_eq!(session.selected_anchors, HashSet::from([anchor]));
+
+        session.select_within(SelectionShape::Path(&path), to_shape, false);
+        assert_eq!(session.selection, right);
+        assert!(session.selected_anchors.is_empty());
+    }
+
+    #[test]
+    fn select_points_and_replace_point_selection_keep_the_other_selections() {
+        let mut session = two_squares_and_an_anchor();
+        let anchor = session.anchor_points()[0].0;
+        let first = session.point_id_at(0, 0).unwrap();
+        let second = session.point_id_at(1, 0).unwrap();
+        session.selected_anchors.insert(anchor);
+        session.image_selected = true;
+
+        session.select_points([first], true);
+        assert_eq!(session.selection, HashSet::from([first]));
+        assert_eq!(session.selected_anchors, HashSet::from([anchor]));
+        session.replace_point_selection([second]);
+        assert_eq!(session.selection, HashSet::from([second]));
+        assert_eq!(session.selected_anchors, HashSet::from([anchor]));
+        assert!(session.image_selected);
+        session.select_points(None, false);
+        assert!(!session.has_selection());
+    }
+
+    /// A label workspace: one word around a bar, with the letter ب labeled by a square.
+    fn labeled_word(tag: &str) -> (Workspace, std::path::PathBuf) {
+        let path = std::env::temp_dir().join(format!(
+            "xilem-session-label-{tag}-{}.ufo",
+            std::process::id()
+        ));
+        let mut font = norad::Font::new();
+        let mut glyph = norad::Glyph::new("item");
+        glyph.width = 700.0;
+        let mut contour = norad::Contour::default();
+        for (x, y) in [(100.0, 0.0), (600.0, 0.0), (600.0, 100.0), (100.0, 100.0)] {
+            contour.points.push(norad::ContourPoint::new(
+                x,
+                y,
+                norad::PointType::Line,
+                false,
+                None,
+                None,
+            ));
+        }
+        glyph.contours.push(contour);
+        font.default_layer_mut().insert_glyph(glyph);
+        font.save(&path).unwrap();
+        let mut app = Workspace::open(&path).unwrap();
+        app.open_glyph(app.font.index_of("item").unwrap());
+        app.select_tool(Tool::Label);
+        let around = |x0: f64, x1: f64, y0: f64, y1: f64| {
+            [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+                .into_iter()
+                .map(Point::from)
+                .collect::<Vec<_>>()
+        };
+        app.edit_label(|s| s.add_label_lasso(&around(50.0, 650.0, -50.0, 300.0)));
+        app.edit_label(|s| s.set_sample_text("بس".into()));
+        app.edit_label(|s| s.add_label_lasso(&around(60.0, 350.0, -40.0, 160.0)));
+        (app, path)
+    }
+
+    fn first_corner(session: &Session) -> Point {
+        let corner = session.neural_item().samples[0].regions[0].polygon[0];
+        Point::new(corner[0], corner[1])
+    }
+
+    #[test]
+    fn a_label_press_on_a_corner_picks_it_and_starts_a_corner_drag() {
+        use label::{LabelMoving, LabelSelection};
+        let (app, path) = labeled_word("corner");
+        let mut session = (*app.session).clone();
+        let corner = first_corner(&session);
+        session.label.error = Some("old hint".into());
+
+        let press = session.label_press(corner, 8.0, LabelModifiers::default());
+        assert_eq!(
+            press,
+            LabelPress::Corner {
+                region: 0,
+                detach: false
+            }
+        );
+        assert_eq!(session.label.error, None, "a new press clears the hint");
+        assert_eq!(
+            session.label.selected,
+            Some(LabelSelection::Corners(vec![(0, 0)]))
+        );
+        assert!(matches!(
+            session.label.moving,
+            Some(LabelMoving::Corner {
+                region: 0,
+                corner: 0,
+                ..
+            })
+        ));
+        let alt = LabelModifiers {
+            shift: false,
+            alt: true,
+        };
+        assert_eq!(
+            session.label_press(corner, 8.0, alt),
+            LabelPress::Corner {
+                region: 0,
+                detach: true
+            }
+        );
+
+        // Shift takes the corner out of the set, and puts it back, without a drag.
+        session.label.moving = None;
+        let shift = LabelModifiers {
+            shift: true,
+            alt: false,
+        };
+        assert_eq!(
+            session.label_press(corner, 8.0, shift),
+            LabelPress::Selected
+        );
+        assert_eq!(
+            session.label.selected,
+            Some(LabelSelection::Corners(Vec::new()))
+        );
+        assert_eq!(
+            session.label_press(corner, 8.0, shift),
+            LabelPress::Selected
+        );
+        assert_eq!(
+            session.label.selected,
+            Some(LabelSelection::Corners(vec![(0, 0)]))
+        );
+        assert_eq!(session.label.moving, None);
+        std::fs::remove_dir_all(&path).ok();
+    }
+
+    #[test]
+    fn a_label_press_inside_a_polygon_or_on_nothing_starts_the_matching_gesture() {
+        use label::LabelSelection;
+        let (app, path) = labeled_word("region");
+        let mut session = (*app.session).clone();
+        let inside = Point::new(200.0, 60.0);
+        assert_eq!(
+            session.label_press(inside, 8.0, LabelModifiers::default()),
+            LabelPress::Region {
+                region: 0,
+                start: inside
+            }
+        );
+        assert_eq!(session.label.selected, Some(LabelSelection::Region(0)));
+        session.label.moving = None;
+
+        // Shift on nothing inside the open word: a corner marquee.
+        let empty = Point::new(500.0, 250.0);
+        let shift = LabelModifiers {
+            shift: true,
+            alt: false,
+        };
+        assert_eq!(
+            session.label_press(empty, 8.0, shift),
+            LabelPress::Marquee { start: empty }
+        );
+        assert_eq!(session.label.sample, Some(0));
+
+        // A plain press far from every word closes the open word and starts a freehand drag.
+        let far = Point::new(5000.0, 5000.0);
+        assert_eq!(
+            session.label_press(far, 8.0, LabelModifiers::default()),
+            LabelPress::Freehand
+        );
+        assert_eq!(session.label.sample, None);
+        std::fs::remove_dir_all(&path).ok();
+    }
+
+    #[test]
+    fn a_label_freehand_click_deselects_and_an_open_drag_leaves_a_hint() {
+        use label::LabelSelection;
+        let (app, path) = labeled_word("freehand");
+        let mut session = (*app.session).clone();
+        session.label.selected = Some(LabelSelection::Region(0));
+        let click = [Point::new(500.0, 250.0)];
+        assert!(!session.finish_label_freehand(&click, false, 12.0));
+        assert_eq!(session.label.selected, None);
+        assert_eq!(session.label.error, None);
+
+        let line = [Point::new(400.0, 250.0), Point::new(640.0, 250.0)];
+        assert!(!session.finish_label_freehand(&line, true, 12.0));
+        assert!(session.label.error.is_some());
+        std::fs::remove_dir_all(&path).ok();
     }
 }
