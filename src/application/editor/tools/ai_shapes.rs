@@ -141,10 +141,6 @@ pub(crate) enum TrainSource {
     SampleFont,
 }
 
-/// The pump's message: something arrived from a worker thread.
-#[derive(Debug)]
-pub(crate) struct ShapesProgress;
-
 /// Everything the tool holds between frames.
 #[derive(Debug, Default)]
 pub(crate) struct AiShapesState {

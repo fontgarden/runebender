@@ -150,10 +150,6 @@ impl Drop for GraphState {
     }
 }
 
-/// The pump's message: something arrived from the run thread.
-#[derive(Debug)]
-pub(crate) struct GraphProgress;
-
 /// `bolden.graph.json` as `bolden`.
 pub(crate) fn file_label(path: &Path) -> String {
     path.file_name()

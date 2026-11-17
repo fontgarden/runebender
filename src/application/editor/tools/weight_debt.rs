@@ -56,10 +56,6 @@ pub(crate) struct DebtEvalJob {
     pub(crate) heavy_path: PathBuf,
 }
 
-/// The pump's message: the eval thread has something.
-#[derive(Debug)]
-pub(crate) struct DebtEvalProgress;
-
 /// The report and what was learned from it, cached by document state.
 #[derive(Debug)]
 pub(crate) struct DebtCache {

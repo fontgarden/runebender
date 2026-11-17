@@ -26,10 +26,6 @@ pub(crate) struct TrainJob {
     pub(crate) place: Arc<Mutex<String>>,
 }
 
-/// Message sent while the worker runs and when it has finished.
-#[derive(Debug)]
-pub(crate) struct TrainProgress;
-
 /// One trained version beside the source.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ModelVersion {

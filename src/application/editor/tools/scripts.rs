@@ -69,10 +69,6 @@ pub(crate) struct ScriptProposal {
     pub(crate) applied: bool,
 }
 
-/// A wake-up from the asynchronous script status pump.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ScriptProgress;
-
 /// Presentation state which remains local until the runtime library is wired.
 ///
 /// Keeping this buffer separate from the library lets an assistant offer code

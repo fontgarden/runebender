@@ -64,10 +64,6 @@ pub(crate) struct ModelJob {
     sent: Option<ModelRequest>,
 }
 
-/// Message sent while the worker draws.
-#[derive(Debug)]
-pub(crate) struct ModelProgress;
-
 /// The model view's state.
 #[derive(Default)]
 pub(crate) struct ModelState {

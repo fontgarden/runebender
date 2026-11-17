@@ -230,10 +230,6 @@ impl Drop for ModelCaptureDirectory {
     }
 }
 
-/// The pump's message: something arrived from the run thread.
-#[derive(Debug)]
-pub(crate) struct AiProgress;
-
 /// Capture canonical foreground revisions for named glyphs, or the whole
 /// default layer when `names` is empty.
 pub(crate) fn foreground_revisions(

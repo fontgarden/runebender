@@ -7,11 +7,10 @@ use crate::application::actions;
 use crate::application::design;
 use crate::application::design::{DOCK_WIDTH, PROOF_STRIP_HEIGHT};
 use crate::application::design::{Space, Stroke, TextSize};
-use crate::application::editor::tools::{chat, graph, local_ai, scripts, weight_debt};
+use crate::application::editor::tools::{chat, graph, local_ai, weight_debt};
 use crate::application::platform::export;
 #[cfg(unix)]
 use crate::application::platform::live;
-use crate::application::platform::model;
 use crate::application::platform::train;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::application::platform::watch;
@@ -502,124 +501,154 @@ pub(crate) fn app_logic(app: &mut Workspace) -> impl WidgetView<Workspace> + use
     )
 }
 
-/// Poll a `font-ml eval` measurement from the Weight debt block until it ends.
-fn debt_eval_pump<V: WidgetView<Workspace>>(
-    view: V,
-    job: Option<weight_debt::DebtEvalJob>,
-) -> impl WidgetView<Workspace> + use<V> {
-    use xilem::core::{MessageProxy, fork};
-    use xilem::view::task_raw;
-    fork(
-        view,
-        job.map(|job| {
-            task_raw(
-                move |proxy: MessageProxy<weight_debt::DebtEvalProgress>, _: &mut Workspace| {
-                    let job = job.clone();
-                    async move {
-                        loop {
-                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                            let done = job
-                                .finished
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .is_some();
-                            if proxy.message(weight_debt::DebtEvalProgress).is_err() || done {
-                                return;
-                            }
-                        }
-                    }
-                },
-                |app: &mut Workspace, _: weight_debt::DebtEvalProgress| app.debt_eval_pump(),
-            )
-        }),
-    )
+/// What a background poll decides each time it looks at the thing it watches.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Poll {
+    /// Nothing new; look again after the next interval.
+    Wait,
+    /// Wake the interface and keep polling.
+    Wake,
+    /// Wake the interface once more, then stop: the work has ended.
+    WakeThenStop,
+    /// Stop without waking the interface.
+    Stop,
 }
 
-/// Poll the model worker while the model view shows, so its drawings reach the strip.
-fn model_pump<V: WidgetView<Workspace>>(view: V, on: bool) -> impl WidgetView<Workspace> + use<V> {
-    use xilem::core::{MessageProxy, fork};
-    use xilem::view::task_raw;
-    fork(
-        view,
-        on.then(|| {
-            task_raw(
-                move |proxy: MessageProxy<model::ModelProgress>, _: &mut Workspace| async move {
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
-                        if proxy.message(model::ModelProgress).is_err() {
-                            return;
-                        }
-                    }
-                },
-                |app: &mut Workspace, _: model::ModelProgress| app.model_pump(),
-            )
-        }),
-    )
-}
+/// The message a poll sends to wake the interface.
+#[derive(Debug)]
+struct PollTick;
 
-/// Poll a training run: its streamed lines reach the Neural section, and its exit ends the run.
-/// Runs `view`, and while the shapes tool has a worker going (a
-/// drawing or a training run), a task that polls it. The token is
-/// cleared by the pump when nothing is left to poll.
-fn shapes_pump<V: WidgetView<Workspace>>(
+/// Runs `view` and, while `watched` is present, a task that looks at it every `period` and
+/// calls `on_wake` on the interface thread as `check` decides.
+///
+/// Every background job reaches the interface this way: its thread writes to shared state,
+/// and Xilem has no hook to drain a channel from a thread, so a task polls that state.
+fn poll<V, T>(
     view: V,
-    token: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-) -> impl WidgetView<Workspace> + use<V> {
-    use crate::application::editor::tools::ai_shapes::ShapesProgress;
+    watched: Option<T>,
+    period: std::time::Duration,
+    check: fn(&T) -> Poll,
+    on_wake: fn(&mut Workspace),
+) -> impl WidgetView<Workspace> + use<V, T>
+where
+    V: WidgetView<Workspace>,
+    T: Clone + Send + Sync + 'static,
+{
     use xilem::core::{MessageProxy, fork};
     use xilem::view::task_raw;
     fork(
         view,
-        token.map(|token| {
+        watched.map(|watched| {
             task_raw(
-                move |proxy: MessageProxy<ShapesProgress>, _: &mut Workspace| {
-                    let token = token.clone();
+                move |proxy: MessageProxy<PollTick>, _: &mut Workspace| {
+                    let watched = watched.clone();
                     async move {
                         loop {
-                            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                            if !token.load(std::sync::atomic::Ordering::Relaxed)
-                                || proxy.message(ShapesProgress).is_err()
+                            tokio::time::sleep(period).await;
+                            let poll = check(&watched);
+                            if poll == Poll::Stop
+                                || (poll != Poll::Wait && proxy.message(PollTick).is_err())
+                                || poll == Poll::WakeThenStop
                             {
                                 return;
                             }
                         }
                     }
                 },
-                |app: &mut Workspace, _: ShapesProgress| app.shapes_pump(),
+                move |app: &mut Workspace, _: PollTick| on_wake(app),
             )
         }),
     )
 }
 
+fn millis(count: u64) -> std::time::Duration {
+    std::time::Duration::from_millis(count)
+}
+
+/// Whether a job has stored its result.
+fn is_set<T>(slot: &std::sync::Mutex<Option<T>>) -> bool {
+    slot.lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .is_some()
+}
+
+/// Wake on every look until the job has finished, and once more when it has.
+fn until(finished: bool) -> Poll {
+    if finished {
+        Poll::WakeThenStop
+    } else {
+        Poll::Wake
+    }
+}
+
+/// Wake only when the job has unread events or has finished.
+fn on_events(pending: bool, finished: bool) -> Poll {
+    match (pending, finished) {
+        (_, true) => Poll::WakeThenStop,
+        (true, false) => Poll::Wake,
+        (false, false) => Poll::Wait,
+    }
+}
+
+/// Poll a `font-ml eval` measurement from the Weight debt block until it ends.
+fn debt_eval_pump<V: WidgetView<Workspace>>(
+    view: V,
+    job: Option<weight_debt::DebtEvalJob>,
+) -> impl WidgetView<Workspace> + use<V> {
+    poll(
+        view,
+        job,
+        millis(500),
+        |job| until(is_set(&job.finished)),
+        |app| app.debt_eval_pump(),
+    )
+}
+
+/// Poll the model worker while the model view shows, so its drawings reach the strip.
+fn model_pump<V: WidgetView<Workspace>>(view: V, on: bool) -> impl WidgetView<Workspace> + use<V> {
+    poll(
+        view,
+        on.then_some(()),
+        millis(40),
+        |()| Poll::Wake,
+        |app| {
+            app.model_pump();
+        },
+    )
+}
+
+/// Poll the shapes tool while it has a worker going, a drawing or a training run.
+/// The pump clears the token when nothing is left to poll.
+fn shapes_pump<V: WidgetView<Workspace>>(
+    view: V,
+    token: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> impl WidgetView<Workspace> + use<V> {
+    poll(
+        view,
+        token,
+        millis(250),
+        |token| {
+            if token.load(std::sync::atomic::Ordering::Relaxed) {
+                Poll::Wake
+            } else {
+                Poll::Stop
+            }
+        },
+        |app| app.shapes_pump(),
+    )
+}
+
+/// Poll a training run: its streamed lines reach the Neural section, and its exit ends the run.
 fn train_pump<V: WidgetView<Workspace>>(
     view: V,
     job: Option<train::TrainJob>,
 ) -> impl WidgetView<Workspace> + use<V> {
-    use xilem::core::{MessageProxy, fork};
-    use xilem::view::task_raw;
-    fork(
+    poll(
         view,
-        job.map(|job| {
-            task_raw(
-                move |proxy: MessageProxy<train::TrainProgress>, _: &mut Workspace| {
-                    let job = job.clone();
-                    async move {
-                        loop {
-                            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                            let done = job
-                                .finished
-                                .lock()
-                                .unwrap_or_else(|error| error.into_inner())
-                                .is_some();
-                            if proxy.message(train::TrainProgress).is_err() || done {
-                                return;
-                            }
-                        }
-                    }
-                },
-                |app: &mut Workspace, _: train::TrainProgress| app.train_pump(),
-            )
-        }),
+        job,
+        millis(250),
+        |job| until(is_set(&job.finished)),
+        |app| app.train_pump(),
     )
 }
 
@@ -628,23 +657,107 @@ fn script_pump<V: WidgetView<Workspace>>(
     view: V,
     running: bool,
 ) -> impl WidgetView<Workspace> + use<V> {
-    use xilem::core::{MessageProxy, fork};
-    use xilem::view::task_raw;
-    fork(
+    poll(
         view,
-        running.then(|| {
-            task_raw(
-                |proxy: MessageProxy<scripts::ScriptProgress>, _: &mut Workspace| async move {
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-                        if proxy.message(scripts::ScriptProgress).is_err() {
-                            return;
-                        }
-                    }
-                },
-                |app: &mut Workspace, _: scripts::ScriptProgress| app.script_pump(),
-            )
-        }),
+        running.then_some(()),
+        millis(120),
+        |()| Poll::Wake,
+        |app| {
+            app.script_pump();
+        },
+    )
+}
+
+/// Drain streamed local-chat events while its child process is running.
+fn chat_pump<V: WidgetView<Workspace>>(
+    view: V,
+    job: Option<chat::ChatJob>,
+) -> impl WidgetView<Workspace> + use<V> {
+    job_pump(view, job, |app| app.chat_pump())
+}
+
+/// Put a finished voice transcription into the chat field.
+fn voice_pump<V: WidgetView<Workspace>>(
+    view: V,
+    job: Option<chat::ChatJob>,
+) -> impl WidgetView<Workspace> + use<V> {
+    job_pump(view, job, |app| app.voice_pump())
+}
+
+/// Wake `on_progress` while `job` has unread events, and once when it ends.
+fn job_pump<V: WidgetView<Workspace>>(
+    view: V,
+    job: Option<chat::ChatJob>,
+    on_progress: fn(&mut Workspace),
+) -> impl WidgetView<Workspace> + use<V> {
+    poll(
+        view,
+        job,
+        millis(120),
+        |job| {
+            let pending = !job
+                .events
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_empty();
+            on_events(pending, is_set(&job.finished))
+        },
+        on_progress,
+    )
+}
+
+/// Poll a font-ml run from the Local AI panel for its progress and its result.
+fn ai_pump<V: WidgetView<Workspace>>(
+    view: V,
+    job: Option<local_ai::AiJob>,
+) -> impl WidgetView<Workspace> + use<V> {
+    poll(
+        view,
+        job,
+        millis(200),
+        |job| until(is_set(&job.finished)),
+        |app| app.ai_pump(),
+    )
+}
+
+/// Post what a nodes run's thread has said back into the application while it runs.
+fn graph_pump<V: WidgetView<Workspace>>(
+    view: V,
+    job: Option<graph::NodeJob>,
+) -> impl WidgetView<Workspace> + use<V> {
+    poll(
+        view,
+        job,
+        millis(120),
+        |job| {
+            let pending = !job
+                .events
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_empty();
+            on_events(pending, is_set(&job.finished))
+        },
+        |app| app.graph_pump(),
+    )
+}
+
+/// Wake the interface once, when an export has finished.
+fn export_pump<V: WidgetView<Workspace>>(
+    view: V,
+    job: Option<export::ExportJob>,
+) -> impl WidgetView<Workspace> + use<V> {
+    poll(
+        view,
+        job,
+        millis(120),
+        |job| {
+            if is_set(&job.finished) {
+                Poll::WakeThenStop
+            } else {
+                Poll::Wait
+            }
+        },
+        |app| app.export_pump(),
     )
 }
 
@@ -711,142 +824,6 @@ fn welcome(app: &mut AppState) -> impl WidgetView<AppState> + use<> {
     .background_color(palette.app_background())
 }
 
-/// Drain streamed local-chat events while its child process is running.
-fn chat_pump<V: WidgetView<Workspace>>(
-    view: V,
-    job: Option<chat::ChatJob>,
-) -> impl WidgetView<Workspace> + use<V> {
-    job_pump(view, job, |app: &mut Workspace| app.chat_pump())
-}
-
-/// Put a finished voice transcription into the chat field.
-fn voice_pump<V: WidgetView<Workspace>>(
-    view: V,
-    job: Option<chat::ChatJob>,
-) -> impl WidgetView<Workspace> + use<V> {
-    job_pump(view, job, |app: &mut Workspace| app.voice_pump())
-}
-
-/// Wake `on_progress` while `job` has unread events, and once when it ends.
-fn job_pump<V: WidgetView<Workspace>>(
-    view: V,
-    job: Option<chat::ChatJob>,
-    on_progress: fn(&mut Workspace),
-) -> impl WidgetView<Workspace> + use<V> {
-    use xilem::core::{MessageProxy, fork};
-    use xilem::view::task_raw;
-    fork(
-        view,
-        job.map(|job| {
-            task_raw(
-                move |proxy: MessageProxy<chat::ChatProgress>, _: &mut Workspace| {
-                    let job = job.clone();
-                    async move {
-                        loop {
-                            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-                            let pending = !job
-                                .events
-                                .lock()
-                                .unwrap_or_else(|error| error.into_inner())
-                                .is_empty();
-                            let done = job
-                                .finished
-                                .lock()
-                                .unwrap_or_else(|error| error.into_inner())
-                                .is_some();
-                            if (pending || done) && proxy.message(chat::ChatProgress).is_err() {
-                                return;
-                            }
-                            if done {
-                                return;
-                            }
-                        }
-                    }
-                },
-                move |app: &mut Workspace, _: chat::ChatProgress| on_progress(app),
-            )
-        }),
-    )
-}
-
-/// The same pump for a font-ml run from the Local AI panel: while one
-/// is going, poll its progress and its result and post them back.
-fn ai_pump<V: WidgetView<Workspace>>(
-    view: V,
-    job: Option<local_ai::AiJob>,
-) -> impl WidgetView<Workspace> + use<V> {
-    use xilem::core::{MessageProxy, fork};
-    use xilem::view::task_raw;
-    fork(
-        view,
-        job.map(|job| {
-            task_raw(
-                move |proxy: MessageProxy<local_ai::AiProgress>, _: &mut Workspace| {
-                    let job = job.clone();
-                    async move {
-                        loop {
-                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                            let done = job
-                                .finished
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .is_some();
-                            if proxy.message(local_ai::AiProgress).is_err() || done {
-                                return;
-                            }
-                        }
-                    }
-                },
-                |app: &mut Workspace, _: local_ai::AiProgress| app.ai_pump(),
-            )
-        }),
-    )
-}
-
-/// Runs `view`, and while a nodes run is going, a task that polls what
-/// the run thread has said and posts it back into the application.
-/// The same pump shape as the watcher and the menu, for the same
-/// reason: Xilem has no hook to drain a channel from a thread.
-fn graph_pump<V: WidgetView<Workspace>>(
-    view: V,
-    job: Option<graph::NodeJob>,
-) -> impl WidgetView<Workspace> + use<V> {
-    use xilem::core::{MessageProxy, fork};
-    use xilem::view::task_raw;
-    fork(
-        view,
-        job.map(|job| {
-            task_raw(
-                move |proxy: MessageProxy<graph::GraphProgress>, _: &mut Workspace| {
-                    let job = job.clone();
-                    async move {
-                        loop {
-                            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-                            let pending = !job
-                                .events
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .is_empty();
-                            let done = job
-                                .finished
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .is_some();
-                            if (pending || done) && proxy.message(graph::GraphProgress).is_err() {
-                                return;
-                            }
-                            if done {
-                                return;
-                            }
-                        }
-                    }
-                },
-                |app: &mut Workspace, _: graph::GraphProgress| app.graph_pump(),
-            )
-        }),
-    )
-}
-
 /// Poll the preview queue until its latest revision has finished compiling, and check the
 /// reference fonts and proof samples of the project once a second while a proof shows.
 #[cfg(not(target_arch = "wasm32"))]
@@ -906,39 +883,6 @@ fn preview_pump<V: WidgetView<Workspace>>(
                     }
                 },
                 |app: &mut Workspace, ()| app.refresh_proof_files(),
-            )
-        }),
-    )
-}
-
-fn export_pump<V: WidgetView<Workspace>>(
-    view: V,
-    job: Option<export::ExportJob>,
-) -> impl WidgetView<Workspace> + use<V> {
-    use xilem::core::{MessageProxy, fork};
-    use xilem::view::task_raw;
-    fork(
-        view,
-        job.map(|job| {
-            task_raw(
-                move |proxy: MessageProxy<export::ExportProgress>, _: &mut Workspace| {
-                    let job = job.clone();
-                    async move {
-                        loop {
-                            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-                            if job
-                                .finished
-                                .lock()
-                                .unwrap_or_else(|error| error.into_inner())
-                                .is_some()
-                            {
-                                let _ = proxy.message(export::ExportProgress);
-                                return;
-                            }
-                        }
-                    }
-                },
-                |app: &mut Workspace, _: export::ExportProgress| app.export_pump(),
             )
         }),
     )
