@@ -171,6 +171,18 @@ pub(crate) struct AiShapesState {
     pub(crate) pick: (String, u64),
 }
 
+/// A closed workspace stops its drawing request and its training run.
+impl Drop for AiShapesState {
+    fn drop(&mut self) {
+        if let Some(job) = &self.job {
+            job.cancellation.cancel();
+        }
+        if let Some(training) = &self.training {
+            training.cancellation.cancel();
+        }
+    }
+}
+
 impl AiShapesState {
     /// The chosen model, as scanned.
     pub(crate) fn chosen(&self) -> Option<&ShapesModel> {
@@ -1174,6 +1186,29 @@ mod tests {
         assert!(app.shapes_accept(&current));
         assert!(!app.shapes_accept(&current));
         assert_eq!(app.session.point_count(), 4);
+    }
+
+    #[test]
+    fn closing_the_workspace_cancels_drawing_and_training() {
+        let mut app = drawing_workspace();
+        let job = pending_drawing(&mut app);
+        let train = TrainJob {
+            name: "training".into(),
+            out: PathBuf::from("model-output"),
+            started: Instant::now(),
+            progress: Arc::new(Mutex::new((1, 10, "training".into()))),
+            samples: Arc::new(Mutex::new(Vec::new())),
+            finished: Arc::new(Mutex::new(None)),
+            cancellation: ProcessCancellation::default(),
+        };
+        app.shapes.training = Some(train.clone());
+        assert!(!job.cancellation.is_cancelled());
+        assert!(!train.cancellation.is_cancelled());
+
+        drop(app);
+
+        assert!(job.cancellation.is_cancelled());
+        assert!(train.cancellation.is_cancelled());
     }
 
     #[test]
