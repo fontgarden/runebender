@@ -60,6 +60,7 @@ const APPLICATION_ORDER: &[&str] = &[
     "platform",
     "editor",
     "view",
+    "launch_options",
     "cli",
     "launch",
     "browser",
@@ -82,9 +83,10 @@ const LIBRARY_BACK_EDGES: &[(&str, &str, usize)] = &[
 
 /// Permitted back edges between application modules, in the form of [`LIBRARY_BACK_EDGES`].
 const APPLICATION_BACK_EDGES: &[(&str, &str, usize)] = &[
+
     ("widgets", "workspace", 19),
-    ("platform", "editor", 17),
     ("editor", "view", 16),
+    ("platform", "editor", 16),
     ("workspace", "editor", 13),
     ("widgets", "view", 12),
     ("design::recipes", "view", 10),
@@ -95,18 +97,23 @@ const APPLICATION_BACK_EDGES: &[(&str, &str, usize)] = &[
     ("actions", "editor", 3),
     ("design::recipes", "workspace", 3),
     ("font_model", "editor", 3),
+    ("view", "launch_options", 3),
     ("widgets", "editor", 3),
     ("workspace", "view", 3),
     ("design", "platform", 2),
     ("design", "view", 2),
+    ("editor", "launch_options", 2),
+    ("widgets", "launch_options", 2),
     ("design", "widgets", 1),
     ("editor", "browser", 1),
+    ("font_model", "launch_options", 1),
     ("pieces", "workspace", 1),
     ("platform", "browser", 1),
+    ("platform", "launch_options", 1),
     ("widgets", "design::recipes", 1),
     ("widgets", "platform", 1),
     ("workspace", "browser", 1),
-    // 24 pairs, 141 references
+    // 29 pairs, 149 references
 ];
 
 /// The document that states the two orders for readers.

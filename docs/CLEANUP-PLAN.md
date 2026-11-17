@@ -362,4 +362,15 @@ Each has a phase tag: (1) small and mechanical, (2) a few hours, (3) a day or mo
 Add any defect you find while working, with file, function and a one-line description.
 Do not fix it in a mechanical commit.
 
-- None yet.
+- `src/font/interpolation.rs` `contours_to_bezpath` and `src/formats/icon_ufo.rs` `contour_path`: an open hyperbezier contour is handled the same wrong way as in the code that O1 fixed.
+- `src/formats/color_font.rs` test `color_lib_keys_roundtrip`: it writes to the fixed temp path `rb-color-roundtrip.ufo`, so parallel runs can collide.
+- The proof disk tool still writes a temporary SVG file.
+- A designspace tool call loads each master twice.
+- Four deleted tests had no shipped counterpart: delete the last pen point, snap the selected off-curve points, apply a corner to a component, and collapse metaballs across the whole font. These can be features; see N1.
+- `src/application/platform/train.rs`: Cancel stops only the `sh` child. `process::run` does not kill a process group, so training processes keep running.
+- `src/automation/live_socket.rs` test `connection_capacity_is_reusable_after_a_handler_finishes`: fails sometimes under load on macOS with EINVAL from `set_read_timeout` after the server closes the connection.
+- `src/workflows/graph_session.rs` `GraphSession.runs` and `LiveGraphExecution.records`: finished run records and released tombstones are never removed, so memory grows over a long session.
+- `RUNEBENDER_GRAPH_EXPANDED=1` panics in `SpecimenPreview` ("trying to compute layout of stashed widget"). It did this before the launch options change too.
+- `src/application/view/canvas/editor/pointer.rs` `constrain_to_45`: its first doc line belongs to another function.
+- `src/application/view/canvas/editor/menu.rs` `MENU_ITEMS`: two doc comments contradict each other.
+- `src/application/launch_options.rs`: nine back edges from `view`, `editor`, `widgets`, `font_model` and `platform` read `LaunchOptions::current()` or `CompileMode`. Split the parsed values into a low-layer module and keep the apply steps at the top, which removes the nine edges.

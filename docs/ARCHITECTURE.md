@@ -70,7 +70,7 @@ Each module is below `src/application`.
 `design` and `design::recipes` are two layers, because the widgets use the first and the second uses the widgets.
 
 <!-- check: application-order -->
-Application order: `design`, `widgets`, `design::recipes`, `local_models`, `pieces`, `font_model`, `workspace`, `actions`, `platform`, `editor`, `view`, `cli`, `launch`, `browser`.
+Application order: `design`, `widgets`, `design::recipes`, `local_models`, `pieces`, `font_model`, `workspace`, `actions`, `platform`, `editor`, `view`, `launch_options`, `cli`, `launch`, `browser`.
 <!-- end -->
 
 | Order | Module | Path | Responsibility |
@@ -86,9 +86,10 @@ Application order: `design`, `widgets`, `design::recipes`, `local_models`, `piec
 | 9 | `platform` | `src/application/platform` | Files, dialogs, file watching, export, configuration, themes, updates, headless capture, script jobs, and the live editor host. |
 | 10 | `editor` | `src/application/editor` | Commands, edit sessions, the inspector fields, history, and the tools. |
 | 11 | `view` | `src/application/view` | The canvases, the panels, the window chrome and the render tree. |
-| 12 | `cli` | `src/application/cli.rs` | Argument parsing and the headless subcommands. |
-| 13 | `launch` | `src/application/launch.rs` | The event loop, the window and the first frame. |
-| 14 | `browser` | `src/application/browser.rs` | The browser host. It compiles only for `wasm32`. |
+| 12 | `launch_options` | `src/application/launch_options.rs` | `LaunchOptions`: the `RUNEBENDER_*` capture and scene variables, read once, and the steps that apply them to a new workspace. |
+| 13 | `cli` | `src/application/cli.rs` | Argument parsing and the headless subcommands. |
+| 14 | `launch` | `src/application/launch.rs` | The event loop, the window and the first frame. |
+| 15 | `browser` | `src/application/browser.rs` | The browser host. It compiles only for `wasm32`. |
 
 `local_models`, `pieces`, `font_model`, `workspace` and `actions` are the state layer.
 `cli`, `launch` and `browser` are the entry layer.
@@ -169,6 +170,7 @@ Each directory under `src` has one row.
 | `src/application/view` | `src/application/view/render.rs` builds the frame, and `src/application/view/chrome.rs` builds the bars around the canvas. |
 | `src/application/view/canvas` | The center canvases: the glyph grid, the glyph list, the glyph editor, the graph, the proof and the specimen. |
 | `src/application/view/canvas/editor` | The glyph editor widget: pointer and keyboard input, painting, and the Xilem view. |
+| `src/application/view/canvas/editor/tools` | One module per edit canvas tool, with its press, hover, drag, release and key handlers. |
 | `src/application/view/canvas/editor/tests` | Unit tests of the glyph editor widget. |
 | `src/application/view/canvas/proof` | The reading proof and the reference font cards. |
 | `src/application/view/panels` | The side panels, one file for each region or feature. |
@@ -212,7 +214,7 @@ The other files in the row are the next ones that the change touches.
 | Undo | `src/font/history.rs` for the undo stores | `undo_active_edit` in `src/application/editor/session.rs`, which selects the store for one Undo command, `src/font/sources.rs` for source history, `src/application/editor/inspector.rs` for metadata steps, `src/application/editor/agent_history.rs` for edit groups. |
 | Application state | `src/application/workspace.rs` | `src/application/editor/session.rs` for one glyph tab, `src/application/font_model.rs` for caches of the font. |
 | A menu item | `ACTIONS` in `src/application/actions.rs` | `AppAction` in `src/application/widgets/shortcuts.rs`, `dispatch` in `src/application/editor/commands.rs`, and the command method that it calls. |
-| Canvas interaction | `src/application/view/canvas/editor/pointer.rs` | `src/application/view/canvas/editor/keyboard.rs`, `src/application/view/canvas/editor/paint.rs`, and `src/application/editor/session.rs` for the edit. |
+| Canvas interaction | `src/application/view/canvas/editor/pointer.rs` | `src/application/view/canvas/editor/tools` for each tool, `src/application/view/canvas/editor/keyboard.rs`, `src/application/view/canvas/editor/paint.rs`, and `src/application/editor/session.rs` for the edit. |
 | A panel section | `src/application/design/recipes/rows.rs` and `docs/UI-DESIGN.md` | The panel file in `src/application/view/panels`. `src/application/view/panels/info.rs` selects the sections of the info panel. |
 | Colors and sizes | The theme files in `assets/themes/default` | `src/ui/theme.rs` for the parser, `src/application/design/theme.rs` for the `Palette`, `src/application/design/tokens.rs` for the scales, `src/application/design/areas.rs` for an exception. |
 | A background job | `poll` in `src/application/view/render.rs` | `src/font/compiler/proof_jobs.rs` as the model of a job queue, `src/application/platform/script_jobs.rs`, and `src/workflows/process.rs` for a subprocess. |
@@ -221,4 +223,4 @@ The other files in the row are the next ones that the change touches.
 | A CLI subcommand | The `Command` enum in `src/application/cli.rs` | The file of the command group in `src/application/cli`. |
 | The node graph | `src/workflows/graph.rs` for the model | `src/workflows/graph_run.rs` for the disk runner, `src/workflows/graph_session.rs` and `src/application/editor/tools/graph` for the live graph, `src/ui/graph.rs` for layout, `src/application/view/canvas/graph.rs` for the canvas. |
 | Text | `src/text/buffer/mod.rs` for the buffer, `src/text/shape.rs` for shaping | `src/application/editor/tools/text.rs` for the Text tool. |
-| Headless capture | `src/application/platform/screenshot.rs` | `src/application/launch.rs`, which reads the `RUNEBENDER_*` variables, and the list of variables in `docs/UI-DESIGN.md`. |
+| Headless capture | `src/application/platform/screenshot.rs` | `src/application/launch_options.rs`, which reads the `RUNEBENDER_*` variables, and the list of variables in `docs/UI-DESIGN.md`. |
