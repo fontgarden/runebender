@@ -873,7 +873,11 @@ fn mcp_generated_contours_reject_invalid_batches_and_reconcile_retries() {
     );
     let mut oversized = payload.clone();
     oversized["operation_key"] = json!("oversized-contours");
-    oversized["edits"][0]["operations"][1]["contours"] = json!(vec![triangle; 257]);
+    oversized["edits"][0]["operations"][1]["contours"] = json!(vec![
+        triangle;
+        runebender::font::generated::MAX_GENERATED_CONTOURS
+            + 1
+    ]);
     assert_eq!(
         mcp.rejected_tool("agent_apply", oversized)["receipt"]["outcome"]["status"],
         "rejected"
@@ -950,7 +954,33 @@ fn mcp_dag_chains_branches_and_keeps_successful_proofs_after_partial_failure() {
         json!({"expected_document_epoch":epoch,"source":0,"glyph":"A"}),
     );
     let mut graph = graph_live::comparison_starter(SourceId(0));
-    graph.node_mut(3).unwrap().values.insert("code".into(), json!(r#"import json,sys
+    // The starter's node ids are not part of the contract, so find each node by its type.
+    let node_of_type = |type_name: &str| {
+        graph
+            .nodes
+            .iter()
+            .find(|node| node.type_name == type_name)
+            .unwrap()
+            .id
+    };
+    let font = node_of_type("live.font");
+    let python = node_of_type("live.python");
+    let proof_after = |parent: u32| {
+        graph
+            .links
+            .iter()
+            .filter(|link| link.from() == parent)
+            .map(|link| link.to())
+            .find(|&node| {
+                graph
+                    .node(node)
+                    .is_some_and(|node| node.type_name == "live.proof")
+            })
+            .unwrap()
+    };
+    let font_proof = proof_after(font);
+    let python_proof = proof_after(python);
+    graph.node_mut(python).unwrap().values.insert("code".into(), json!(r#"import json,sys
 p=json.load(sys.stdin)
 l=p['layers'][0]
 drawing={'points':[{'x':x,'y':y,'type':'line'} for x,y in [(50,500),(150,500),(150,600),(50,600)]]}
@@ -964,7 +994,7 @@ point=l['contours'][-1]['points'][0]
 assert point['x']==50 and point['y']==500
 json.dump({'schema_version':2,'job_id':p['job_id'],'input_hash':p['input_hash'],'report':'moved:'+point['id'],'reads':[],'edits':[{'target':l['guard'],'operations':[{'op':'set_width','width':l['width']+17},{'op':'set_point','point_id':point['id'],'x':83,'y':500}]}]},sys.stdout)
 "#));
-    graph.connect(3, "font", child, "font");
+    graph.connect(python, "font", child, "font");
     let child_proof = graph.add("live.proof", [1000.0, 60.0]);
     graph.connect(child, "font", child_proof, "font");
     let sibling = graph.add("live.python", [400.0, 650.0]);
@@ -974,7 +1004,7 @@ l=p['layers'][0]
 assert l['width']==412
 json.dump({'schema_version':2,'job_id':p['job_id'],'input_hash':p['input_hash'],'report':'sibling','reads':[],'edits':[{'target':l['guard'],'operations':[{'op':'set_width','width':l['width']+25}]}]},sys.stdout)
 "#));
-    graph.connect(1, "font", sibling, "font");
+    graph.connect(font, "font", sibling, "font");
     let sibling_proof = graph.add("live.proof", [700.0, 650.0]);
     graph.connect(sibling, "font", sibling_proof, "font");
     let failed = graph.add("live.python", [400.0, 1000.0]);
@@ -982,7 +1012,7 @@ json.dump({'schema_version':2,'job_id':p['job_id'],'input_hash':p['input_hash'],
         "code".into(),
         json!("raise RuntimeError('intentional branch failure')"),
     );
-    graph.connect(1, "font", failed, "font");
+    graph.connect(font, "font", failed, "font");
     let blocked = graph.add("live.python", [700.0, 1000.0]);
     graph.node_mut(blocked).unwrap().values.insert(
         "code".into(),
@@ -1081,8 +1111,8 @@ json.dump({'schema_version':2,'job_id':p['job_id'],'input_hash':p['input_hash'],
     assert_eq!(retry["replayed"], true);
     let outputs = completed["run"]["outputs"].as_array().unwrap();
     for (proof_node, parent, advance) in [
-        (2, 1, 412.0),
-        (4, 3, 512.0),
+        (font_proof, font, 412.0),
+        (python_proof, python, 512.0),
         (child_proof, child, 529.0),
         (sibling_proof, sibling, 437.0),
     ] {
@@ -1090,7 +1120,7 @@ json.dump({'schema_version':2,'job_id':p['job_id'],'input_hash':p['input_hash'],
         args["node"] = json!(proof_node);
         let proof = mcp.tool("graph_image", args);
         assert_eq!(proof["glyphs"][0]["x_advance"], advance);
-        let expected = if parent == 1 {
+        let expected = if parent == font {
             &completed["run"]["identity"]["capture"]["font"]["capture_sha256"]
         } else {
             &outputs

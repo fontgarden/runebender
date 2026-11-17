@@ -285,7 +285,7 @@ fn mcp_serve(font: Option<&Path>, session: Option<&Path>, live: bool, tool: Opti
     exit::OK
 }
 
-const MAX_MCP_REQUESTS: usize = 32;
+const MAX_MCP_REQUESTS: usize = runebender::automation::MAX_MCP_QUEUED_REQUESTS;
 
 /// Negotiated framing features; newer fields are never sent to older clients.
 #[derive(Clone, Copy)]

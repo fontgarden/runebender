@@ -679,10 +679,11 @@ fn mcp_exact_retry_queue_full_keeps_pending_cancellation_identity() {
         "operations": [{"op":"set_width", "width":500.0}]
     }]);
 
-    // The ordered worker is blocked on request 2. Thirty-one fillers plus request 3
-    // fill its capacity, so request 4 exercises the queue-full cleanup path while
-    // request 3 is still pending and cancellable.
-    for id in 100..131 {
+    // The ordered worker is blocked on request 2. Fillers plus request 3 fill its
+    // capacity, so request 4 exercises the queue-full cleanup path while request 3
+    // is still pending and cancellable.
+    let fillers = runebender::automation::MAX_MCP_QUEUED_REQUESTS - 1;
+    for id in 100..100 + fillers {
         writeln!(
             input,
             "{}",
@@ -760,7 +761,7 @@ fn mcp_exact_retry_queue_full_keeps_pending_cancellation_identity() {
 
     blocker.respond(|_| json!({"ok":true,"glyph":"blocker"}));
     assert_eq!(read()["id"], 2);
-    for id in 100..131 {
+    for id in 100..100 + fillers {
         let pending = wait_pending();
         pending.respond(|_| json!({"ok":true,"glyph":"filler"}));
         assert_eq!(read()["id"], id);
