@@ -342,23 +342,7 @@ pub fn node_box_with_content(
         Some(NodeContent::Glyphs(content)) => f64::from(content.size[1]) + PAD * 2.0,
         None => 0.0,
     };
-    // The old live-node shell reserved space for canvas action buttons and a
-    // proof preview. Embedded children now own that content area, so retaining
-    // both allocations leaves a large blank gap before the real editor/image.
-    // Keep the legacy reservation only for content-free nodes until those
-    // actions have an actual painted surface again.
-    let legacy_live_height = if live && content.is_none() {
-        ROW_H * 2.0
-            + ACTION_H * actions(&node.type_name).len() as f64
-            + if node.type_name == "live.proof" {
-                PREVIEW_H
-            } else {
-                0.0
-            }
-    } else {
-        0.0
-    };
-    let h = HEADER_H + PAD + ROW_H * rows as f64 + legacy_live_height + content_height;
+    let h = HEADER_H + PAD + ROW_H * rows as f64 + content_height;
     let rect = Rect::new(x, y, x + width, y + h);
     let row_y = |i: usize| y + HEADER_H + PAD / 2.0 + ROW_H * (i as f64 + 0.5);
     let first_input = outputs.len();
@@ -631,60 +615,8 @@ pub fn node_region_hit(boxes: &[NodeBox], at: Point) -> Option<NodeRegionHit> {
     None
 }
 
-/// Live nodes have room for a proof and explicit actions inside the canvas.
+/// The width of a live node, which leaves room for its embedded content.
 pub const LIVE_W: f64 = 256.0;
-/// Fixed preview allocation, in canvas units.
-pub const PREVIEW_H: f64 = 144.0;
-/// One compact action row, in canvas units.
-pub const ACTION_H: f64 = 24.0;
-
-/// Explicit actions rendered and hit-tested by the shell; none run during painting.
-pub fn actions(type_name: &str) -> &'static [&'static str] {
-    match type_name {
-        "live.font" => &["Fork direction", "Undo last application"],
-        "live.fork" => &[
-            "Create version",
-            "Fork direction",
-            "Add apply node",
-            "Save as new UFO…",
-            "Discard version",
-        ],
-        "live.proof" => &[
-            "Render glyphs",
-            "Render kerning",
-            "Latest agent proof",
-            "Export PDF…",
-            "Export PNG…",
-        ],
-        "live.apply" => &["Apply changes"],
-        _ => &[],
-    }
-}
-
-impl NodeBox {
-    /// First content row below the input and output sockets.
-    pub fn content_top(&self) -> f64 {
-        self.rect.y0
-            + HEADER_H
-            + PAD
-            + ROW_H * (self.inputs.len() + self.outputs.len()).max(1) as f64
-    }
-    /// Action rectangle, shared by painting and pointer handling.
-    pub fn action_rect(&self, index: usize) -> Rect {
-        let y = self.content_top() + ROW_H * 2.0 + index as f64 * ACTION_H;
-        Rect::new(self.rect.x0 + PAD, y, self.rect.x1 - PAD, y + ACTION_H)
-    }
-    /// Preview rectangle below the actions of a proof node.
-    pub fn preview_rect(&self) -> Rect {
-        let y = self.content_top() + ROW_H * 2.0 + actions(&self.type_name).len() as f64 * ACTION_H;
-        Rect::new(
-            self.rect.x0 + PAD,
-            y + PAD,
-            self.rect.x1 - PAD,
-            y + PREVIEW_H - PAD,
-        )
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -700,27 +632,9 @@ mod tests {
     }
 
     #[test]
-    fn live_controls_and_previews_share_nonoverlapping_hit_geometry() {
+    fn the_live_starter_lays_out_every_wire() {
         let g = crate::workflows::graph_live::starter(crate::font::variable::SourceId(0));
         let boxes = layout(&g, &Registry::core());
-        for node in &boxes {
-            for (index, _) in actions(&node.type_name).iter().enumerate() {
-                let r = node.action_rect(index);
-                assert!(node.rect.contains(r.origin()));
-                assert!(r.x1 <= node.rect.x1 && r.y1 <= node.rect.y1);
-                assert_eq!(hit(&boxes, r.center()), Hit::Node(node.id));
-                if index > 0 {
-                    assert!(node.action_rect(index - 1).y1 <= r.y0);
-                }
-            }
-            if node.type_name == "live.proof" {
-                assert!(
-                    node.preview_rect().y0
-                        >= node.action_rect(actions(&node.type_name).len() - 1).y1
-                );
-                assert!(node.preview_rect().y1 <= node.rect.y1);
-            }
-        }
         assert_eq!(wires(&g, &boxes).len(), 4);
     }
 
