@@ -3,7 +3,7 @@
 
 //! Kurbo-free glyph metadata shared by Runebender frontends.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -493,87 +493,6 @@ impl CanonicalSourceGlyphMetadata {
     }
 }
 
-/// One default-layer UFO boundary value composed from canonical layer and source metadata.
-///
-/// This is a transfer value, not another live owner.
-/// The glyph's mutable name remains in the document name index, and unknown glyph-lib entries
-/// remain in the format-preservation payload.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct CanonicalGlyphMetadata {
-    layer: CanonicalLayerGlyphMetadata,
-    source: CanonicalSourceGlyphMetadata,
-}
-
-impl CanonicalGlyphMetadata {
-    /// Construct one boundary value from its layer-local and source-wide fields.
-    pub fn new(
-        codepoints: impl IntoIterator<Item = char>,
-        note: Option<String>,
-        exported: bool,
-        category: Option<OpenTypeGlyphCategory>,
-    ) -> Self {
-        Self {
-            layer: CanonicalLayerGlyphMetadata::new(codepoints, note),
-            source: CanonicalSourceGlyphMetadata::new(exported, category),
-        }
-    }
-
-    /// The layer-local canonical value.
-    pub fn layer(&self) -> &CanonicalLayerGlyphMetadata {
-        &self.layer
-    }
-
-    /// The source-wide canonical value for this glyph identity.
-    pub fn source(&self) -> &CanonicalSourceGlyphMetadata {
-        &self.source
-    }
-
-    /// Split this boundary value into its two canonical owners.
-    pub fn into_parts(self) -> (CanonicalLayerGlyphMetadata, CanonicalSourceGlyphMetadata) {
-        (self.layer, self.source)
-    }
-
-    /// Unicode scalar values in source order.
-    pub fn codepoints(&self) -> &[char] {
-        self.layer.codepoints()
-    }
-
-    /// The optional glyph note, preserving the distinction between absent and empty.
-    pub fn note(&self) -> Option<&str> {
-        self.layer.note()
-    }
-
-    /// Whether the glyph participates in export.
-    pub fn exported(&self) -> bool {
-        self.source.exported()
-    }
-
-    /// The explicit OpenType category, or `None` when it should be inferred.
-    pub fn category(&self) -> Option<&OpenTypeGlyphCategory> {
-        self.source.category()
-    }
-
-    /// Replace the Unicode scalar values, retaining order and removing later duplicates.
-    pub fn set_codepoints(&mut self, codepoints: impl IntoIterator<Item = char>) -> bool {
-        self.layer.set_codepoints(codepoints)
-    }
-
-    /// Replace the glyph note exactly.
-    pub fn set_note(&mut self, note: Option<String>) -> bool {
-        self.layer.set_note(note)
-    }
-
-    /// Change whether the glyph participates in export.
-    pub fn set_exported(&mut self, exported: bool) -> bool {
-        self.source.set_exported(exported)
-    }
-
-    /// Set or clear the explicit OpenType category.
-    pub fn set_category(&mut self, category: Option<OpenTypeGlyphCategory>) -> bool {
-        self.source.set_category(category)
-    }
-}
-
 /// A rejected glyph-metadata input.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GlyphMetadataError {
@@ -583,8 +502,6 @@ pub enum GlyphMetadataError {
     InvalidSkipExportList,
     /// The font-level OpenType category value was not a string dictionary.
     InvalidCategoryMap,
-    /// A requested glyph was absent from the UFO boundary object.
-    MissingGlyph(String),
 }
 
 impl fmt::Display for GlyphMetadataError {
@@ -597,7 +514,6 @@ impl fmt::Display for GlyphMetadataError {
             Self::InvalidCategoryMap => {
                 write!(f, "public.openTypeCategories is not a string dictionary")
             }
-            Self::MissingGlyph(name) => write!(f, "missing glyph {name:?}"),
         }
     }
 }
@@ -638,98 +554,139 @@ pub fn parse_codepoints(input: &str) -> Result<Vec<char>, GlyphMetadataError> {
     Ok(codepoints)
 }
 
-/// Decode one glyph's canonical metadata from a UFO boundary object.
+/// The font-level glyph metadata of one UFO source, decoded once for all of its glyphs.
 ///
-/// Font-level skip-export and category entries are interpreted without retaining the UFO font as
-/// editable state.
+/// The skip-export list and the category map are font-lib values keyed by glyph name.
+/// Decoding them once keeps import linear in the glyph count.
 /// Malformed standardized payloads are rejected instead of silently becoming opaque duplicates.
-pub fn canonical_glyph_metadata_from_ufo(
-    font: &norad::Font,
-    glyph_name: &str,
-) -> Result<CanonicalGlyphMetadata, GlyphMetadataError> {
-    let glyph = font
-        .get_glyph(glyph_name)
-        .ok_or_else(|| GlyphMetadataError::MissingGlyph(glyph_name.to_owned()))?;
-    let skipped = strict_skipped_exports(font)?;
-    let categories = strict_categories(font)?;
-    Ok(CanonicalGlyphMetadata::new(
-        glyph.codepoints.iter(),
-        glyph.note.clone(),
-        !skipped.iter().any(|name| name == glyph_name),
-        categories
-            .and_then(|categories| categories.get(glyph_name))
-            .and_then(plist::Value::as_string)
-            .map(|value| OpenTypeGlyphCategory::from_source(value.to_owned())),
-    ))
+#[derive(Debug)]
+pub(crate) struct UfoSourceGlyphMetadata<'a> {
+    skipped: HashSet<&'a str>,
+    categories: Option<&'a plist::Dictionary>,
 }
 
-/// Encode one glyph's canonical metadata into a UFO boundary object atomically.
-///
-/// Unrelated skip-export and category entries remain unchanged and in their original order.
-/// An unchanged value performs no mutation.
-pub fn write_canonical_glyph_metadata_to_ufo(
-    font: &mut norad::Font,
-    glyph_name: &str,
-    metadata: &CanonicalGlyphMetadata,
-) -> Result<bool, GlyphMetadataError> {
-    let glyph = font
-        .get_glyph(glyph_name)
-        .ok_or_else(|| GlyphMetadataError::MissingGlyph(glyph_name.to_owned()))?;
-    let glyph_changed = glyph
-        .codepoints
-        .iter()
-        .ne(metadata.codepoints().iter().copied())
-        || glyph.note.as_deref() != metadata.note();
-
-    let mut lib = font.lib.clone();
-    let mut skipped = strict_skipped_exports(font)?;
-    let is_skipped = skipped.iter().any(|name| name == glyph_name);
-    if metadata.exported() {
-        skipped.retain(|name| name != glyph_name);
-    } else if !is_skipped {
-        skipped.push(glyph_name.to_owned());
+impl<'a> UfoSourceGlyphMetadata<'a> {
+    /// Decode and validate the skip-export list and the category map of `font`.
+    pub(crate) fn decode(font: &'a norad::Font) -> Result<Self, GlyphMetadataError> {
+        Ok(Self {
+            skipped: strict_skipped_exports(font)?.into_iter().collect(),
+            categories: strict_categories(font)?,
+        })
     }
-    if skipped.is_empty() {
-        lib.remove(SKIP_EXPORT_GLYPHS);
-    } else {
+
+    /// The canonical source-wide metadata of one glyph.
+    pub(crate) fn glyph(&self, glyph_name: &str) -> CanonicalSourceGlyphMetadata {
+        CanonicalSourceGlyphMetadata::new(
+            !self.skipped.contains(glyph_name),
+            self.categories
+                .and_then(|categories| categories.get(glyph_name))
+                .and_then(plist::Value::as_string)
+                .map(|value| OpenTypeGlyphCategory::from_source(value.to_owned())),
+        )
+    }
+}
+
+/// Encode the source-wide metadata of several glyphs into a UFO boundary object.
+///
+/// The glyphs are applied in order, with the same result as applying them one at a time.
+/// An exported glyph leaves the skip-export list, and a skipped glyph that is not listed is
+/// appended to it.
+/// Unrelated skip-export and category entries keep their values and their order.
+/// A lib key is removed when its value becomes empty and appended when it becomes non-empty.
+/// Returns whether the font lib changed; a malformed payload is rejected before any mutation.
+pub(crate) fn write_source_glyph_metadata_to_ufo<'n>(
+    font: &mut norad::Font,
+    glyphs: impl IntoIterator<Item = (&'n str, &'n CanonicalSourceGlyphMetadata)>,
+) -> Result<bool, GlyphMetadataError> {
+    let mut glyphs = glyphs.into_iter().peekable();
+    if glyphs.peek().is_none() {
+        return Ok(false);
+    }
+    // A removed entry leaves an empty slot, so that each glyph costs constant time.
+    let mut skipped: Vec<Option<String>> = strict_skipped_exports(font)?
+        .into_iter()
+        .map(|name| Some(name.to_owned()))
+        .collect();
+    let mut skipped_index: HashMap<String, usize> = skipped
+        .iter()
+        .enumerate()
+        .filter_map(|(index, name)| Some((name.clone()?, index)))
+        .collect();
+    let mut categories = strict_categories(font)?.cloned().unwrap_or_default();
+    let mut lib = font.lib.clone();
+    let mut skipped_present = lib.contains_key(SKIP_EXPORT_GLYPHS);
+    let mut categories_present = lib.contains_key(OPEN_TYPE_CATEGORIES);
+    for (glyph_name, metadata) in glyphs {
+        if metadata.exported() {
+            if let Some(index) = skipped_index.remove(glyph_name) {
+                skipped[index] = None;
+            }
+        } else if !skipped_index.contains_key(glyph_name) {
+            skipped_index.insert(glyph_name.to_owned(), skipped.len());
+            skipped.push(Some(glyph_name.to_owned()));
+        }
+        sync_lib_key(
+            &mut lib,
+            SKIP_EXPORT_GLYPHS,
+            !skipped_index.is_empty(),
+            &mut skipped_present,
+        );
+
+        if let Some(category) = metadata.category() {
+            categories.insert(
+                glyph_name.into(),
+                plist::Value::String(category.as_source().to_owned()),
+            );
+        } else {
+            categories.remove(glyph_name);
+        }
+        sync_lib_key(
+            &mut lib,
+            OPEN_TYPE_CATEGORIES,
+            !categories.is_empty(),
+            &mut categories_present,
+        );
+    }
+    if skipped_present {
         lib.insert(
             SKIP_EXPORT_GLYPHS.into(),
-            plist::Value::Array(skipped.into_iter().map(plist::Value::String).collect()),
+            plist::Value::Array(
+                skipped
+                    .into_iter()
+                    .flatten()
+                    .map(plist::Value::String)
+                    .collect(),
+            ),
         );
     }
-
-    let mut categories = strict_categories(font)?.cloned().unwrap_or_default();
-    if let Some(category) = metadata.category() {
-        categories.insert(
-            glyph_name.into(),
-            plist::Value::String(category.as_source().to_owned()),
-        );
-    } else {
-        categories.remove(glyph_name);
-    }
-    if categories.is_empty() {
-        lib.remove(OPEN_TYPE_CATEGORIES);
-    } else {
+    if categories_present {
         lib.insert(
             OPEN_TYPE_CATEGORIES.into(),
             plist::Value::Dictionary(categories),
         );
     }
-
-    if !glyph_changed && font.lib == lib {
+    if font.lib == lib {
         return Ok(false);
     }
     font.lib = lib;
-    let glyph = font
-        .default_layer_mut()
-        .get_glyph_mut(glyph_name)
-        .expect("validated glyph remains present");
-    glyph.codepoints = norad::Codepoints::new(metadata.codepoints().iter().copied());
-    glyph.note = metadata.note().map(ToOwned::to_owned);
     Ok(true)
 }
 
-fn strict_skipped_exports(font: &norad::Font) -> Result<Vec<String>, GlyphMetadataError> {
+/// Add or remove one lib key as its value becomes non-empty or empty.
+///
+/// An added key gets a placeholder value at the end of the lib.
+/// The caller writes the final value once, and the key keeps that position.
+fn sync_lib_key(lib: &mut plist::Dictionary, key: &str, non_empty: bool, present: &mut bool) {
+    if non_empty && !*present {
+        lib.insert(key.into(), plist::Value::Boolean(false));
+        *present = true;
+    } else if !non_empty && *present {
+        lib.remove(key);
+        *present = false;
+    }
+}
+
+fn strict_skipped_exports(font: &norad::Font) -> Result<Vec<&str>, GlyphMetadataError> {
     let Some(value) = font.lib.get(SKIP_EXPORT_GLYPHS) else {
         return Ok(Vec::new());
     };
@@ -737,14 +694,15 @@ fn strict_skipped_exports(font: &norad::Font) -> Result<Vec<String>, GlyphMetada
         return Err(GlyphMetadataError::InvalidSkipExportList);
     };
     let mut output = Vec::with_capacity(values.len());
+    let mut unique = HashSet::with_capacity(values.len());
     for value in values {
         let Some(name) = value.as_string() else {
             return Err(GlyphMetadataError::InvalidSkipExportList);
         };
-        if output.iter().any(|candidate| candidate == name) {
+        if !unique.insert(name) {
             return Err(GlyphMetadataError::InvalidSkipExportList);
         }
-        output.push(name.to_owned());
+        output.push(name);
     }
     Ok(output)
 }
@@ -821,21 +779,13 @@ mod tests {
 
     #[test]
     fn canonical_metadata_retains_order_and_exact_unknown_category() {
-        let mut metadata = CanonicalGlyphMetadata::new(
-            ['A', '\u{391}', 'A'],
-            Some(String::new()),
+        let mut layer =
+            CanonicalLayerGlyphMetadata::new(['A', '\u{391}', 'A'], Some(String::new()));
+        let mut source = CanonicalSourceGlyphMetadata::new(
             false,
             Some(OpenTypeGlyphCategory::from_source("future-category")),
         );
 
-        assert_eq!(metadata.codepoints(), ['A', '\u{391}']);
-        assert_eq!(metadata.note(), Some(""));
-        assert!(!metadata.exported());
-        assert_eq!(
-            metadata.category().map(OpenTypeGlyphCategory::as_source),
-            Some("future-category")
-        );
-        let (layer, source) = metadata.clone().into_parts();
         assert_eq!(layer.codepoints(), ['A', '\u{391}']);
         assert_eq!(layer.note(), Some(""));
         assert!(!source.exported());
@@ -843,9 +793,9 @@ mod tests {
             source.category().map(OpenTypeGlyphCategory::as_source),
             Some("future-category")
         );
-        assert!(!metadata.set_codepoints(['A', '\u{391}']));
-        assert!(metadata.set_exported(true));
-        assert!(!metadata.set_exported(true));
+        assert!(!layer.set_codepoints(['A', '\u{391}']));
+        assert!(source.set_exported(true));
+        assert!(!source.set_exported(true));
     }
 
     #[test]
@@ -994,24 +944,18 @@ mod tests {
             plist::Value::Dictionary(categories),
         );
 
-        let mut metadata = canonical_glyph_metadata_from_ufo(&font, "A").unwrap();
+        let mut metadata = UfoSourceGlyphMetadata::decode(&font).unwrap().glyph("A");
         assert!(!metadata.exported());
-        assert_eq!(metadata.note(), Some(""));
         assert_eq!(metadata.category(), Some(&OpenTypeGlyphCategory::Component));
         let before = font.clone();
-        assert!(!write_canonical_glyph_metadata_to_ufo(&mut font, "A", &metadata).unwrap());
+        assert!(!write_source_glyph_metadata_to_ufo(&mut font, [("A", &metadata)]).unwrap());
         assert_eq!(font, before);
-        assert!(metadata.set_codepoints(['A', '\u{391}']));
-        assert!(metadata.set_note(Some("edited".into())));
         assert!(metadata.set_exported(true));
         assert!(metadata.set_category(Some(OpenTypeGlyphCategory::Mark)));
 
-        assert!(write_canonical_glyph_metadata_to_ufo(&mut font, "A", &metadata).unwrap());
-        assert!(!write_canonical_glyph_metadata_to_ufo(&mut font, "A", &metadata).unwrap());
-        assert_eq!(
-            strict_skipped_exports(&font).unwrap(),
-            vec!["future".to_string()]
-        );
+        assert!(write_source_glyph_metadata_to_ufo(&mut font, [("A", &metadata)]).unwrap());
+        assert!(!write_source_glyph_metadata_to_ufo(&mut font, [("A", &metadata)]).unwrap());
+        assert_eq!(strict_skipped_exports(&font).unwrap(), vec!["future"]);
         let categories = strict_categories(&font).unwrap().unwrap();
         assert_eq!(
             categories.get("future").and_then(plist::Value::as_string),
@@ -1022,11 +966,48 @@ mod tests {
             Some("mark")
         );
         let glyph = font.get_glyph("A").unwrap();
-        assert_eq!(
-            glyph.codepoints.iter().collect::<Vec<_>>(),
-            ['A', '\u{391}']
+        assert_eq!(glyph.codepoints.iter().collect::<Vec<_>>(), ['A']);
+        assert_eq!(glyph.note.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn source_metadata_keys_follow_the_order_of_single_glyph_writes() {
+        let mut font = norad::Font::new();
+        font.lib
+            .insert("first".into(), plist::Value::Integer(1.into()));
+        font.lib.insert(
+            SKIP_EXPORT_GLYPHS.into(),
+            plist::Value::Array(vec![plist::Value::String("A".into())]),
         );
-        assert_eq!(glyph.note.as_deref(), Some("edited"));
+        font.lib
+            .insert("last".into(), plist::Value::Integer(2.into()));
+        let exported = CanonicalSourceGlyphMetadata::default();
+        let skipped = CanonicalSourceGlyphMetadata::new(false, None);
+        let marked = CanonicalSourceGlyphMetadata::new(true, Some(OpenTypeGlyphCategory::Mark));
+
+        // Exporting A empties the list, which removes the key and moves the last key into its
+        // place; skipping C appends the key again after the category map that D adds.
+        assert!(
+            write_source_glyph_metadata_to_ufo(
+                &mut font,
+                [
+                    ("A", &exported),
+                    ("B", &exported),
+                    ("D", &marked),
+                    ("C", &skipped)
+                ],
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            font.lib.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["first", "last", OPEN_TYPE_CATEGORIES, SKIP_EXPORT_GLYPHS]
+        );
+        assert_eq!(strict_skipped_exports(&font).unwrap(), vec!["C"]);
+        let decoded = UfoSourceGlyphMetadata::decode(&font).unwrap();
+        assert_eq!(decoded.glyph("C"), skipped);
+        assert_eq!(decoded.glyph("D"), marked);
+        assert_eq!(decoded.glyph("A"), exported);
     }
 
     #[test]
@@ -1039,10 +1020,9 @@ mod tests {
         let before = font.clone();
 
         assert_eq!(
-            write_canonical_glyph_metadata_to_ufo(
+            write_source_glyph_metadata_to_ufo(
                 &mut font,
-                "A",
-                &CanonicalGlyphMetadata::default()
+                [("A", &CanonicalSourceGlyphMetadata::default())]
             ),
             Err(GlyphMetadataError::InvalidSkipExportList)
         );

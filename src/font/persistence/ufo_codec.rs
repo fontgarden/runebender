@@ -107,6 +107,7 @@ pub(in crate::font) fn decode_sources<'a>(
             super::source_format::SourceFormatData::from_ufo(font),
         );
 
+        let glyph_metadata = decode_glyph_metadata(font)?;
         let default_layer_name = font.default_layer().name().as_str();
         for layer in font.layers.iter() {
             let id = LayerId {
@@ -122,13 +123,10 @@ pub(in crate::font) fn decode_sources<'a>(
                 if default {
                     glyph.source_metadata.insert(
                         source,
-                        model::glyph_metadata::canonical_glyph_metadata_from_ufo(font, name)
-                            .map_err(|source| ProjectImportError::GlyphMetadata {
-                                glyph: name.to_owned(),
-                                source,
-                            })?
-                            .source()
-                            .clone(),
+                        glyph_metadata
+                            .as_ref()
+                            .expect("a default-layer glyph implies decoded glyph metadata")
+                            .glyph(name),
                     );
                 }
                 if data.geometry(name).is_none() {
@@ -152,19 +150,26 @@ fn validate_source(font: &norad::Font) -> Result<(), ProjectImportError> {
     decode_font_metadata(font).map_err(ProjectImportError::FontMetadata)?;
     model::font_info::CanonicalFontInfo::from_ufo(&font.font_info)
         .map_err(ProjectImportError::FontInfo)?;
-    for name in font
-        .default_layer()
-        .iter()
-        .map(|glyph| glyph.name().as_str())
-    {
-        model::glyph_metadata::canonical_glyph_metadata_from_ufo(font, name).map_err(|source| {
-            ProjectImportError::GlyphMetadata {
-                glyph: name.to_owned(),
-                source,
-            }
-        })?;
-    }
+    decode_glyph_metadata(font)?;
     Ok(())
+}
+
+/// Decode the font-level glyph metadata once, when the default layer has a glyph.
+///
+/// The values are keyed by glyph name, so a font without default-layer glyphs never reads them.
+/// An error names the first default-layer glyph.
+fn decode_glyph_metadata(
+    font: &norad::Font,
+) -> Result<Option<model::glyph_metadata::UfoSourceGlyphMetadata<'_>>, ProjectImportError> {
+    let Some(first) = font.default_layer().iter().next() else {
+        return Ok(None);
+    };
+    model::glyph_metadata::UfoSourceGlyphMetadata::decode(font)
+        .map(Some)
+        .map_err(|source| ProjectImportError::GlyphMetadata {
+            glyph: first.name().to_string(),
+            source,
+        })
 }
 
 pub(crate) fn encode_source(data: &VariableData, source: SourceId) -> Option<norad::Font> {
@@ -192,22 +197,14 @@ pub(crate) fn encode_source(data: &VariableData, source: SourceId) -> Option<nor
             }
         }
     }
-    for (name, glyph) in &data.glyphs {
-        let Some(metadata) = glyph.source_metadata.get(&source) else {
-            continue;
-        };
-        let Some(payload) = font.get_glyph(name) else {
-            continue;
-        };
-        let boundary = model::glyph_metadata::CanonicalGlyphMetadata::new(
-            payload.codepoints.iter(),
-            payload.note.clone(),
-            metadata.exported(),
-            metadata.category().cloned(),
-        );
-        model::glyph_metadata::write_canonical_glyph_metadata_to_ufo(&mut font, name, &boundary)
-            .expect("canonical glyph metadata must remain writable as UFO");
-    }
+    let glyph_metadata = data
+        .glyphs
+        .iter()
+        .filter(|(name, _)| font.get_glyph(name).is_some())
+        .filter_map(|(name, glyph)| Some((name.as_str(), glyph.source_metadata.get(&source)?)))
+        .collect::<Vec<_>>();
+    model::glyph_metadata::write_source_glyph_metadata_to_ufo(&mut font, glyph_metadata)
+        .expect("canonical glyph metadata must remain writable as UFO");
     Some(font)
 }
 
