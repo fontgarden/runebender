@@ -133,7 +133,6 @@ pub(in crate::font) fn layer_from_ufo(
         .ok()
         .flatten();
     let smart_component_pole = SmartComponentPole::take_from_lib(&mut lib).ok().flatten();
-    let hoi_intermediates = HoiIntermediates::take_from_lib(&mut lib);
     (
         layer,
         LayerPreservation {
@@ -153,7 +152,6 @@ pub(in crate::font) fn layer_from_ufo(
             smart_component_axes,
             smart_component_values,
             smart_component_pole,
-            hoi_intermediates,
             contours,
             components,
             anchors,
@@ -250,7 +248,6 @@ pub(in crate::font) fn copy_contours_only(
     preserved.smart_component_axes = None;
     preserved.smart_component_values = None;
     preserved.smart_component_pole = None;
-    preserved.hoi_intermediates = None;
     preserved.components.clear();
     preserved.anchors.clear();
     (layer, preserved)
@@ -349,9 +346,6 @@ pub(in crate::font) fn project_layer(layer: &Layer, preserved: &LayerPreservatio
     }
     if let Some(pole) = &preserved.smart_component_pole {
         pole.write_to_lib(&mut glyph.lib);
-    }
-    if let Some(points) = &preserved.hoi_intermediates {
-        points.write_to_lib(&mut glyph.lib);
     }
     if layer.width != preserved.width as f32 {
         glyph.width = f64::from(layer.width);

@@ -65,7 +65,6 @@ pub(in crate::font) fn empty_layer(
             smart_component_axes: None,
             smart_component_values: None,
             smart_component_pole: None,
-            hoi_intermediates: None,
             contours: Vec::new(),
             components: Vec::new(),
             anchors: Vec::new(),

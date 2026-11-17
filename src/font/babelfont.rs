@@ -41,7 +41,6 @@ use super::model::glyph_metadata::{
     COMPOSITION_RECIPE_KEY, ComponentAlignment, LEFT_METRICS_KEY, MARK_COLOR_KEY, MARK_LABEL_KEY,
     METABALLS_KEY, MarkColor, Metaballs, MetricsFormula, RIGHT_METRICS_KEY, parse_metrics_key,
 };
-use super::model::hoi::HoiIntermediates;
 use super::model::smart_components::{
     SmartComponentAxes, SmartComponentPole, SmartComponentValues,
 };
@@ -255,7 +254,6 @@ pub(super) struct LayerPreservation {
     smart_component_axes: Option<SmartComponentAxes>,
     smart_component_values: Option<SmartComponentValues<ComponentId>>,
     smart_component_pole: Option<SmartComponentPole>,
-    hoi_intermediates: Option<HoiIntermediates>,
     contours: Vec<PreservedContour>,
     components: Vec<PreservedComponent>,
     anchors: Vec<PreservedAnchor>,

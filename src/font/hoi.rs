@@ -58,11 +58,6 @@ fn role(point_type: LayerPointType) -> char {
 }
 
 fn topology(layer: LayerView<'_>) -> Result<Vec<Vec<char>>, String> {
-    if layer.hoi_intermediates().is_some_and(|old| !old.is_empty()) {
-        return Err(
-            "legacy HOI needs an explicit conversion before new trajectory authoring".into(),
-        );
-    }
     let mut contours = Vec::new();
     for contour in layer.contours() {
         if !contour.is_closed() || contour.is_hyper() {
@@ -434,17 +429,6 @@ impl Project {
             .filter(|record| glyph.is_none_or(|glyph| glyph == record.glyph))
         {
             self.bind_hoi_trajectory(record)?;
-            for source in self.glyph_sources(&record.glyph)? {
-                if self
-                    .document_layer(&record.glyph, &source.layer)
-                    .and_then(LayerView::hoi_intermediates)
-                    .is_some_and(|old| !old.is_empty())
-                {
-                    return Err(
-                        "legacy and scoped HOI cannot be evaluated in the same glyph".into(),
-                    );
-                }
-            }
         }
         Ok(())
     }

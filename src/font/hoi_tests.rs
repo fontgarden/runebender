@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::*;
-use crate::font::model::hoi::HoiIntermediates;
 use crate::font::model::hoi_trajectories::HOI_TRAJECTORIES_KEY;
 use crate::font::persistence::memory::{MemoryProject, memory_save_files, open_memory_project};
 use crate::font::variable::GlyphLayerAddress;
@@ -569,38 +568,42 @@ fn sparse_sources_split_only_the_glyphs_they_supply() {
         .unwrap();
 }
 
+/// The retired `com.runebender.hoiIntermediate` key has no reader: it stays in the glyph lib as
+/// unknown data through a save, does not move interpolated points, and does not block
+/// trajectory authoring.
 #[test]
-fn legacy_midpoint_data_keeps_its_payload_and_existing_evaluation() {
-    let mut memory = fixture();
-    let lower = memory.project.document_designspace().unwrap().sources()[0]
-        .default_layer
-        .clone();
-    let address = GlyphLayerAddress {
-        glyph: "box".into(),
-        layer: lower.clone(),
-    };
-    let legacy = HoiIntermediates::from_points([((0, 0), (420.0, 510.0))]).unwrap();
-    let mut edit = memory
-        .project
-        .begin_document_layer_transaction(&address)
-        .unwrap();
-    edit.draft_mut().set_hoi_intermediates(legacy.clone());
-    memory
-        .project
-        .commit_document_layer_transaction(edit)
-        .unwrap();
-    let location = crate::font::var_model::Location::from([("Weight".into(), 0.2)]);
-    let mut outline = memory
-        .project
-        .try_interpolated_layer_at("box", &location)
-        .unwrap();
-    assert_eq!(
-        outline.point_at_mut(0, 0).unwrap().position,
-        kurbo::Point::new(420.0, 510.0)
+fn a_retired_intermediate_key_is_kept_as_unknown_lib_data() {
+    const KEY: &str = "com.runebender.hoiIntermediate";
+    let glif = "HOIShapes-Light.ufo/glyphs/box.glif";
+    let mut input = files(&root());
+    let original = String::from_utf8(input[glif].clone()).unwrap();
+    let with_key = original.replace(
+        "</glyph>",
+        &format!(
+            "  <lib>\n    <dict>\n      <key>{KEY}</key>\n      <dict>\n        <key>0,0</key>\n        \
+             <array>\n          <real>420</real>\n          <real>510</real>\n        </array>\n      \
+             </dict>\n    </dict>\n  </lib>\n</glyph>"
+        ),
     );
+    input.insert(glif.into(), with_key.into_bytes());
+    let plain = fixture();
+    let mut memory = open(&input);
     let ds = memory.project.document_designspace().unwrap();
-    let upper = &ds.sources()[1].default_layer;
-    let point = memory
+    let lower = ds.sources()[0].default_layer.clone();
+    let upper = ds.sources()[1].default_layer.clone();
+
+    let location = crate::font::var_model::Location::from([("Weight".into(), 0.2)]);
+    let point = |memory: &MemoryProject| {
+        memory
+            .project
+            .try_interpolated_layer_at("box", &location)
+            .unwrap()
+            .point_at_mut(0, 0)
+            .unwrap()
+            .position
+    };
+    assert_eq!(point(&memory), point(&plain));
+    let id = memory
         .project
         .document_layer("box", &lower)
         .unwrap()
@@ -614,19 +617,25 @@ fn legacy_midpoint_data_keeps_its_payload_and_existing_evaluation() {
     assert!(
         memory
             .project
-            .prepare_hoi_trajectory("box", ds.axes()[0].id(), &lower, upper, point)
-            .unwrap_err()
-            .contains("legacy")
+            .prepare_hoi_trajectory("box", ds.axes()[0].id(), &lower, &upper, id)
+            .is_ok()
     );
-    let saved = saved_files(&memory, files(&root()));
-    let reopened = open(&saved);
+
+    memory
+        .project
+        .edit_document_layer("box", &lower, |draft| {
+            draft.set_width(1001.0)?;
+            Ok(())
+        })
+        .unwrap();
+    let saved = saved_files(&memory, input.clone());
+    let saved_glif = String::from_utf8(saved[glif].clone()).unwrap();
+    assert_ne!(saved_glif, original);
+    assert!(saved_glif.contains("1001"), "{saved_glif}");
+    let lib = |text: &str| text[text.find("<lib>").unwrap()..].replace(char::is_whitespace, "");
     assert_eq!(
-        reopened
-            .project
-            .document_layer("box", &lower)
-            .unwrap()
-            .hoi_intermediates(),
-        Some(&legacy)
+        lib(&saved_glif),
+        lib(&String::from_utf8(input[glif].clone()).unwrap())
     );
 }
 

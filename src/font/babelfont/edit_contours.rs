@@ -63,7 +63,6 @@ impl LayerEditDraft {
             || self.preserved.smart_component_axes != preserved.smart_component_axes
             || self.preserved.smart_component_values != preserved.smart_component_values
             || self.preserved.smart_component_pole != preserved.smart_component_pole
-            || self.preserved.hoi_intermediates != preserved.hoi_intermediates
             || self.preserved.contours != preserved.contours
             || self
                 .preserved

@@ -3,7 +3,7 @@
 
 //! Runebender's own `com.runebender.*` lib keys and public glyph metadata.
 //!
-//! Masks, HOI intermediates, and the keys of foreign and proposal sources.
+//! Masks and the keys of foreign and proposal sources.
 //! Each key has one reader and one writer here, so the on-disk format
 //! is defined in one place.
 
@@ -261,55 +261,6 @@ fn update_glyph_lib_references(
     Ok(has_order_entry || has_production_name)
 }
 
-/// Glyph lib key for per-node HOI intermediate points.
-///
-/// An intermediate point makes the node's interpolation path curve
-/// through it at the axis middle. This is the "Intermediate Point"
-/// in Glyphs.
-///
-/// Points are stored on the axis-min master's glyph, in absolute
-/// design coordinates, keyed `"contour,point"`. The key is the
-/// source of truth for re-editing; compilers consume the baked
-/// brace layers.
-pub use crate::font::model::hoi::HOI_INTERMEDIATE_KEY;
-
-/// Reads HOI intermediate points from the glyph lib, keyed by `(contour, point)` index, as absolute design coordinates.
-pub fn read_hoi_intermediates(
-    glyph: &norad::Glyph,
-) -> std::collections::HashMap<(usize, usize), (f64, f64)> {
-    glyph
-        .lib
-        .get(HOI_INTERMEDIATE_KEY)
-        .and_then(|value| crate::font::model::hoi::HoiIntermediates::from_plist(value).ok())
-        .map(|value| value.points().collect())
-        .unwrap_or_default()
-}
-
-/// Writes HOI intermediate points to the glyph lib. An empty map removes the key.
-pub fn write_hoi_intermediates(
-    glyph: &mut norad::Glyph,
-    map: &std::collections::HashMap<(usize, usize), (f64, f64)>,
-) {
-    crate::font::model::hoi::HoiIntermediates::from_points(
-        map.iter().map(|(index, point)| (*index, *point)),
-    )
-    .expect("HOI source points must be finite")
-    .write_to_lib(&mut glyph.lib);
-}
-
-/// Quadratic through Q at the middle: position at `t` between `a`
-/// and `b` when the path must pass through `q` at t = 0.5.
-pub fn hoi_quad_at(a: (f64, f64), b: (f64, f64), q: (f64, f64), t: f64) -> (f64, f64) {
-    // Control C with (1-t)²A + 2(1-t)tC + t²B passing Q at 0.5:
-    // Q = A/4 + C/2 + B/4  =>  C = 2Q - (A+B)/2.
-    let c = (2.0 * q.0 - (a.0 + b.0) / 2.0, 2.0 * q.1 - (a.1 + b.1) / 2.0);
-    let u = 1.0 - t;
-    (
-        u * u * a.0 + 2.0 * u * t * c.0 + t * t * b.0,
-        u * u * a.1 + 2.0 * u * t * c.1 + t * t * b.1,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,29 +355,5 @@ mod tests {
         assert_eq!(read_masks(&glyph), masks);
         write_masks(&mut glyph, &HashSet::new());
         assert!(read_masks(&glyph).is_empty());
-    }
-    #[test]
-    fn hoi_quad_passes_through_the_intermediate() {
-        let a = (0.0, 0.0);
-        let b = (100.0, 0.0);
-        let q = (50.0, 40.0);
-        assert_eq!(hoi_quad_at(a, b, q, 0.0), a);
-        assert_eq!(hoi_quad_at(a, b, q, 1.0), b);
-        assert_eq!(hoi_quad_at(a, b, q, 0.5), q);
-        // Quarter stop, worked by hand: control C = (50, 80).
-        let (x, y) = hoi_quad_at(a, b, q, 0.25);
-        assert!((x - 25.0).abs() < 1e-9 && (y - 30.0).abs() < 1e-9);
-    }
-    #[test]
-    fn hoi_intermediates_roundtrip_the_lib_key() {
-        let mut glyph = norad::Glyph::new("hoi-store");
-        let mut map = std::collections::HashMap::new();
-        map.insert((0_usize, 3_usize), (166.0, 73.0));
-        map.insert((2, 0), (-12.0, 400.0));
-        write_hoi_intermediates(&mut glyph, &map);
-        assert_eq!(read_hoi_intermediates(&glyph), map);
-        // Empty map clears the key.
-        write_hoi_intermediates(&mut glyph, &std::collections::HashMap::new());
-        assert!(glyph.lib.get(HOI_INTERMEDIATE_KEY).is_none());
     }
 }

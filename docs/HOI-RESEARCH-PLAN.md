@@ -43,7 +43,8 @@ Version 1 conservatively suspends a record after an endpoint outline, topology, 
 Missing source identifiers use the same fingerprint guard without inserting metadata into source GLIFs.
 Real glyph-local sparse sources participate in neighboring-interval validation.
 
-The original `com.runebender.hoiIntermediate` payload and its evaluator remain unchanged.
+The original `com.runebender.hoiIntermediate` payload and its evaluator remained unchanged in Phase 1.
+They were deleted on 2026-11-17: the key now has no reader, and a font that carries it keeps it as unknown glyph-lib data.
 New scoped records are storage-only in Phase 1, with explicit preview/compilation errors until Phase 2 supplies the shared evaluator.
 No interpolation controls are being exposed in the UI in this phase.
 
@@ -450,10 +451,10 @@ Treat these observations as source inspection rather than runtime validation.
 
 | Area | Existing behavior and evidence |
 | --- | --- |
-| Metadata | [Typed HOI model](../src/font/model/hoi.rs) stores per-point intermediate positions under `com.runebender.hoiIntermediate` |
-| Evaluation | [hoi_quad_at](../src/formats/metadata/lib_keys.rs) evaluates a quadratic passing through the specified position at the midpoint |
-| Integration | [Project interpolation](../src/font/project.rs) applies a per-node quadratic override after ordinary interpolation and provides trajectory sampling |
-| Mutation | [Canonical draft API](../src/font/babelfont/edit_components.rs) provides `set_hoi_intermediates` |
+| Metadata | A typed HOI model, `src/font/model/hoi.rs`, stored per-point intermediate positions under `com.runebender.hoiIntermediate` (deleted 2026-11-17) |
+| Evaluation | `hoi_quad_at` in `src/formats/metadata/lib_keys.rs` evaluated a quadratic passing through the specified position at the midpoint (deleted 2026-11-17) |
+| Integration | [Project interpolation](../src/font/project.rs) applied a per-node quadratic override after ordinary interpolation and provides trajectory sampling |
+| Mutation | The canonical draft API in `src/font/babelfont/edit_components.rs` provided `set_hoi_intermediates` (deleted 2026-11-17) |
 | Compilation | [Compiler snapshot](../src/font/compiler/mod.rs) consumes canonical geometry and registered sources; automatic HOI baking was not established by the inspection |
 
 The existing approach is restricted to the first axis, global endpoint sources, and one quadratic midpoint per marked point.
@@ -870,6 +871,7 @@ Persistent target constraints, fitting many targets at once, and exact bidirecti
 2. Add small synthetic fixtures for straight and curved motion, coincident spatial endpoints, three masters with unequal intervals, mapped axis coordinates, connected cubic handles, and an authored sparse intermediate source.
 3. Establish stable correspondence and the storage codec described above, including save/reopen and filesystem/browser preservation tests.
 4. Specify legacy `com.runebender.hoiIntermediate` handling: retain the original payload and behavior until an explicit supported conversion can preserve its evaluated geometry.
+   Superseded on 2026-11-17: the legacy format was deleted without a conversion, and the key is kept as unknown glyph-lib data.
 5. Record the supported source arrangements and unsupported-case diagnostics in this document.
 
 Completion gate: a trajectory can be represented, serialized, rebound, and removed without changing either endpoint outline or silently reassigning a point.
@@ -959,7 +961,7 @@ New small modules may be added within the owning area when they keep evaluation,
 
 | Concern | Existing entry points and planned responsibility |
 | --- | --- |
-| Canonical records and axes | [scoped HOI model](../src/font/model/hoi_trajectories.rs), [legacy HOI model](../src/font/model/hoi.rs), [designspace model](../src/font/model/designspace.rs), [variable identities](../src/font/variable.rs): scoped records, persistent rebinding, source arrangement validation |
+| Canonical records and axes | [scoped HOI model](../src/font/model/hoi_trajectories.rs), [designspace model](../src/font/model/designspace.rs), [variable identities](../src/font/variable.rs): scoped records, persistent rebinding, source arrangement validation |
 | Evaluation and sampling | [HOI scope and binding](../src/font/hoi.rs), [Project](../src/font/project.rs), [interpolation](../src/font/interpolation.rs), [legacy evaluator](../src/formats/metadata/lib_keys.rs): one engine evaluation path and bounded bake preparation |
 | Mutations and history | [canonical draft operations](../src/font/babelfont/edit_components.rs), [point edits](../src/font/babelfont/edit_points.rs), [history](../src/font/history.rs): transactions, topology invalidation, undo/redo |
 | Native and browser persistence | [persistence](../src/font/persistence/mod.rs), [memory packages](../src/font/persistence/memory.rs), [UFO projection](../src/font/babelfont/ufo_projection.rs): versioned codec, exact preservation, no writes to protected GLIFs |

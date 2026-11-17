@@ -25,7 +25,6 @@ use super::variable::{
 use crate::font::model::glyph_metadata::MarkColor;
 use crate::font::var_model::{Location, VariationModel};
 use crate::formats::binary_import::import_binary_font;
-use crate::formats::metadata::lib_keys::hoi_quad_at;
 
 /// Resolve one glyph outline with every component, failing on a missing or cyclic component.
 ///
@@ -1137,69 +1136,6 @@ impl Project {
         let (layers, locations) = self.interpolation_layers(glyph_name, None)?;
         let mut interpolated =
             super::interpolation::interpolate_layers(&layers, &locations, location)?;
-        // HOI: nodes with an intermediate point follow their exact
-        // quadratic, overriding the piecewise answer the baked brace
-        // layers gave the model — the bake stays for compilers, the
-        // preview is exact.
-        if let (Some(axis), Some((lo, hi))) = (axes.first(), self.axis_end_sources()) {
-            let curves = self
-                .document_designspace()
-                .and_then(|designspace| {
-                    designspace
-                        .sources()
-                        .iter()
-                        .find(|source| source.id() == lo)
-                })
-                .and_then(|source| self.document_layer(glyph_name, &source.default_layer))
-                .and_then(super::LayerView::hoi_intermediates);
-            if let Some(curves) = curves.filter(|curves| !curves.is_empty()) {
-                let normalized = location.get(&axis.coordinates.name).copied().unwrap_or(0.0);
-                let design = crate::font::var_model::denormalize_value(
-                    normalized,
-                    axis.design_minimum(),
-                    axis.design_default(),
-                    axis.design_maximum(),
-                );
-                let t01 = ((design - axis.design_minimum())
-                    / (axis.design_maximum() - axis.design_minimum()))
-                .clamp(0.0, 1.0);
-                let endpoint_layer = |id| {
-                    self.document_designspace()
-                        .and_then(|designspace| {
-                            designspace
-                                .sources()
-                                .iter()
-                                .find(|source| source.id() == id)
-                        })
-                        .and_then(|source| self.document_layer(glyph_name, &source.default_layer))
-                };
-                if let (Some(a_layer), Some(b_layer)) = (endpoint_layer(lo), endpoint_layer(hi)) {
-                    for ((ci, pi), q) in curves.points() {
-                        let (Some(pa), Some(pb)) = (
-                            a_layer
-                                .contours()
-                                .nth(ci)
-                                .and_then(|contour| contour.points().nth(pi)),
-                            b_layer
-                                .contours()
-                                .nth(ci)
-                                .and_then(|contour| contour.points().nth(pi)),
-                        ) else {
-                            continue;
-                        };
-                        let pos = hoi_quad_at(
-                            (pa.position().x, pa.position().y),
-                            (pb.position().x, pb.position().y),
-                            q,
-                            t01,
-                        );
-                        if let Some(point) = interpolated.point_at_mut(ci, pi) {
-                            point.position = pos.into();
-                        }
-                    }
-                }
-            }
-        }
         self.apply_hoi_trajectories(glyph_name, location, &mut interpolated, records)?;
         Ok(interpolated)
     }
@@ -2461,7 +2397,6 @@ fn character_named(query: &str) -> Option<char> {
 mod tests {
     use super::*;
     use crate::analysis::measure::joining_band;
-    use crate::font::model::hoi::HoiIntermediates;
     use crate::testing::fonts;
 
     #[test]
@@ -2759,66 +2694,6 @@ mod tests {
                 .unwrap();
             assert_eq!(back, Some("=n+10"));
         }
-    }
-
-    #[test]
-    fn hoi_preview_is_exact_without_baking() {
-        // An intermediate point in the lib key alone (no baked brace
-        // layers) must already curve the preview: at mid-axis the
-        // node sits exactly on Q, at quarter-axis on the quadratic.
-        let mut project = Project::load(&fonts::designspace()).expect("loads");
-        let name = "n";
-        let axis = project.axes[0].clone();
-        let (lo, hi) = project.axis_end_masters().expect("two ends");
-        let first_point = |index| {
-            let source = project.source_id(index).unwrap();
-            let layer = project.document_source(source).unwrap().default_layer();
-            let point = project
-                .document_layer(name, &layer)
-                .unwrap()
-                .contours()
-                .next()
-                .unwrap()
-                .points()
-                .next()
-                .unwrap()
-                .position();
-            (point.x, point.y)
-        };
-        let a = first_point(lo);
-        let b = first_point(hi);
-        let q = ((a.0 + b.0) / 2.0 + 80.0, (a.1 + b.1) / 2.0 + 40.0);
-        let source = project.source_id(lo).unwrap();
-        let layer = project.document_source(source).unwrap().default_layer();
-        project
-            .edit_document_layer(name, &layer, |draft| {
-                draft.set_hoi_intermediates(HoiIntermediates::from_points([((0, 0), q)]).unwrap());
-                Ok(())
-            })
-            .unwrap();
-        let at = |project: &Project, design: f64| {
-            let mut location = Location::new();
-            location.insert(
-                axis.name.clone(),
-                crate::font::var_model::normalize_value(design, axis.min, axis.default, axis.max),
-            );
-            let g = project.encode_interpolated_ufo_at(name, &location).unwrap();
-            let p = &g.contours[0].points[0];
-            (p.x, p.y)
-        };
-        let mid_design = axis.min + (axis.max - axis.min) * 0.5;
-        let mid = at(&project, mid_design);
-        assert!(
-            (mid.0 - q.0).abs() < 1e-6 && (mid.1 - q.1).abs() < 1e-6,
-            "mid-axis sits on Q: {mid:?} vs {q:?}"
-        );
-        let quarter_design = axis.min + (axis.max - axis.min) * 0.25;
-        let quarter = at(&project, quarter_design);
-        let expected = hoi_quad_at(a, b, q, 0.25);
-        assert!(
-            (quarter.0 - expected.0).abs() < 1e-6 && (quarter.1 - expected.1).abs() < 1e-6,
-            "quarter-axis on the quadratic: {quarter:?} vs {expected:?}"
-        );
     }
 
     #[test]
