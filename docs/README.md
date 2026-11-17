@@ -18,6 +18,7 @@ Commands in these guides run from the repository root unless stated otherwise.
 - [Browser development](../web/README.md): browser preparation, locked builds, and Playwright checks.
 - [Engine benchmarks](BENCHMARKS.md): repeatable measurements and interpretation.
 - [Audit of 2026-11-09](AUDIT-2026-11-09.md): historical findings, status corrections, and the previously reported validation baseline.
+- [Cleanup plan](CLEANUP-PLAN.md): a checklist from the code review of 2026-11-17, with files, changes and verification for each item.
 
 ## Interface and local models
 
