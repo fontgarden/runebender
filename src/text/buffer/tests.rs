@@ -1310,7 +1310,7 @@ fn deleting_the_lam_brings_the_alef_back() {
 #[test]
 fn shaping_falls_back_when_the_feature_file_is_broken() {
     let mut buffer = buffer_with_shaping_font();
-    let mut inventory = buffer.glyph_inventory.clone();
+    let mut inventory = (*buffer.glyph_inventory).clone();
     inventory.features = "feature liga { sub missing by alsoMissing; } liga;".into();
     buffer.set_glyph_inventory(inventory);
     type_chars(&mut buffer, "\u{0628}\u{0628}");
