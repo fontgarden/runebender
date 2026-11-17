@@ -7,20 +7,6 @@ pub use crate::font::model::glyph_metadata::{
     LEFT_METRICS_KEY, MetricsFormula, RIGHT_METRICS_KEY, parse_metrics_key,
 };
 
-/// Reads the left (`left == true`) or right metrics key from the glyph lib, if present.
-pub fn read_metrics_key(glyph: &norad::Glyph, left: bool) -> Option<String> {
-    let key = if left {
-        LEFT_METRICS_KEY
-    } else {
-        RIGHT_METRICS_KEY
-    };
-    glyph
-        .lib
-        .get(key)
-        .and_then(|v| v.as_string())
-        .map(|v| v.to_string())
-}
-
 /// Writes the left (`left == true`) or right metrics key to the glyph lib. An empty or whitespace-only `value` removes the key.
 pub fn write_metrics_key(glyph: &mut norad::Glyph, left: bool, value: &str) {
     let key = if left {

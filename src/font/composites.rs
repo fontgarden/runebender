@@ -161,19 +161,6 @@ pub fn effective_document_anchors<'a>(
     recurse(layer, &mut resolve, 0)
 }
 
-/// Build stable component identities and alignment inputs from one canonical layer.
-///
-/// `resolve` selects component bases in the same source/layer context as `layer`.
-/// A missing base has no anchors and therefore leaves that component at its stored position.
-pub fn document_align_inputs<'layer, 'base>(
-    layer: LayerView<'layer>,
-    mut resolve: impl FnMut(&str) -> Option<LayerView<'base>>,
-) -> Vec<(ComponentId, AlignInput)> {
-    align_inputs_with(layer, |base| {
-        resolve(base).map(document_anchors).unwrap_or_default()
-    })
-}
-
 /// Alignment inputs with each base glyph's anchors supplied by `base_anchors`.
 fn align_inputs_with(
     layer: LayerView<'_>,
@@ -261,22 +248,6 @@ pub fn realign_document_layer_with(
         changed |= draft.set_component_transform(id, transform)?;
     }
     Ok(changed)
-}
-
-/// Return every canonical layer glyph that places `base` as a component.
-pub fn document_composites_using<'a>(
-    layers: impl IntoIterator<Item = LayerView<'a>>,
-    base: &str,
-) -> Vec<String> {
-    layers
-        .into_iter()
-        .filter(|layer| {
-            layer
-                .components()
-                .any(|component| component.reference() == base)
-        })
-        .map(|layer| layer.glyph_name().to_owned())
-        .collect()
 }
 
 #[cfg(test)]

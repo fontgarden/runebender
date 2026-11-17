@@ -36,11 +36,6 @@ impl QuadraticPath {
         }
     }
 
-    /// Creates an open path with no points.
-    pub fn empty() -> Self {
-        Self::new(PathPoints::new(), false)
-    }
-
     /// Returns the number of points, on-curve and off-curve together.
     pub fn len(&self) -> usize {
         self.points.len()
@@ -84,54 +79,6 @@ impl QuadraticPath {
             Self::handle_closed_path_trailing_points(points, start_idx, path);
             path.close_path();
         }
-    }
-
-    /// Convert from a workspace contour (assumes `QCurve` points).
-    pub fn from_contour(contour: &workspace::Contour) -> Self {
-        if contour.points.is_empty() {
-            return Self::empty();
-        }
-
-        let closed = !matches!(contour.points[0].point_type, workspace::PointType::Move);
-        if closed
-            && contour
-                .points
-                .iter()
-                .all(|point| matches!(point.point_type, workspace::PointType::OffCurve))
-        {
-            let controls: Vec<_> = contour
-                .points
-                .iter()
-                .map(|point| kurbo::Point::new(point.x, point.y))
-                .collect();
-            let mut points = Vec::with_capacity(controls.len() * 2);
-            for (index, control) in controls.iter().copied().enumerate() {
-                let previous = controls[(index + controls.len() - 1) % controls.len()];
-                points.push(PathPoint {
-                    id: EntityId::next(),
-                    point: previous.midpoint(control),
-                    typ: PointType::OnCurve { smooth: false },
-                });
-                points.push(PathPoint {
-                    id: EntityId::next(),
-                    point: control,
-                    typ: PointType::OffCurve { auto: false },
-                });
-            }
-            return Self::new(PathPoints::from_vec(points), true);
-        }
-
-        let mut path_points: Vec<PathPoint> = contour
-            .points
-            .iter()
-            .map(PathPoint::from_contour_point_quadratic)
-            .collect();
-
-        if closed && !path_points.is_empty() {
-            path_points.rotate_left(1);
-        }
-
-        Self::new(PathPoints::from_vec(path_points), closed)
     }
 
     /// Convert this quadratic path to a workspace contour (for saving).

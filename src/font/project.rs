@@ -466,41 +466,6 @@ impl Project {
         &self.variable.font
     }
 
-    /// The master sitting exactly at `location`, if any. Landing on a
-    /// master is a master switch, not an interpolation: the web treats
-    /// it that way so the outline stays editable.
-    pub fn master_at_location(&self) -> Option<usize> {
-        let designspace = self.document_designspace()?;
-        if designspace.axes().is_empty() {
-            return None;
-        }
-        designspace.sources().iter().find_map(|source| {
-            let there = source.location.to_normalized(designspace.axes()).ok()?;
-            designspace
-                .axes()
-                .iter()
-                .all(|axis| {
-                    let name = &axis.coordinates.name;
-                    let a = there.get(name).copied().unwrap_or(0.0);
-                    let b = self.location.get(name).copied().unwrap_or(0.0);
-                    (a - b).abs() < 1e-6
-                })
-                .then(|| self.source_index(source.id()))
-                .flatten()
-        })
-    }
-
-    /// True while the sliders sit between masters: what the canvas
-    /// shows is an interpolated instance, and nothing there is
-    /// editable.
-    pub fn showing_instance(&self) -> bool {
-        self.document_designspace().is_some_and(|designspace| {
-            !designspace.axes().is_empty()
-                && designspace.sources().len() > 1
-                && self.master_at_location().is_none()
-        })
-    }
-
     /// Put `location` back on a master, for a master switch.
     pub fn snap_location_to_master(&mut self, master: usize) {
         let Some(source) = self.source_id(master) else {

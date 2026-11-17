@@ -354,13 +354,6 @@ impl TextGlyphInventory {
 }
 
 impl TextKerningModel {
-    /// Every stored pair as first key, second key, and value, group
-    /// names included, for hosts syncing buffer kerning back into a
-    /// font.
-    pub fn pairs(&self) -> &HashMap<String, HashMap<String, f64>> {
-        &self.kerning
-    }
-
     /// Build the kerning model from a norad font's groups and
     /// kerning.plist (native hosts; the web host sends JSON).
     #[cfg(test)]
@@ -709,11 +702,6 @@ impl TextBuffer {
             .collect()
     }
 
-    /// Drop the text selection without moving the caret.
-    pub fn clear_selection(&mut self) {
-        self.selection_anchor = None;
-    }
-
     /// Select a logical sort range, clamped to the buffer. Equal or
     /// reversed endpoints clear the selection and leave the caret at
     /// the clamped end.
@@ -841,14 +829,6 @@ impl TextBuffer {
         })
     }
 
-    /// The SVG path data stored for a glyph, or `None` when the inventory has no outline for it.
-    pub fn glyph_outline_svg(&self, glyph_name: &str) -> Option<&str> {
-        self.glyph_inventory
-            .outlines
-            .get(glyph_name)
-            .map(String::as_str)
-    }
-
     /// Replace the name, codepoint, and advance width of the glyph sort at `index`.
     /// Returns false when the index is out of range or the sort is a line break.
     pub fn update_glyph(
@@ -902,38 +882,6 @@ impl TextBuffer {
             self.script_override.as_deref(),
             self.language_override.as_deref(),
         )
-    }
-
-    /// Replace one glyph's outline without rebuilding the whole
-    /// inventory. Used when an edit to a base glyph changes every
-    /// composite that places it.
-    pub fn set_glyph_outline(&mut self, name: &str, outline: &str) {
-        if outline.is_empty() {
-            Arc::make_mut(&mut self.glyph_inventory)
-                .outlines
-                .remove(name);
-        } else {
-            Arc::make_mut(&mut self.glyph_inventory)
-                .outlines
-                .insert(name.to_string(), outline.to_string());
-        }
-    }
-
-    /// Replace everything *except* the outlines, which are maintained one
-    /// glyph at a time as edits land.
-    ///
-    /// The wholesale replace re-sends every outline in the font on
-    /// every edit. That is slow, a few MB of JSON, and worse: it hands
-    /// back the outlines as the sender last knew them, undoing
-    /// anything updated since. Mid-nudge that reads as a flash: the
-    /// composite snaps to its old shape and forward again.
-    pub fn set_glyph_metrics(&mut self, mut inventory: TextGlyphInventory) {
-        std::mem::swap(
-            &mut inventory.outlines,
-            &mut Arc::make_mut(&mut self.glyph_inventory).outlines,
-        );
-        self.glyph_inventory = Arc::new(inventory);
-        self.shaping_font.clear();
     }
 
     /// Replace the whole glyph inventory, outlines included, and drop the cached shaping font so it is rebuilt on next use.
@@ -1100,18 +1048,6 @@ impl TextBuffer {
         let deleted = self.sorts.remove(self.cursor);
         self.adjust_active_after_delete(self.cursor);
         Some(deleted)
-    }
-
-    /// Move the cursor one sort back in logical order, stopping at `0`.
-    pub fn move_cursor_left(&mut self) {
-        self.selection_anchor = None;
-        self.step_cursor_left();
-    }
-
-    /// Move the cursor one sort forward in logical order, stopping at `len()`.
-    pub fn move_cursor_right(&mut self) {
-        self.selection_anchor = None;
-        self.step_cursor_right();
     }
 
     /// Move the cursor one sort toward the left of the screen: back on an LTR line, forward on an RTL line.

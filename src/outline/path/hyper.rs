@@ -34,25 +34,6 @@ pub struct HyperPath {
 }
 
 impl HyperPath {
-    /// Create a new hyper path with a single starting point.
-    pub fn new(point: Point) -> Self {
-        let start_point = PathPoint {
-            id: EntityId::next(),
-            point,
-            typ: PointType::OnCurve { smooth: true },
-        };
-
-        let mut path = Self {
-            points: PathPoints::from_vec(vec![start_point]),
-            closed: false,
-            id: EntityId::next(),
-            bezier: Arc::new(BezPath::new()),
-        };
-
-        path.rebuild_bezier();
-        path
-    }
-
     /// Create a new hyper path from existing points.
     pub fn from_points(points: PathPoints, closed: bool) -> Self {
         let mut path = Self {
@@ -94,11 +75,6 @@ impl HyperPath {
     /// Whether the last segment connects back to the first point.
     pub fn is_closed(&self) -> bool {
         self.closed
-    }
-
-    /// Call after mutating points to rebuild the bezier cache.
-    pub fn after_change(&mut self) {
-        self.rebuild_bezier();
     }
 
     /// Returns a copy of the cached solved bezier.
@@ -172,29 +148,6 @@ impl HyperPath {
         }
 
         CubicPath::new(PathPoints::from_vec(points), self.closed)
-    }
-
-    /// Add a new on-curve point to the path. All points are smooth by
-    /// default.
-    pub fn add_on_curve_point(&mut self, point: Point) {
-        let new_point = PathPoint {
-            id: EntityId::next(),
-            point,
-            typ: PointType::OnCurve { smooth: true },
-        };
-        self.points.make_mut().push(new_point);
-        self.rebuild_bezier();
-    }
-
-    /// Marks the path closed and re-solves the spline.
-    pub fn close_path(&mut self) {
-        self.closed = true;
-        self.rebuild_bezier();
-    }
-
-    /// Returns the first on-curve point, or `None` when the path is empty.
-    pub fn start_point(&self) -> Option<&PathPoint> {
-        self.points.iter().next()
     }
 
     /// Rebuild the bezier cache from points using the spline solver.
@@ -329,91 +282,5 @@ impl HyperPath {
         }
 
         Contour { points }
-    }
-
-    /// Iterate over the solved bezier segments (not the original
-    /// on-curve points).
-    pub fn iter_segments(&self) -> impl Iterator<Item = super::segment::SegmentInfo> + '_ {
-        HyperSegmentIterator::new(&self.bezier)
-    }
-}
-
-struct HyperSegmentIterator<'a> {
-    elements: std::slice::Iter<'a, kurbo::PathEl>,
-    prev_point: Point,
-    index: usize,
-}
-
-impl<'a> HyperSegmentIterator<'a> {
-    fn new(bezier: &'a BezPath) -> Self {
-        Self {
-            elements: bezier.elements().iter(),
-            prev_point: Point::ZERO,
-            index: 0,
-        }
-    }
-}
-
-impl Iterator for HyperSegmentIterator<'_> {
-    type Item = super::segment::SegmentInfo;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let el = self.elements.next()?;
-
-            match el {
-                kurbo::PathEl::MoveTo(p) => {
-                    self.prev_point = *p;
-                    self.index = 0;
-                }
-                kurbo::PathEl::LineTo(p) => {
-                    let segment =
-                        super::segment::Segment::Line(kurbo::Line::new(self.prev_point, *p));
-                    let start_idx = self.index;
-                    self.prev_point = *p;
-                    self.index += 1;
-                    return Some(super::segment::SegmentInfo {
-                        segment,
-                        start_index: start_idx,
-                        end_index: self.index,
-                        path_index: 0,
-                    });
-                }
-                kurbo::PathEl::CurveTo(p1, p2, p3) => {
-                    let segment = super::segment::Segment::Cubic(kurbo::CubicBez::new(
-                        self.prev_point,
-                        *p1,
-                        *p2,
-                        *p3,
-                    ));
-                    let start_idx = self.index;
-                    self.prev_point = *p3;
-                    self.index += 1;
-                    return Some(super::segment::SegmentInfo {
-                        segment,
-                        start_index: start_idx,
-                        end_index: self.index,
-                        path_index: 0,
-                    });
-                }
-                kurbo::PathEl::QuadTo(p1, p2) => {
-                    let segment = super::segment::Segment::Quadratic(kurbo::QuadBez::new(
-                        self.prev_point,
-                        *p1,
-                        *p2,
-                    ));
-                    let start_idx = self.index;
-                    self.prev_point = *p2;
-                    self.index += 1;
-                    return Some(super::segment::SegmentInfo {
-                        segment,
-                        start_index: start_idx,
-                        end_index: self.index,
-                        path_index: 0,
-                    });
-                }
-                kurbo::PathEl::ClosePath => {}
-            }
-        }
     }
 }

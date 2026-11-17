@@ -98,22 +98,6 @@ pub enum RunValue {
 }
 
 impl RunValue {
-    /// What kind of port carries this.
-    pub fn kind(&self) -> Kind {
-        match self {
-            Self::Source { .. } => Kind::Source,
-            Self::Model { .. } => Kind::Model,
-            Self::Adapter { .. } => Kind::Adapter,
-            Self::Glyphs { .. } => Kind::Glyphs,
-            Self::Number { .. } => Kind::Number,
-            Self::Flag { .. } => Kind::Flag,
-            Self::Text { .. } => Kind::Text,
-            Self::Layer { .. } => Kind::Layer,
-            Self::Rows { .. } => Kind::Rows,
-            Self::Path { .. } => Kind::Path,
-        }
-    }
-
     /// The text of a text value.
     fn text(&self) -> Option<&str> {
         match self {

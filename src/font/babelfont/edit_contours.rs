@@ -28,11 +28,6 @@ impl LayerEditDraft {
         true
     }
 
-    /// The explicit snapping policy used by this draft's geometric operations.
-    pub fn grid_spacing(&self) -> f64 {
-        self.grid_spacing
-    }
-
     pub(in crate::font) fn into_parts(self) -> (Layer, LayerPreservation) {
         (self.layer, self.preserved)
     }

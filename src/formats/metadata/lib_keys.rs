@@ -230,44 +230,6 @@ pub fn read_production_name(font: &norad::Font, glyph: &str) -> Option<String> {
     }
 }
 
-/// Set or clear one glyph's production name in `public.postscriptNames`.
-/// An empty `text` clears it, and removes the dictionary when it was
-/// the last entry. Returns true when the lib changed.
-pub fn write_production_name(font: &mut norad::Font, glyph: &str, text: &str) -> bool {
-    let dict = match font.lib.get_mut(PSNAMES_KEY) {
-        Some(plist::Value::Dictionary(d)) => d,
-        _ => {
-            if text.is_empty() {
-                return false;
-            }
-            font.lib.insert(
-                PSNAMES_KEY.into(),
-                plist::Value::Dictionary(plist::Dictionary::new()),
-            );
-            match font.lib.get_mut(PSNAMES_KEY) {
-                Some(plist::Value::Dictionary(d)) => d,
-                _ => return false,
-            }
-        }
-    };
-    let before = dict.get(glyph).and_then(|v| v.as_string());
-    if text.is_empty() {
-        if before.is_none() {
-            return false;
-        }
-        dict.remove(glyph);
-        if dict.is_empty() {
-            font.lib.remove(PSNAMES_KEY);
-        }
-        true
-    } else if before != Some(text) {
-        dict.insert(glyph.to_string(), plist::Value::String(text.to_string()));
-        true
-    } else {
-        false
-    }
-}
-
 /// Rename references without rebuilding lib values or changing production names.
 ///
 /// Malformed containers and affected production values reject the operation, as do

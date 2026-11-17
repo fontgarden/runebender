@@ -913,13 +913,6 @@ impl CanonicalDesignspace {
         self.sources.iter_mut().find(|source| source.id == id)
     }
 
-    /// Find one sparse source mutably within a checked edit draft.
-    pub fn sparse_source_mut(&mut self, layer: &LayerId) -> Option<&mut SparseSourceDescriptor> {
-        self.sparse_sources
-            .iter_mut()
-            .find(|source| &source.layer == layer)
-    }
-
     /// Find one instance mutably within a checked edit draft.
     pub fn instance_mut(&mut self, id: InstanceId) -> Option<&mut CanonicalInstance> {
         self.instances.iter_mut().find(|instance| instance.id == id)

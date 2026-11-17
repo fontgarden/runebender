@@ -51,12 +51,6 @@ impl PathPoints {
         self.points.as_slice()
     }
 
-    /// Get mutable access to the points. Clones the data if the `Arc`
-    /// has multiple references.
-    pub fn make_mut(&mut self) -> &mut Vec<PathPoint> {
-        Arc::make_mut(&mut self.points)
-    }
-
     /// Convert to a vector. Clones the data if the `Arc` has multiple
     /// references.
     pub fn to_vec(&self) -> Vec<PathPoint> {

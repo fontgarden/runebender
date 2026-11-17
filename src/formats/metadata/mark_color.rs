@@ -9,22 +9,6 @@
 
 pub use crate::font::model::glyph_metadata::{MARK_COLOR_KEY, MarkColor};
 
-/// Normalizes a `public.markColor` string by trimming whitespace around each value. Keeps the original number text. Returns `None` for invalid input; an empty string stays empty.
-pub fn canonical_ufo_mark_color(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Some(String::new());
-    }
-    MarkColor::parse(trimmed)?;
-    Some(
-        trimmed
-            .split(',')
-            .map(str::trim)
-            .collect::<Vec<_>>()
-            .join(","),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -47,14 +31,5 @@ mod tests {
         assert_eq!(MarkColor::parse("1,0.3,1"), None);
         assert_eq!(MarkColor::parse("1,0.3,0.3,2"), None);
         assert_eq!(MarkColor::parse("1,0.3,0.3,nan"), None);
-    }
-
-    #[test]
-    fn canonicalizes_storage_string_without_changing_precision() {
-        assert_eq!(
-            canonical_ufo_mark_color(" 1, 0.30, 0.3, 1 "),
-            Some("1,0.30,0.3,1".to_string())
-        );
-        assert_eq!(canonical_ufo_mark_color(""), Some(String::new()));
     }
 }

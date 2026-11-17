@@ -43,11 +43,6 @@ impl CubicPath {
         }
     }
 
-    /// Creates an open path with no points.
-    pub fn empty() -> Self {
-        Self::new(PathPoints::new(), false)
-    }
-
     /// Returns the number of points, on-curve and off-curve together.
     pub fn len(&self) -> usize {
         self.points.len()
@@ -91,30 +86,6 @@ impl CubicPath {
             Self::handle_closed_path_trailing_points(points, start_idx, path);
             path.close_path();
         }
-    }
-
-    /// Convert from a workspace contour (norad-shaped).
-    pub fn from_contour(contour: &workspace::Contour) -> Self {
-        if contour.points.is_empty() {
-            return Self::empty();
-        }
-
-        // In UFO, a contour is closed unless the first point is a Move.
-        let closed = !matches!(contour.points[0].point_type, workspace::PointType::Move);
-
-        let mut path_points: Vec<PathPoint> = contour
-            .points
-            .iter()
-            .map(PathPoint::from_contour_point)
-            .collect();
-
-        // If closed, rotate left by 1 to match Runebender's convention
-        // (first point in closed path is last in vector).
-        if closed && !path_points.is_empty() {
-            path_points.rotate_left(1);
-        }
-
-        Self::new(PathPoints::from_vec(path_points), closed)
     }
 
     /// Convert this cubic path to a workspace contour (for saving).
