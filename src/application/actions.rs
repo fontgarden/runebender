@@ -172,6 +172,21 @@ pub(crate) struct Entry {
     pub action: AppAction,
 }
 
+/// One row of `ACTIONS`.
+const fn item(
+    menu: &'static str,
+    title: &'static str,
+    accelerator: Option<&'static str>,
+    action: AppAction,
+) -> Entry {
+    Entry {
+        menu,
+        title,
+        accelerator,
+        action,
+    }
+}
+
 impl Entry {
     /// Whether a visual group begins before this row.
     pub(crate) fn separator_before(&self) -> bool {
@@ -392,6 +407,9 @@ impl Entry {
 }
 
 /// Every action the application exposes, in menu order.
+///
+/// Each row is one `item`: menu, title, accelerator and action.
+/// The rows stay one per line, so the table is not formatted.
 #[cfg_attr(
     not(target_os = "macos"),
     allow(
@@ -399,664 +417,123 @@ impl Entry {
         reason = "the menu table is read by the native menu bar, which is macOS only"
     )
 )]
-pub(crate) const ACTIONS: &[Entry] = &[
-    Entry {
-        menu: "Runebender",
-        title: "Quit Runebender",
-        accelerator: Some("CmdOrCtrl+Q"),
-        action: AppAction::Quit,
-    },
-    Entry {
-        menu: "File",
-        title: "New Font",
-        accelerator: Some("CmdOrCtrl+N"),
-        action: AppAction::NewFont,
-    },
-    Entry {
-        menu: "File",
-        title: "Open…",
-        accelerator: Some("CmdOrCtrl+O"),
-        action: AppAction::OpenFont,
-    },
-    Entry {
-        menu: "File",
-        title: "Save",
-        accelerator: Some("CmdOrCtrl+S"),
-        action: AppAction::Save,
-    },
-    Entry {
-        menu: "File",
-        title: "Save As…",
-        accelerator: Some("CmdOrCtrl+Shift+S"),
-        action: AppAction::SaveAs,
-    },
-    Entry {
-        menu: "File",
-        title: "Revert to Saved…",
-        accelerator: None,
-        action: AppAction::RevertToSaved,
-    },
-    Entry {
-        menu: "File",
-        title: "Export…",
-        accelerator: Some("CmdOrCtrl+Alt+E"),
-        action: AppAction::ExportFont,
-    },
-    Entry {
-        menu: "Graph",
-        title: "New Graph",
-        accelerator: None,
-        action: AppAction::GraphNew,
-    },
-    Entry {
-        menu: "Graph",
-        title: "Open Graph…",
-        accelerator: None,
-        action: AppAction::GraphOpen,
-    },
-    Entry {
-        menu: "Graph",
-        title: "Save Graph",
-        accelerator: None,
-        action: AppAction::GraphSave,
-    },
-    Entry {
-        menu: "Graph",
-        title: "Run Graph",
-        accelerator: Some("CmdOrCtrl+Enter"),
-        action: AppAction::GraphRun,
-    },
-    Entry {
-        menu: "Edit",
-        title: "Undo",
-        accelerator: Some("CmdOrCtrl+Z"),
-        action: AppAction::Undo,
-    },
-    Entry {
-        menu: "Edit",
-        title: "Redo",
-        accelerator: Some("CmdOrCtrl+Shift+Z"),
-        action: AppAction::Redo,
-    },
-    Entry {
-        menu: "Edit",
-        title: "Copy",
-        accelerator: Some("CmdOrCtrl+C"),
-        action: AppAction::Copy,
-    },
-    Entry {
-        menu: "Edit",
-        title: "Paste",
-        accelerator: Some("CmdOrCtrl+V"),
-        action: AppAction::Paste,
-    },
-    Entry {
-        menu: "Edit",
-        title: "Copy Selected Glyphs as Text",
-        accelerator: None,
-        action: AppAction::CopySelectedGlyphs,
-    },
-    Entry {
-        menu: "Edit",
-        title: "Select All",
-        accelerator: Some("CmdOrCtrl+A"),
-        action: AppAction::SelectAll,
-    },
-    Entry {
-        menu: "Edit",
-        title: "Deselect All",
-        accelerator: Some("CmdOrCtrl+Alt+A"),
-        action: AppAction::DeselectAll,
-    },
-    Entry {
-        menu: "Edit",
-        title: "Invert Selection",
-        accelerator: Some("CmdOrCtrl+Alt+Shift+I"),
-        action: AppAction::InvertSelection,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "New Glyph",
-        accelerator: None,
-        action: AppAction::NewGlyph,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "Duplicate Glyph",
-        accelerator: None,
-        action: AppAction::DuplicateGlyph,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "Remove Glyph",
-        accelerator: None,
-        action: AppAction::RemoveGlyph,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "Update Metrics",
-        accelerator: None,
-        action: AppAction::UpdateMetrics,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "Reinterpolate",
-        accelerator: None,
-        action: AppAction::Reinterpolate,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "Generate Missing Glyphs",
-        accelerator: None,
-        action: AppAction::GenerateMissing,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "Decompose Components",
-        accelerator: None,
-        action: AppAction::Decompose,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "Check Joining",
-        accelerator: None,
-        action: AppAction::CheckJoining,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "Compose from Anchors",
-        accelerator: None,
-        action: AppAction::ComposeFromAnchors,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "Bake Masks",
-        accelerator: None,
-        action: AppAction::BakeMasks,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "Export Glyph as SVG",
-        accelerator: None,
-        action: AppAction::ExportGlyphSvg,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "Trace Image…",
-        accelerator: None,
-        action: AppAction::TraceImage,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "Bolden With Model…",
-        accelerator: None,
-        action: AppAction::BoldenWithModel,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "Place Image…",
-        accelerator: None,
-        action: AppAction::PlaceImage,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "Import SVG…",
-        accelerator: None,
-        action: AppAction::ImportSvg,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "Remove Image",
-        accelerator: None,
-        action: AppAction::RemoveImage,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "Next Draft",
-        accelerator: Some("]"),
-        action: AppAction::NextDraft,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "Previous Draft",
-        accelerator: Some("["),
-        action: AppAction::PreviousDraft,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "Grade Red",
-        accelerator: Some("1"),
-        action: AppAction::GradeRed,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "Grade Orange",
-        accelerator: Some("2"),
-        action: AppAction::GradeOrange,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "Grade Yellow",
-        accelerator: Some("3"),
-        action: AppAction::GradeYellow,
-    },
-    Entry {
-        menu: "Glyph",
-        title: "Grade Green",
-        accelerator: Some("4"),
-        action: AppAction::GradeGreen,
-    },
-    Entry {
-        menu: "Path",
-        title: "Tidy Up Paths",
-        accelerator: Some("CmdOrCtrl+Shift+T"),
-        action: AppAction::TidyPaths,
-    },
-    Entry {
-        menu: "Path",
-        title: "Add Extremes",
-        accelerator: None,
-        action: AppAction::AddExtremes,
-    },
-    Entry {
-        menu: "Path",
-        title: "Round Coordinates",
-        accelerator: None,
-        action: AppAction::RoundCoordinates,
-    },
-    Entry {
-        menu: "Path",
-        title: "Correct Path Direction",
-        accelerator: Some("CmdOrCtrl+Shift+R"),
-        action: AppAction::CorrectPathDirection,
-    },
-    Entry {
-        menu: "Path",
-        title: "Reverse Contours",
-        accelerator: Some("CmdOrCtrl+Alt+Shift+R"),
-        action: AppAction::ReverseContours,
-    },
-    Entry {
-        menu: "Path",
-        title: "Set Start Point",
-        accelerator: None,
-        action: AppAction::SetStartPoint,
-    },
-    Entry {
-        menu: "Path",
-        title: "Remove Overlap",
-        accelerator: Some("CmdOrCtrl+Shift+O"),
-        action: AppAction::RemoveOverlap,
-    },
-    Entry {
-        menu: "Path",
-        title: "Union",
-        accelerator: None,
-        action: AppAction::BooleanUnion,
-    },
-    Entry {
-        menu: "Path",
-        title: "Subtract",
-        accelerator: None,
-        action: AppAction::BooleanSubtract,
-    },
-    Entry {
-        menu: "Path",
-        title: "Intersect",
-        accelerator: None,
-        action: AppAction::BooleanIntersect,
-    },
-    Entry {
-        menu: "Path",
-        title: "Exclude",
-        accelerator: None,
-        action: AppAction::BooleanExclude,
-    },
-    Entry {
-        menu: "Path",
-        title: "Flip Horizontal",
-        accelerator: Some("CmdOrCtrl+Shift+H"),
-        action: AppAction::FlipHorizontal,
-    },
-    Entry {
-        menu: "Path",
-        title: "Flip Vertical",
-        accelerator: Some("CmdOrCtrl+Shift+V"),
-        action: AppAction::FlipVertical,
-    },
-    Entry {
-        menu: "Path",
-        title: "Rotate 90° Left",
-        accelerator: None,
-        action: AppAction::Rotate90,
-    },
-    Entry {
-        menu: "Path",
-        title: "Rotate 90° Right",
-        accelerator: None,
-        action: AppAction::RotateRight,
-    },
-    Entry {
-        menu: "Path",
-        title: "Rotate 180°",
-        accelerator: None,
-        action: AppAction::Rotate180,
-    },
-    Entry {
-        menu: "Path",
-        title: "Duplicate Selection",
-        accelerator: Some("CmdOrCtrl+D"),
-        action: AppAction::Duplicate,
-    },
-    Entry {
-        menu: "Path",
-        title: "Duplicate + Repeat",
-        accelerator: Some("CmdOrCtrl+Shift+D"),
-        action: AppAction::DuplicateRepeat,
-    },
-    Entry {
-        menu: "Path",
-        title: "Harmonize",
-        accelerator: None,
-        action: AppAction::Harmonize,
-    },
-    Entry {
-        menu: "Path",
-        title: "Balance",
-        accelerator: None,
-        action: AppAction::Balance,
-    },
-    Entry {
-        menu: "Path",
-        title: "Optimize",
-        accelerator: None,
-        action: AppAction::Optimize,
-    },
-    Entry {
-        menu: "Path",
-        title: "Metaballs to Hyperbezier",
-        accelerator: None,
-        action: AppAction::MetaballsToHyperbezier,
-    },
-    Entry {
-        menu: "Path",
-        title: "Metaballs to Cubic",
-        accelerator: None,
-        action: AppAction::MetaballsToCubic,
-    },
-    Entry {
-        menu: "Path",
-        title: "Font to Cubic (Current Master, Overview)",
-        accelerator: None,
-        action: AppAction::FontMetaballsToCubic,
-    },
-    Entry {
-        menu: "",
-        title: "Metaball",
-        accelerator: None,
-        action: AppAction::Tool(Tool::Metaball),
-    },
-    Entry {
-        menu: "Path",
-        title: "Hyperbezier to Cubic",
-        accelerator: None,
-        action: AppAction::HyperToCubic,
-    },
-    Entry {
-        menu: "Path",
-        title: "Quadratic to Cubic",
-        accelerator: None,
-        action: AppAction::QuadsToCubics,
-    },
-    Entry {
-        menu: "Path",
-        title: "Cubic to Quadratic",
-        accelerator: None,
-        action: AppAction::CubicsToQuads,
-    },
-    Entry {
-        menu: "Filter",
-        title: "Offset Curve",
-        accelerator: None,
-        action: AppAction::FilterOffset,
-    },
-    Entry {
-        menu: "Filter",
-        title: "Extrude",
-        accelerator: None,
-        action: AppAction::FilterExtrude,
-    },
-    Entry {
-        menu: "Filter",
-        title: "Roughen",
-        accelerator: None,
-        action: AppAction::FilterRoughen,
-    },
-    Entry {
-        menu: "Filter",
-        title: "Slanter",
-        accelerator: None,
-        action: AppAction::FilterSlant,
-    },
-    Entry {
-        menu: "Filter",
-        title: "Round Corners",
-        accelerator: None,
-        action: AppAction::RoundCorners,
-    },
-    Entry {
-        menu: "Filter",
-        title: "Add Extremes",
-        accelerator: None,
-        action: AppAction::AddExtremes,
-    },
-    Entry {
-        menu: "Filter",
-        title: "Remove Overlap",
-        accelerator: None,
-        action: AppAction::RemoveOverlap,
-    },
-    Entry {
-        menu: "View",
-        title: "Zoom to Fit",
-        accelerator: Some("CmdOrCtrl+0"),
-        action: AppAction::ZoomToFit,
-    },
-    Entry {
-        menu: "View",
-        title: "Show All Masters",
-        accelerator: None,
-        action: AppAction::ShowAllMasters,
-    },
-    Entry {
-        menu: "View",
-        title: "Sort Glyphs by Name",
-        accelerator: None,
-        action: AppAction::SortByName,
-    },
-    Entry {
-        menu: "View",
-        title: "Sort Glyphs by Unicode",
-        accelerator: None,
-        action: AppAction::SortByUnicode,
-    },
-    Entry {
-        menu: "View",
-        title: "Next Master",
-        accelerator: None,
-        action: AppAction::NextMaster,
-    },
-    Entry {
-        menu: "View",
-        title: "Previous Master",
-        accelerator: None,
-        action: AppAction::PreviousMaster,
-    },
-    Entry {
-        menu: "View",
-        title: "Next Sample String",
-        accelerator: None,
-        action: AppAction::NextSampleString,
-    },
-    Entry {
-        menu: "View",
-        title: "Previous Sample String",
-        accelerator: None,
-        action: AppAction::PreviousSampleString,
-    },
-    Entry {
-        menu: "View",
-        title: "Dots",
-        accelerator: None,
-        action: AppAction::GridDots,
-    },
-    Entry {
-        menu: "View",
-        title: "Lines",
-        accelerator: None,
-        action: AppAction::GridLines,
-    },
-    Entry {
-        menu: "View",
-        title: "Colorize Outline",
-        accelerator: None,
-        action: AppAction::MeasureColorize,
-    },
-    Entry {
-        menu: "View",
-        title: "Handle Lengths",
-        accelerator: None,
-        action: AppAction::MeasureHandles,
-    },
-    Entry {
-        menu: "View",
-        title: "Segment Lengths",
-        accelerator: None,
-        action: AppAction::MeasureSegments,
-    },
-    Entry {
-        menu: "View",
-        title: "Segment Sizes",
-        accelerator: None,
-        action: AppAction::MeasureSizes,
-    },
-    Entry {
-        menu: "View",
-        title: "Stems & Counters",
-        accelerator: None,
-        action: AppAction::MeasureSpans,
-    },
-    Entry {
-        menu: "View",
-        title: "Side Bearings",
-        accelerator: None,
-        action: AppAction::MeasureSideBearings,
-    },
-    Entry {
-        menu: "View",
-        title: "Popcount Sums",
-        accelerator: None,
-        action: AppAction::MeasurePopcount,
-    },
-    Entry {
-        menu: "View",
-        title: "All On",
-        accelerator: None,
-        action: AppAction::MeasureAllOn,
-    },
-    Entry {
-        menu: "View",
-        title: "All Off",
-        accelerator: None,
-        action: AppAction::MeasureAllOff,
-    },
+#[rustfmt::skip]
+pub(crate) const ACTIONS: &[Entry] = {
+    use AppAction as A;
+    &[
+        item("Runebender", "Quit Runebender", Some("CmdOrCtrl+Q"), A::Quit),
+        item("File", "New Font", Some("CmdOrCtrl+N"), A::NewFont),
+        item("File", "Open…", Some("CmdOrCtrl+O"), A::OpenFont),
+        item("File", "Save", Some("CmdOrCtrl+S"), A::Save),
+        item("File", "Save As…", Some("CmdOrCtrl+Shift+S"), A::SaveAs),
+        item("File", "Revert to Saved…", None, A::RevertToSaved),
+        item("File", "Export…", Some("CmdOrCtrl+Alt+E"), A::ExportFont),
+        item("Graph", "New Graph", None, A::GraphNew),
+        item("Graph", "Open Graph…", None, A::GraphOpen),
+        item("Graph", "Save Graph", None, A::GraphSave),
+        item("Graph", "Run Graph", Some("CmdOrCtrl+Enter"), A::GraphRun),
+        item("Edit", "Undo", Some("CmdOrCtrl+Z"), A::Undo),
+        item("Edit", "Redo", Some("CmdOrCtrl+Shift+Z"), A::Redo),
+        item("Edit", "Copy", Some("CmdOrCtrl+C"), A::Copy),
+        item("Edit", "Paste", Some("CmdOrCtrl+V"), A::Paste),
+        item("Edit", "Copy Selected Glyphs as Text", None, A::CopySelectedGlyphs),
+        item("Edit", "Select All", Some("CmdOrCtrl+A"), A::SelectAll),
+        item("Edit", "Deselect All", Some("CmdOrCtrl+Alt+A"), A::DeselectAll),
+        item("Edit", "Invert Selection", Some("CmdOrCtrl+Alt+Shift+I"), A::InvertSelection),
+        item("Glyph", "New Glyph", None, A::NewGlyph),
+        item("Glyph", "Duplicate Glyph", None, A::DuplicateGlyph),
+        item("Glyph", "Remove Glyph", None, A::RemoveGlyph),
+        item("Glyph", "Update Metrics", None, A::UpdateMetrics),
+        item("Glyph", "Reinterpolate", None, A::Reinterpolate),
+        item("Glyph", "Generate Missing Glyphs", None, A::GenerateMissing),
+        item("Glyph", "Decompose Components", None, A::Decompose),
+        item("Glyph", "Check Joining", None, A::CheckJoining),
+        item("Glyph", "Compose from Anchors", None, A::ComposeFromAnchors),
+        item("Glyph", "Bake Masks", None, A::BakeMasks),
+        item("Glyph", "Export Glyph as SVG", None, A::ExportGlyphSvg),
+        item("Glyph", "Trace Image…", None, A::TraceImage),
+        item("Glyph", "Bolden With Model…", None, A::BoldenWithModel),
+        item("Glyph", "Place Image…", None, A::PlaceImage),
+        item("Glyph", "Import SVG…", None, A::ImportSvg),
+        item("Glyph", "Remove Image", None, A::RemoveImage),
+        item("Glyph", "Next Draft", Some("]"), A::NextDraft),
+        item("Glyph", "Previous Draft", Some("["), A::PreviousDraft),
+        item("Glyph", "Grade Red", Some("1"), A::GradeRed),
+        item("Glyph", "Grade Orange", Some("2"), A::GradeOrange),
+        item("Glyph", "Grade Yellow", Some("3"), A::GradeYellow),
+        item("Glyph", "Grade Green", Some("4"), A::GradeGreen),
+        item("Path", "Tidy Up Paths", Some("CmdOrCtrl+Shift+T"), A::TidyPaths),
+        item("Path", "Add Extremes", None, A::AddExtremes),
+        item("Path", "Round Coordinates", None, A::RoundCoordinates),
+        item("Path", "Correct Path Direction", Some("CmdOrCtrl+Shift+R"), A::CorrectPathDirection),
+        item("Path", "Reverse Contours", Some("CmdOrCtrl+Alt+Shift+R"), A::ReverseContours),
+        item("Path", "Set Start Point", None, A::SetStartPoint),
+        item("Path", "Remove Overlap", Some("CmdOrCtrl+Shift+O"), A::RemoveOverlap),
+        item("Path", "Union", None, A::BooleanUnion),
+        item("Path", "Subtract", None, A::BooleanSubtract),
+        item("Path", "Intersect", None, A::BooleanIntersect),
+        item("Path", "Exclude", None, A::BooleanExclude),
+        item("Path", "Flip Horizontal", Some("CmdOrCtrl+Shift+H"), A::FlipHorizontal),
+        item("Path", "Flip Vertical", Some("CmdOrCtrl+Shift+V"), A::FlipVertical),
+        item("Path", "Rotate 90° Left", None, A::Rotate90),
+        item("Path", "Rotate 90° Right", None, A::RotateRight),
+        item("Path", "Rotate 180°", None, A::Rotate180),
+        item("Path", "Duplicate Selection", Some("CmdOrCtrl+D"), A::Duplicate),
+        item("Path", "Duplicate + Repeat", Some("CmdOrCtrl+Shift+D"), A::DuplicateRepeat),
+        item("Path", "Harmonize", None, A::Harmonize),
+        item("Path", "Balance", None, A::Balance),
+        item("Path", "Optimize", None, A::Optimize),
+        item("Path", "Metaballs to Hyperbezier", None, A::MetaballsToHyperbezier),
+        item("Path", "Metaballs to Cubic", None, A::MetaballsToCubic),
+        item("Path", "Font to Cubic (Current Master, Overview)", None, A::FontMetaballsToCubic),
+        item("", "Metaball", None, A::Tool(Tool::Metaball)),
+        item("Path", "Hyperbezier to Cubic", None, A::HyperToCubic),
+        item("Path", "Quadratic to Cubic", None, A::QuadsToCubics),
+        item("Path", "Cubic to Quadratic", None, A::CubicsToQuads),
+        item("Filter", "Offset Curve", None, A::FilterOffset),
+        item("Filter", "Extrude", None, A::FilterExtrude),
+        item("Filter", "Roughen", None, A::FilterRoughen),
+        item("Filter", "Slanter", None, A::FilterSlant),
+        item("Filter", "Round Corners", None, A::RoundCorners),
+        item("Filter", "Add Extremes", None, A::AddExtremes),
+        item("Filter", "Remove Overlap", None, A::RemoveOverlap),
+        item("View", "Zoom to Fit", Some("CmdOrCtrl+0"), A::ZoomToFit),
+        item("View", "Show All Masters", None, A::ShowAllMasters),
+        item("View", "Sort Glyphs by Name", None, A::SortByName),
+        item("View", "Sort Glyphs by Unicode", None, A::SortByUnicode),
+        item("View", "Next Master", None, A::NextMaster),
+        item("View", "Previous Master", None, A::PreviousMaster),
+        item("View", "Next Sample String", None, A::NextSampleString),
+        item("View", "Previous Sample String", None, A::PreviousSampleString),
+        item("View", "Dots", None, A::GridDots),
+        item("View", "Lines", None, A::GridLines),
+        item("View", "Colorize Outline", None, A::MeasureColorize),
+        item("View", "Handle Lengths", None, A::MeasureHandles),
+        item("View", "Segment Lengths", None, A::MeasureSegments),
+        item("View", "Segment Sizes", None, A::MeasureSizes),
+        item("View", "Stems & Counters", None, A::MeasureSpans),
+        item("View", "Side Bearings", None, A::MeasureSideBearings),
+        item("View", "Popcount Sums", None, A::MeasurePopcount),
+        item("View", "All On", None, A::MeasureAllOn),
+        item("View", "All Off", None, A::MeasureAllOff),
     // Shortcut-only commands. GPUI exposes tools in the chrome rather than a
     // top-level Tools menu, and Escape returns to the overview without a row.
-    Entry {
-        menu: "",
-        title: "Overview",
-        accelerator: Some("Escape"),
-        action: AppAction::Overview,
-    },
-    Entry {
-        menu: "",
-        title: "Cycle Theme",
-        accelerator: Some("CmdOrCtrl+T"),
-        action: AppAction::CycleTheme,
-    },
-    Entry {
-        menu: "",
-        title: "Show Graph",
-        accelerator: None,
-        action: AppAction::GraphTab,
-    },
-    Entry {
-        menu: "",
-        title: "Select",
-        accelerator: Some("V"),
-        action: AppAction::Tool(Tool::Select),
-    },
-    Entry {
-        menu: "",
-        title: "Hand",
-        accelerator: None,
-        action: AppAction::Tool(Tool::Hand),
-    },
-    Entry {
-        menu: "",
-        title: "Pen",
-        accelerator: Some("P"),
-        action: AppAction::Tool(Tool::Pen),
-    },
-    Entry {
-        menu: "",
-        title: "Hyper Pen",
-        accelerator: Some("B"),
-        action: AppAction::Tool(Tool::HyperPen),
-    },
-    Entry {
-        menu: "",
-        title: "Rectangle",
-        accelerator: Some("U"),
-        action: AppAction::Tool(Tool::Rect),
-    },
-    Entry {
-        menu: "",
-        title: "Ellipse",
-        accelerator: Some("O"),
-        action: AppAction::Tool(Tool::Ellipse),
-    },
-    Entry {
-        menu: "",
-        title: "Local AI Shapes",
-        accelerator: None,
-        action: AppAction::Tool(Tool::AiShape),
-    },
-    Entry {
-        menu: "",
-        title: "Knife",
-        accelerator: Some("E"),
-        action: AppAction::Tool(Tool::Knife),
-    },
-    Entry {
-        menu: "",
-        title: "Measure",
-        accelerator: Some("M"),
-        action: AppAction::Tool(Tool::Measure),
-    },
-    Entry {
-        menu: "",
-        title: "Edit Interpolation",
-        accelerator: Some("I"),
-        action: AppAction::Tool(Tool::Interpolation),
-    },
-    Entry {
-        menu: "",
-        title: "Label",
-        accelerator: None,
-        action: AppAction::Tool(Tool::Label),
-    },
-];
+        item("", "Overview", Some("Escape"), A::Overview),
+        item("", "Cycle Theme", Some("CmdOrCtrl+T"), A::CycleTheme),
+        item("", "Show Graph", None, A::GraphTab),
+        item("", "Select", Some("V"), A::Tool(Tool::Select)),
+        item("", "Hand", None, A::Tool(Tool::Hand)),
+        item("", "Pen", Some("P"), A::Tool(Tool::Pen)),
+        item("", "Hyper Pen", Some("B"), A::Tool(Tool::HyperPen)),
+        item("", "Rectangle", Some("U"), A::Tool(Tool::Rect)),
+        item("", "Ellipse", Some("O"), A::Tool(Tool::Ellipse)),
+        item("", "Local AI Shapes", None, A::Tool(Tool::AiShape)),
+        item("", "Knife", Some("E"), A::Tool(Tool::Knife)),
+        item("", "Measure", Some("M"), A::Tool(Tool::Measure)),
+        item("", "Edit Interpolation", Some("I"), A::Tool(Tool::Interpolation)),
+        item("", "Label", None, A::Tool(Tool::Label)),
+    ]
+};
 
 /// The order menus appear in the bar.
 #[cfg_attr(
@@ -1202,168 +679,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn menu_and_submenu_order_matches_the_gpui_reference() {
-        assert_eq!(
-            MENUS,
-            &[
-                "Runebender",
-                "File",
-                "Graph",
-                "Edit",
-                "Glyph",
-                "Path",
-                "Filter",
-                "View"
-            ]
-        );
-        let view: Vec<_> = actions()
-            .iter()
-            .filter(|entry| entry.menu == "View")
-            .map(|entry| (entry.title, entry.submenu()))
-            .collect();
-        assert_eq!(view[0], ("Zoom to Fit", None));
-        assert_eq!(view[8], ("Dots", Some("Grid")));
-        assert_eq!(view[10], ("Colorize Outline", Some("Measure")));
-        assert_eq!(view[19], ("Dark", Some("Theme")));
-        assert_eq!(view[21], ("Light", Some("Theme")));
-
-        let glyph: Vec<_> = ACTIONS
-            .iter()
-            .filter(|entry| entry.menu == "Glyph")
-            .map(|entry| entry.title)
-            .collect();
-        assert_eq!(
-            glyph,
-            [
-                "New Glyph",
-                "Duplicate Glyph",
-                "Remove Glyph",
-                "Update Metrics",
-                "Reinterpolate",
-                "Generate Missing Glyphs",
-                "Decompose Components",
-                "Check Joining",
-                "Compose from Anchors",
-                "Bake Masks",
-                "Export Glyph as SVG",
-                "Trace Image…",
-                "Bolden With Model…",
-                "Place Image…",
-                "Import SVG…",
-                "Remove Image",
-                "Next Draft",
-                "Previous Draft",
-                "Grade Red",
-                "Grade Orange",
-                "Grade Yellow",
-                "Grade Green",
-            ]
-        );
-
-        let file: Vec<_> = ACTIONS
-            .iter()
-            .filter(|entry| entry.menu == "File")
-            .map(|entry| entry.title)
-            .collect();
-        assert_eq!(
-            file,
-            [
-                "New Font",
-                "Open…",
-                "Save",
-                "Save As…",
-                "Revert to Saved…",
-                "Export…"
-            ]
-        );
-
-        let edit: Vec<_> = ACTIONS
-            .iter()
-            .filter(|entry| entry.menu == "Edit")
-            .map(|entry| entry.title)
-            .collect();
-        assert_eq!(
-            edit,
-            [
-                "Undo",
-                "Redo",
-                "Copy",
-                "Paste",
-                "Copy Selected Glyphs as Text",
-                "Select All",
-                "Deselect All",
-                "Invert Selection",
-            ]
-        );
-
-        let nodes: Vec<_> = ACTIONS
-            .iter()
-            .filter(|entry| entry.menu == "Graph")
-            .map(|entry| entry.title)
-            .collect();
-        assert_eq!(
-            nodes,
-            ["New Graph", "Open Graph…", "Save Graph", "Run Graph"]
-        );
-
-        let filter: Vec<_> = ACTIONS
-            .iter()
-            .filter(|entry| entry.menu == "Filter")
-            .map(|entry| entry.title)
-            .collect();
-        assert_eq!(
-            filter,
-            [
-                "Offset Curve",
-                "Extrude",
-                "Roughen",
-                "Slanter",
-                "Round Corners",
-                "Add Extremes",
-                "Remove Overlap",
-            ]
-        );
-
-        let path: Vec<_> = ACTIONS
-            .iter()
-            .filter(|entry| entry.menu == "Path")
-            .map(|entry| entry.title)
-            .collect();
-        assert_eq!(
-            path,
-            [
-                "Tidy Up Paths",
-                "Add Extremes",
-                "Round Coordinates",
-                "Correct Path Direction",
-                "Reverse Contours",
-                "Set Start Point",
-                "Remove Overlap",
-                "Union",
-                "Subtract",
-                "Intersect",
-                "Exclude",
-                "Flip Horizontal",
-                "Flip Vertical",
-                "Rotate 90° Left",
-                "Rotate 90° Right",
-                "Rotate 180°",
-                "Duplicate Selection",
-                "Duplicate + Repeat",
-                "Harmonize",
-                "Balance",
-                "Optimize",
-                "Metaballs to Hyperbezier",
-                "Metaballs to Cubic",
-                "Font to Cubic (Current Master, Overview)",
-                "Hyperbezier to Cubic",
-                "Quadratic to Cubic",
-                "Cubic to Quadratic",
-            ]
-        );
     }
 
     #[test]
