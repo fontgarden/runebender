@@ -31,7 +31,7 @@ use xilem::core::{MessageCtx, MessageResult, Mut, View, ViewMarker};
 use xilem::{Pod, ViewCtx, WidgetView};
 
 #[cfg(any(target_os = "macos", test))]
-use crate::application::actions::AppAction;
+use crate::application::app_action::AppAction;
 #[cfg(target_os = "macos")]
 use crate::application::workspace::AppState;
 

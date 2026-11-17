@@ -453,8 +453,8 @@ impl Workspace {
 }
 
 /// Outline-changing commands are unavailable while the endpoint drawings are locked.
-pub(crate) fn command_allowed(action: crate::application::actions::AppAction) -> bool {
-    use crate::application::actions::AppAction as A;
+pub(crate) fn command_allowed(action: crate::application::app_action::AppAction) -> bool {
+    use crate::application::app_action::AppAction as A;
     matches!(
         action,
         A::Quit
@@ -515,7 +515,7 @@ pub(crate) fn command_allowed(action: crate::application::actions::AppAction) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::actions::AppAction;
+    use crate::application::app_action::AppAction;
 
     fn shapes() -> Workspace {
         let mut app = Workspace::open(std::path::Path::new(

@@ -431,7 +431,7 @@ fn text_history_action(key: &Key, modifiers: Modifiers) -> Option<TextHistoryAct
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::actions::AppAction;
+    use crate::application::app_action::AppAction;
     use crate::application::widgets::shortcuts::ShortcutHost;
     use masonry::core::keyboard::{Code, KeyboardEvent};
     use masonry::properties::Dimensions;

@@ -1320,7 +1320,7 @@ mod size_tests {
 
     #[test]
     fn overview_advance_and_unicode_follow_commit_order_in_both_directions() {
-        use crate::application::actions::AppAction;
+        use crate::application::app_action::AppAction;
 
         for unicode_first in [false, true] {
             for graph in [false, true] {
@@ -1359,7 +1359,7 @@ mod size_tests {
 
     #[test]
     fn new_overview_and_metadata_edits_invalidate_each_others_redo() {
-        use crate::application::actions::AppAction;
+        use crate::application::app_action::AppAction;
 
         for metadata_redo in [false, true] {
             let mut app = overview_history_workspace();

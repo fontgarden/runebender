@@ -70,26 +70,27 @@ Each module is below `src/application`.
 `design` and `design::recipes` are two layers, because the widgets use the first and the second uses the widgets.
 
 <!-- check: application-order -->
-Application order: `design`, `widgets`, `design::recipes`, `local_models`, `pieces`, `font_model`, `workspace`, `actions`, `platform`, `editor`, `view`, `launch_options`, `cli`, `launch`, `browser`.
+Application order: `design`, `app_action`, `widgets`, `design::recipes`, `local_models`, `pieces`, `font_model`, `workspace`, `actions`, `platform`, `editor`, `view`, `launch_options`, `cli`, `launch`, `browser`.
 <!-- end -->
 
 | Order | Module | Path | Responsibility |
 |---|---|---|---|
 | 1 | `design` | `src/application/design` | The design system without the recipes: the `Palette`, the scales, the control states, the control widgets, the themed stock widgets and the area exceptions. |
-| 2 | `widgets` | `src/application/widgets` | The Masonry widgets that the editor owns, and the shortcut host. |
-| 3 | `design::recipes` | `src/application/design/recipes` | Panel sections, rows, fields and the proof page blocks. |
-| 4 | `local_models` | `src/application/local_models.rs` | Discovery of local model packages. |
-| 5 | `pieces` | `src/application/pieces.rs` | The piece preview of a neural source. |
-| 6 | `font_model` | `src/application/font_model.rs` | `FontModel`: the `Project` and the glyph cache that the grid paints from. |
-| 7 | `workspace` | `src/application/workspace.rs` | `Workspace` and `AppState`: the state of one open document and of the window. |
-| 8 | `actions` | `src/application/actions.rs` | The `ACTIONS` table for the menus and the keymap, and the native menu bar. |
-| 9 | `platform` | `src/application/platform` | Files, dialogs, file watching, export, configuration, themes, updates, headless capture, script jobs, and the live editor host. |
-| 10 | `editor` | `src/application/editor` | Commands, edit sessions, the inspector fields, history, and the tools. |
-| 11 | `view` | `src/application/view` | The canvases, the panels, the window chrome and the render tree. |
-| 12 | `launch_options` | `src/application/launch_options.rs` | `LaunchOptions`: the `RUNEBENDER_*` capture and scene variables, read once, and the steps that apply them to a new workspace. |
-| 13 | `cli` | `src/application/cli.rs` | Argument parsing and the headless subcommands. |
-| 14 | `launch` | `src/application/launch.rs` | The event loop, the window and the first frame. |
-| 15 | `browser` | `src/application/browser.rs` | The browser host. It compiles only for `wasm32`. |
+| 2 | `app_action` | `src/application/app_action.rs` | `AppAction`: the workspace-level actions that shortcuts and menu items fire. |
+| 3 | `widgets` | `src/application/widgets` | The Masonry widgets that the editor owns, and the shortcut host. |
+| 4 | `design::recipes` | `src/application/design/recipes` | Panel sections, rows, fields and the proof page blocks. |
+| 5 | `local_models` | `src/application/local_models.rs` | Discovery of local model packages. |
+| 6 | `pieces` | `src/application/pieces.rs` | The piece preview of a neural source. |
+| 7 | `font_model` | `src/application/font_model.rs` | `FontModel`: the `Project` and the glyph cache that the grid paints from. |
+| 8 | `workspace` | `src/application/workspace.rs` | `Workspace` and `AppState`: the state of one open document and of the window. |
+| 9 | `actions` | `src/application/actions.rs` | The `ACTIONS` table for the menus and the keymap, and the native menu bar. |
+| 10 | `platform` | `src/application/platform` | Files, dialogs, file watching, export, configuration, themes, updates, headless capture, script jobs, and the live editor host. |
+| 11 | `editor` | `src/application/editor` | Commands, edit sessions, the inspector fields, history, and the tools. |
+| 12 | `view` | `src/application/view` | The canvases, the panels, the window chrome and the render tree. |
+| 13 | `launch_options` | `src/application/launch_options.rs` | `LaunchOptions`: the `RUNEBENDER_*` capture and scene variables, read once, and the steps that apply them to a new workspace. |
+| 14 | `cli` | `src/application/cli.rs` | Argument parsing and the headless subcommands. |
+| 15 | `launch` | `src/application/launch.rs` | The event loop, the window and the first frame. |
+| 16 | `browser` | `src/application/browser.rs` | The browser host. It compiles only for `wasm32`. |
 
 `local_models`, `pieces`, `font_model`, `workspace` and `actions` are the state layer.
 `cli`, `launch` and `browser` are the entry layer.
@@ -213,7 +214,7 @@ The other files in the row are the next ones that the change touches.
 | Compile and export | `src/font/compiler/mod.rs` | `src/application/platform/export.rs` for the Export command, `preview_font` in `src/application/font_model.rs` for the preview compile. |
 | Undo | `src/font/history.rs` for the undo stores | `undo_active_edit` in `src/application/editor/session.rs`, which selects the store for one Undo command, `src/font/sources.rs` for source history, `src/application/editor/inspector.rs` for metadata steps, `src/application/editor/agent_history.rs` for edit groups. |
 | Application state | `src/application/workspace.rs` | `src/application/editor/session.rs` for one glyph tab, `src/application/font_model.rs` for caches of the font. |
-| A menu item | `ACTIONS` in `src/application/actions.rs` | `AppAction` in `src/application/actions.rs`, `dispatch` in `src/application/editor/commands.rs`, and the command method that it calls. |
+| A menu item | `ACTIONS` in `src/application/actions.rs` | `AppAction` in `src/application/app_action.rs`, `dispatch` in `src/application/editor/commands.rs`, and the command method that it calls. |
 | Canvas interaction | `src/application/view/canvas/editor/pointer.rs` | `src/application/view/canvas/editor/tools` for each tool, `src/application/view/canvas/editor/keyboard.rs`, `src/application/view/canvas/editor/paint.rs`, and `src/application/editor/session.rs` for the edit. |
 | A panel section | `src/application/design/recipes/rows.rs` and `docs/UI-DESIGN.md` | The panel file in `src/application/view/panels`. `src/application/view/panels/info.rs` selects the sections of the info panel. |
 | Colors and sizes | The theme files in `assets/themes/default` | `src/ui/theme.rs` for the parser, `src/application/design/theme.rs` for the `Palette`, `src/application/design/tokens.rs` for the scales, `src/application/design/areas.rs` for an exception. |

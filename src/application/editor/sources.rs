@@ -433,7 +433,7 @@ mod layer_tests {
 
     #[test]
     fn undo_and_redo_restore_and_repeat_layer_additions_and_deletions() {
-        use crate::application::actions::AppAction;
+        use crate::application::app_action::AppAction;
         let root = std::env::temp_dir().join(format!(
             "runebender-layer-undo-{}-{}",
             std::process::id(),
@@ -556,7 +556,7 @@ mod layer_tests {
 
     #[test]
     fn a_backup_layer_is_renamed_with_its_drawing_and_eye_and_undo_restores_the_name() {
-        use crate::application::actions::AppAction;
+        use crate::application::app_action::AppAction;
         let root = std::env::temp_dir().join(format!(
             "runebender-layer-rename-{}-{}",
             std::process::id(),
@@ -594,7 +594,7 @@ mod layer_tests {
 
     #[test]
     fn use_as_master_swaps_the_drawings_and_undo_swaps_them_back() {
-        use crate::application::actions::AppAction;
+        use crate::application::app_action::AppAction;
         let root = std::env::temp_dir().join(format!(
             "runebender-layer-master-{}-{}",
             std::process::id(),

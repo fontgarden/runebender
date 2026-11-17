@@ -10,6 +10,7 @@
 //! map and change routing guide.
 
 pub(crate) mod actions;
+pub(crate) mod app_action;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod browser;
 #[cfg(not(target_arch = "wasm32"))]

@@ -50,6 +50,7 @@ const LIBRARY_ORDER: &[&str] = &[
 /// is a layer of its own and `design` is the remainder of that directory.
 const APPLICATION_ORDER: &[&str] = &[
     "design",
+    "app_action",
     "widgets",
     "design::recipes",
     "local_models",
@@ -83,7 +84,7 @@ const LIBRARY_BACK_EDGES: &[(&str, &str, usize)] = &[
 
 /// Permitted back edges between application modules, in the form of [`LIBRARY_BACK_EDGES`].
 const APPLICATION_BACK_EDGES: &[(&str, &str, usize)] = &[
-    ("widgets", "workspace", 19),
+    ("widgets", "workspace", 18),
     ("editor", "view", 16),
     ("platform", "editor", 16),
     ("workspace", "editor", 13),
@@ -103,6 +104,7 @@ const APPLICATION_BACK_EDGES: &[(&str, &str, usize)] = &[
     ("design", "view", 2),
     ("editor", "launch_options", 2),
     ("widgets", "launch_options", 2),
+    ("app_action", "workspace", 1),
     ("design", "widgets", 1),
     ("editor", "browser", 1),
     ("font_model", "launch_options", 1),
@@ -112,7 +114,7 @@ const APPLICATION_BACK_EDGES: &[(&str, &str, usize)] = &[
     ("widgets", "design::recipes", 1),
     ("widgets", "platform", 1),
     ("workspace", "browser", 1),
-    // 29 pairs, 149 references
+    // 30 pairs, 149 references
 ];
 
 /// The document that states the two orders for readers.

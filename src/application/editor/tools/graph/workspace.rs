@@ -1044,12 +1044,12 @@ mod tests {
             before.graph
         );
 
-        app.dispatch(crate::application::actions::AppAction::Undo);
+        app.dispatch(crate::application::app_action::AppAction::Undo);
         assert_eq!(
             app.live_graph_session().unwrap().snapshot().graph,
             before.graph
         );
-        app.dispatch(crate::application::actions::AppAction::Redo);
+        app.dispatch(crate::application::app_action::AppAction::Redo);
         assert_ne!(
             app.live_graph_session().unwrap().snapshot().graph,
             before.graph

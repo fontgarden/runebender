@@ -2259,7 +2259,7 @@ mod tests {
         workspace.filter = "A".into();
         workspace.new_glyph();
 
-        workspace.dispatch(actions::AppAction::ShowAllMasters);
+        workspace.dispatch(crate::application::app_action::AppAction::ShowAllMasters);
         assert!(workspace.show_all_masters);
         assert_eq!(workspace.reference_layers.len(), 1);
         assert!(
@@ -2274,21 +2274,21 @@ mod tests {
                 .reference_layers
                 .contains(&workspace.font.active())
         );
-        workspace.dispatch(actions::AppAction::NextSampleString);
+        workspace.dispatch(crate::application::app_action::AppAction::NextSampleString);
         assert_eq!(workspace.sample_index, 1);
         assert_eq!(workspace.preview_text, "nnonoonoo");
-        workspace.dispatch(actions::AppAction::PreviousSampleString);
+        workspace.dispatch(crate::application::app_action::AppAction::PreviousSampleString);
         assert_eq!(workspace.sample_index, 0);
         assert_eq!(workspace.preview_text, "HHOHOHOO");
 
-        workspace.dispatch(actions::AppAction::GridLines);
+        workspace.dispatch(crate::application::app_action::AppAction::GridLines);
         assert!(workspace.view.grid_lines);
-        workspace.dispatch(actions::AppAction::GridDots);
+        workspace.dispatch(crate::application::app_action::AppAction::GridDots);
         assert!(!workspace.view.grid_lines);
-        workspace.dispatch(actions::AppAction::MeasureSizes);
-        workspace.dispatch(actions::AppAction::MeasureSpans);
+        workspace.dispatch(crate::application::app_action::AppAction::MeasureSizes);
+        workspace.dispatch(crate::application::app_action::AppAction::MeasureSpans);
         assert!(workspace.view.sizes && workspace.view.spans);
-        workspace.dispatch(actions::AppAction::MeasureAllOff);
+        workspace.dispatch(crate::application::app_action::AppAction::MeasureAllOff);
         assert!(!workspace.view.sizes && !workspace.view.spans);
 
         std::fs::remove_dir_all(dir).expect("the designspace fixture is removed");
