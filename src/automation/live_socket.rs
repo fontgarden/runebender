@@ -60,13 +60,35 @@ pub fn sessions() -> Vec<PathBuf> {
     paths
 }
 
+/// How old a session directory must be before pruning may remove it.
+/// A socket that refuses a connection in its first moments, or while its editor is closing,
+/// belongs to a live editor; a socket left by a crash stays refused.
+const PRUNE_MIN_AGE: Duration = Duration::from_secs(30);
+
 /// Removes session directories whose socket no longer answers, which a
 /// crashed or killed editor leaves behind. Returns how many were removed.
 /// Only entries this user owns in the temporary directory are touched, and
 /// a socket that merely times out is left alone in case its editor is busy.
+/// A directory newer than [`PRUNE_MIN_AGE`] is left alone as well, so an editor that is
+/// starting or closing at the same moment keeps its socket.
 pub fn prune_stale() -> usize {
+    prune(sessions(), PRUNE_MIN_AGE)
+}
+
+fn prune(paths: impl IntoIterator<Item = PathBuf>, min_age: Duration) -> usize {
     let mut removed = 0;
-    for path in sessions() {
+    for path in paths {
+        let Some(directory) = path.parent() else {
+            continue;
+        };
+        let old_enough = std::fs::metadata(directory)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age >= min_age);
+        if !old_enough {
+            continue;
+        }
         let dead = match UnixStream::connect(&path) {
             Ok(_) => false,
             Err(error) => matches!(
@@ -74,11 +96,7 @@ pub fn prune_stale() -> usize {
                 io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
             ),
         };
-        if dead
-            && let Some(directory) = path.parent()
-            && std::fs::remove_file(&path).is_ok()
-            && std::fs::remove_dir(directory).is_ok()
-        {
+        if dead && std::fs::remove_file(&path).is_ok() && std::fs::remove_dir(directory).is_ok() {
             removed += 1;
         }
     }
@@ -899,9 +917,17 @@ mod prune_tests {
         let dead_sock = dead_dir.join("session.sock");
         drop(UnixListener::bind(&dead_sock).unwrap());
         assert!(dead_sock.exists());
-        // Another test's server start may prune this socket first, so check
-        // what pruning leaves behind, not how many this call removed.
-        prune_stale();
+        // A new directory is too young for `prune_stale`, which protects editors that are
+        // starting, so prune these two paths with no age limit.
+        assert_eq!(
+            prune([dead_sock.clone(), live_path.clone()], PRUNE_MIN_AGE),
+            0
+        );
+        assert!(dead_sock.exists(), "a new session is not pruned");
+        assert_eq!(
+            prune([dead_sock.clone(), live_path.clone()], Duration::ZERO),
+            1
+        );
         assert!(!dead_sock.exists() && !dead_dir.exists());
         assert!(
             live_path.exists(),
