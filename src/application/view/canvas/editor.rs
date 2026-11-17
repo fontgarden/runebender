@@ -65,6 +65,70 @@ fn push_grid_dot(marks: &mut kurbo::BezPath, at: Point, diameter: f64) {
     marks.extend(Circle::new(at, diameter / 2.0).path_elements(0.1));
 }
 
+/// What a cached field of grid dots was built for: the dot period and diameter in pixels,
+/// the canvas size, and how often a dot is left out for the coarser level.
+type GridDotsKey = (u64, u64, u64, u64, u64, i64);
+
+/// A field of grid dots that covers a `width` by `height` canvas at any pan offset.
+///
+/// Dots sit every `period_x` by `period_y` pixels from the origin. With `skip_every` above
+/// zero, a dot whose column and row are both multiples of it is left out, because the coarser
+/// level draws that one. Draw the field with [`grid_dots_offset`] for each axis.
+fn grid_dots_field(
+    period_x: f64,
+    period_y: f64,
+    diameter: f64,
+    width: f64,
+    height: f64,
+    skip_every: i64,
+) -> kurbo::BezPath {
+    let centers = grid_dot_centers(period_x, period_y, width, height, skip_every);
+    // Six elements per dot: a move, four curves, and a close.
+    let mut marks = kurbo::BezPath::with_capacity(centers.len() * 6);
+    for at in centers {
+        push_grid_dot(&mut marks, at, diameter);
+    }
+    marks
+}
+
+/// The dot centers of a [`grid_dots_field`], before it is moved to the pan offset.
+fn grid_dot_centers(
+    period_x: f64,
+    period_y: f64,
+    width: f64,
+    height: f64,
+    skip_every: i64,
+) -> Vec<Point> {
+    let repeat = skip_every.max(1) as f64;
+    let count = |length: f64, period: f64| -> i64 {
+        let cells = ((length + 2.0 * period * repeat) / period).ceil();
+        // A zoom that draws the grid keeps this far below the limit; the cast cannot overflow.
+        grid_index(cells.clamp(0.0, 100_000.0))
+    };
+    let (columns, rows) = (count(width, period_x), count(height, period_y));
+    let mut centers =
+        Vec::with_capacity(usize::try_from((columns + 1) * (rows + 1)).unwrap_or_default());
+    for column in 0..=columns {
+        for row in 0..=rows {
+            if skip_every > 0 && column % skip_every == 0 && row % skip_every == 0 {
+                continue;
+            }
+            centers.push(Point::new(column as f64 * period_x, row as f64 * period_y));
+        }
+    }
+    centers
+}
+
+/// Where to draw a [`grid_dots_field`] on one axis so its dots land on the grid.
+///
+/// `origin` is the screen position of grid index zero. The result is at most one repeat of
+/// the skip pattern before the canvas edge, and a whole number of repeats from `origin`, so
+/// the left-out dots stay on the coarser level's positions.
+fn grid_dots_offset(origin: f64, period: f64, skip_every: i64) -> f64 {
+    let repeat = period * skip_every.max(1) as f64;
+    origin.rem_euclid(repeat) - repeat
+}
+
 /// A horizontal rule whose visual centre stays on the supplied coordinate.
 fn horizontal_rule_rect(x0: f64, x1: f64, y: f64, width: f64) -> Rect {
     let half = width / 2.0;
@@ -671,6 +735,9 @@ pub(crate) struct EditorWidget {
     /// The thickness field last rasterized for the canvas, by outline and ramp
     /// colors, so a zoom or hover repaint does not recompute the field.
     thickness_image: Option<(u64, ImageData, Affine)>,
+    /// The design grid's dots for the coarse and fine levels, kept between frames.
+    /// Each holds the dots for one zoom and canvas size; panning only moves them.
+    grid_dots: std::cell::RefCell<[Option<(GridDotsKey, kurbo::BezPath)>; 2]>,
     /// Space is held: pan while showing only the filled design.
     preview_mode: bool,
     ghosts: Arc<Vec<Arc<kurbo::BezPath>>>,
@@ -2285,29 +2352,48 @@ impl Widget for EditorWidget {
                                 marks.line_to(Point::new(self.size.width, y));
                             }
                         }
-                    } else {
-                        let columns = usize::try_from(ix1 - ix0 + 1).unwrap_or_default();
-                        let rows = usize::try_from(iy1 - iy0 + 1).unwrap_or_default();
-                        // Six elements per dot: a move, four curves, and a close.
-                        marks = kurbo::BezPath::with_capacity(columns * rows * 6);
-                        for ix in ix0..=ix1 {
-                            for iy in iy0..=iy1 {
-                                if skip_every > 0 && ix % skip_every == 0 && iy % skip_every == 0 {
-                                    continue;
-                                }
-                                let at =
-                                    affine * Point::new(ix as f64 * spacing, iy as f64 * spacing);
-                                push_grid_dot(&mut marks, at, size);
-                            }
-                        }
                     }
                     let color = pal
                         .role("designGridCoarse")
                         .with_alpha(crate::application::view::render::px32(alpha));
                     if self.view.grid_lines {
                         painter.stroke(&marks, &Stroke::new(0.5), color).draw();
-                    } else {
-                        painter.fill(&marks, color).draw();
+                        return;
+                    }
+                    // The dots are the same for every pan offset, so they are built once for
+                    // a zoom and canvas size and then only moved.
+                    let [scale_x, _, _, scale_y, origin_x, origin_y] = affine.as_coeffs();
+                    let (period_x, period_y) = (spacing * scale_x.abs(), spacing * scale_y.abs());
+                    let key: GridDotsKey = (
+                        period_x.to_bits(),
+                        period_y.to_bits(),
+                        size.to_bits(),
+                        self.size.width.to_bits(),
+                        self.size.height.to_bits(),
+                        skip_every,
+                    );
+                    let mut cache = self.grid_dots.borrow_mut();
+                    let slot = &mut cache[usize::from(skip_every > 0)];
+                    if slot.as_ref().is_none_or(|(built, _)| *built != key) {
+                        let field = grid_dots_field(
+                            period_x,
+                            period_y,
+                            size,
+                            self.size.width,
+                            self.size.height,
+                            skip_every,
+                        );
+                        *slot = Some((key, field));
+                    }
+                    if let Some((_, field)) = slot {
+                        let offset = (
+                            grid_dots_offset(origin_x, period_x, skip_every),
+                            grid_dots_offset(origin_y, period_y, skip_every),
+                        );
+                        painter
+                            .fill(&*field, color)
+                            .transform(Affine::translate(offset))
+                            .draw();
                     }
                 };
                 let (coarse, fine) = point_grid_dot_sizes(zoom);
@@ -4872,6 +4958,7 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
             sketch_source: self.sketch_source,
             sketch_image: None,
             thickness_image: None,
+            grid_dots: std::cell::RefCell::default(),
             preview_mode: self.preview_mode,
             ghosts: self.ghosts.clone(),
             interp: self.interp.clone(),
@@ -5150,6 +5237,66 @@ mod tests {
         Session::new(&font, "A").expect("the glyph is there")
     }
 
+    /// The cached dot field, moved to a pan offset, puts dots exactly where drawing each grid
+    /// intersection through the view transform would, and leaves out the same ones.
+    #[test]
+    fn cached_grid_dots_match_dots_placed_through_the_view_transform() {
+        let (width, height) = (640.0, 480.0);
+        let spacing = 8.0;
+        for (zoom, pan, skip_every) in [
+            (1.0, (0.0, 0.0), 0_i64),
+            (1.7, (213.4, -97.25), 0),
+            (9.3, (-1234.5, 3210.75), 4),
+            (12.0, (55.0, 480.0), 4),
+        ] {
+            // The canvas flips the y axis, as the editor's view transform does.
+            let affine = Affine::new([zoom, 0.0, 0.0, -zoom, pan.0, pan.1]);
+            let on_canvas = |point: &Point| {
+                (0.0..=width).contains(&point.x) && (0.0..=height).contains(&point.y)
+            };
+            let rounded = |point: Point| {
+                (
+                    grid_index((point.x * 100.0).round()),
+                    grid_index((point.y * 100.0).round()),
+                )
+            };
+
+            let inverse = affine.inverse();
+            let (a, b) = (inverse * Point::ZERO, inverse * Point::new(width, height));
+            let index = |value: f64| grid_index((value / spacing).floor());
+            let mut expected = std::collections::BTreeSet::new();
+            for ix in index(a.x.min(b.x)) - 1..=index(a.x.max(b.x)) + 1 {
+                for iy in index(a.y.min(b.y)) - 1..=index(a.y.max(b.y)) + 1 {
+                    if skip_every > 0 && ix % skip_every == 0 && iy % skip_every == 0 {
+                        continue;
+                    }
+                    let at = affine * Point::new(ix as f64 * spacing, iy as f64 * spacing);
+                    if on_canvas(&at) {
+                        expected.insert(rounded(at));
+                    }
+                }
+            }
+
+            let period = spacing * zoom;
+            let offset = kurbo::Vec2::new(
+                grid_dots_offset(pan.0, period, skip_every),
+                grid_dots_offset(pan.1, period, skip_every),
+            );
+            let cached: std::collections::BTreeSet<_> =
+                grid_dot_centers(period, period, width, height, skip_every)
+                    .into_iter()
+                    .map(|at| at + offset)
+                    .filter(on_canvas)
+                    .map(rounded)
+                    .collect();
+            assert!(!expected.is_empty(), "zoom {zoom} draws dots");
+            assert_eq!(
+                cached, expected,
+                "zoom {zoom}, pan {pan:?}, skip {skip_every}"
+            );
+        }
+    }
+
     fn widget() -> EditorWidget {
         EditorWidget {
             hoi: None,
@@ -5164,6 +5311,7 @@ mod tests {
             sketch_source: 0,
             sketch_image: None,
             thickness_image: None,
+            grid_dots: std::cell::RefCell::default(),
             preview_mode: false,
             ghosts: Arc::new(Vec::new()),
             interp: None,

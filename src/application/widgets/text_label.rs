@@ -9,6 +9,8 @@
 //! canvas labels.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 
 use masonry::core::render_text;
 use masonry::kurbo::{Affine, Point};
@@ -18,6 +20,9 @@ use xilem::Color;
 
 use masonry::core::BrushIndex;
 
+/// Shaped labels by text and the bits of their size.
+type LayoutCache = HashMap<(String, u32), Rc<Layout<BrushIndex>>>;
+
 thread_local! {
     static FONT_CX: RefCell<FontContext> = RefCell::new({
         let mut cx = FontContext::new();
@@ -26,6 +31,44 @@ thread_local! {
         cx
     });
     static LAYOUT_CX: RefCell<LayoutContext<BrushIndex>> = RefCell::new(LayoutContext::new());
+    /// Shaped labels by text and size. Paint draws the same labels every frame, and shaping one
+    /// costs far more than looking it up.
+    static LAYOUTS: RefCell<LayoutCache> = RefCell::new(HashMap::new());
+}
+
+/// Entries kept before the cache is emptied. Labels with changing numbers, such as
+/// coordinates during a drag, add entries that are never asked for again.
+const MAX_CACHED_LAYOUTS: usize = 4096;
+
+/// The shaped, single-line layout of `text` at `size`, shared between frames.
+fn layout(text: &str, size: f32) -> Rc<Layout<BrushIndex>> {
+    let key = (text.to_owned(), size.to_bits());
+    if let Some(found) = LAYOUTS.with(|layouts| layouts.borrow().get(&key).cloned()) {
+        return found;
+    }
+    let shaped = FONT_CX.with(|font_cx| {
+        LAYOUT_CX.with(|layout_cx| {
+            let mut font_cx = font_cx.borrow_mut();
+            let mut layout_cx = layout_cx.borrow_mut();
+            let mut builder = layout_cx.ranged_builder(&mut font_cx, text, 1.0, true);
+            builder.push_default(StyleProperty::FontSize(size));
+            builder.push_default(masonry::parley::FontFamily::named(
+                crate::application::view::UI_FONT_FAMILY,
+            ));
+            builder.push_default(StyleProperty::Brush(BrushIndex(0)));
+            let mut layout: Layout<BrushIndex> = builder.build(text);
+            layout.break_all_lines(None);
+            Rc::new(layout)
+        })
+    });
+    LAYOUTS.with(|layouts| {
+        let mut layouts = layouts.borrow_mut();
+        if layouts.len() >= MAX_CACHED_LAYOUTS {
+            layouts.clear();
+        }
+        layouts.insert(key, shaped.clone());
+    });
+    shaped
 }
 
 /// Horizontal anchor for a drawn label.
@@ -46,48 +89,22 @@ pub(crate) fn draw(
     color: Color,
     anchor: Anchor,
 ) {
-    FONT_CX.with(|font_cx| {
-        LAYOUT_CX.with(|layout_cx| {
-            let mut font_cx = font_cx.borrow_mut();
-            let mut layout_cx = layout_cx.borrow_mut();
-            let mut builder = layout_cx.ranged_builder(&mut font_cx, text, 1.0, true);
-            builder.push_default(StyleProperty::FontSize(size));
-            builder.push_default(masonry::parley::FontFamily::named(
-                crate::application::view::UI_FONT_FAMILY,
-            ));
-            builder.push_default(StyleProperty::Brush(BrushIndex(0)));
-            let mut layout: Layout<BrushIndex> = builder.build(text);
-            layout.break_all_lines(None);
-            let w = layout.width() as f64;
-            let h = layout.height() as f64;
-            let x = match anchor {
-                Anchor::Start => at.x,
-                Anchor::Middle => at.x - w / 2.0,
-                Anchor::End => at.x - w,
-            };
-            let y = at.y - h / 2.0;
-            let brush: Brush = color.into();
-            render_text(painter, Affine::translate((x, y)), &layout, &[brush], false);
-        });
-    });
+    let layout = layout(text, size);
+    let w = f64::from(layout.width());
+    let h = f64::from(layout.height());
+    let x = match anchor {
+        Anchor::Start => at.x,
+        Anchor::Middle => at.x - w / 2.0,
+        Anchor::End => at.x - w,
+    };
+    let y = at.y - h / 2.0;
+    let brush: Brush = color.into();
+    render_text(painter, Affine::translate((x, y)), &layout, &[brush], false);
 }
 
 /// Measure a shaped UI label in logical pixels.
 pub(crate) fn width(text: &str, size: f32) -> f64 {
-    FONT_CX.with(|font_cx| {
-        LAYOUT_CX.with(|layout_cx| {
-            let mut fonts = font_cx.borrow_mut();
-            let mut layouts = layout_cx.borrow_mut();
-            let mut builder = layouts.ranged_builder(&mut fonts, text, 1.0, true);
-            builder.push_default(StyleProperty::FontSize(size));
-            builder.push_default(masonry::parley::FontFamily::named(
-                crate::application::view::UI_FONT_FAMILY,
-            ));
-            let mut layout: Layout<BrushIndex> = builder.build(text);
-            layout.break_all_lines(None);
-            f64::from(layout.width())
-        })
-    })
+    f64::from(layout(text, size).width())
 }
 
 /// Draw a single-line label, with an ellipsis if its measured width exceeds `available`.
