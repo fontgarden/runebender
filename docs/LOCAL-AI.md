@@ -256,6 +256,8 @@ Source: `src/workflows/graph.rs`, `src/workflows/graph_run.rs`,
 - `graph_trace` with `local_sketch` runs the local sketch model and puts the
   result in a `live.python` recipe node.
 - Graph runs from MCP on saved files are always proposal-only.
+- `graph_run` accepts only execution version 2, which is the default when `execution_version` is absent.
+  A request for version 1, the earlier four-node comparison contract, is rejected with an error that names version 2.
 
 ### 2.9 Design context
 

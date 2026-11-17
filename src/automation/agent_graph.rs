@@ -19,8 +19,8 @@ use crate::font::project::Project;
 use crate::font::variable::SourceId;
 use crate::formats::image_trace::TraceCalibration;
 use crate::workflows::graph_session::{
-    GraphCancelRequest, GraphGuard, GraphIdentity, GraphMutationRequest, GraphRunHandle,
-    GraphSemanticGuard,
+    GRAPH_EXECUTION_VERSION, GraphCancelRequest, GraphGuard, GraphIdentity, GraphMutationRequest,
+    GraphRunHandle, GraphSemanticGuard,
 };
 
 /// Typed success bodies for native live graph tools.
@@ -126,14 +126,14 @@ pub struct GraphTraceHandleRequest {
     pub handle: u64,
 }
 
-/// Start one native comparison or explicitly versioned DAG from host-derived captures.
+/// Start one bounded graph run from host-derived captures.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GraphRunRequest {
-    /// Execution contract: omitted or 1 keeps the legacy comparison; 2 enables bounded DAGs.
+    /// Execution contract. Only [`GRAPH_EXECUTION_VERSION`] is accepted, and it is the default.
     #[serde(
-        default = "legacy_execution_version",
-        skip_serializing_if = "is_legacy_execution"
+        default = "current_execution_version",
+        skip_serializing_if = "is_current_execution"
     )]
     pub execution_version: u32,
     /// Exact native endpoint lifetime returned by the application.
@@ -239,8 +239,8 @@ pub struct GraphImageRequest {
     pub view: crate::font::compiler::proof::ProofView,
 }
 
-const fn legacy_execution_version() -> u32 {
-    1
+const fn current_execution_version() -> u32 {
+    GRAPH_EXECUTION_VERSION
 }
 
 #[cfg_attr(
@@ -250,8 +250,8 @@ const fn legacy_execution_version() -> u32 {
         reason = "Serde skip predicates require a reference to the serialized field"
     )
 )]
-fn is_legacy_execution(version: &u32) -> bool {
-    *version == 1
+fn is_current_execution(version: &u32) -> bool {
+    *version == GRAPH_EXECUTION_VERSION
 }
 
 fn validate_text(name: &str, value: &str, max: usize) -> Result<(), String> {
@@ -370,8 +370,11 @@ impl GraphRunRequest {
     /// the immutable host capture.
     pub fn validate(&self) -> Result<(), String> {
         validate_epoch(&self.expected_document_epoch, &self.guard.identity)?;
-        if !matches!(self.execution_version, 1 | 2) {
-            return Err("execution_version must be 1 or 2".into());
+        if self.execution_version != GRAPH_EXECUTION_VERSION {
+            return Err(format!(
+                "execution_version {} is not supported; use version {GRAPH_EXECUTION_VERSION} or omit the field",
+                self.execution_version
+            ));
         }
         validate_actor_key(&self.actor, &self.operation_key)?;
         if self.guard.semantic_hash.len() != 64
@@ -656,12 +659,12 @@ pub fn tools() -> Vec<Tool> {
         },
         Tool {
             name: "graph_run".into(),
-            description: "Run native nodes for one explicit source and up to 64 glyphs; a graph with a Python node needs at least one. Omitted execution_version or 1 runs only the four-node comparison, leaving other proofs such as the specimen; version 2 enables bounded chained and branching Python transforms with independent proofs and partial failures. The host captures current font, code, parameters and proof identities; callers never supply hashes. Poll graph_status.".into(),
+            description: "Run native nodes for one explicit source and up to 64 glyphs; a graph with a Python node needs at least one. Execution version 2, the default and the only accepted value, runs bounded chained and branching Python transforms with independent proofs and partial failures. The host captures current font, code, parameters and proof identities; callers never supply hashes. Poll graph_status.".into(),
             parameters: object(
                 json!({
                     "expected_document_epoch":epoch.clone(),
                     "guard":graph_guard(true),
-                    "execution_version":{"type":"integer","enum":[1,2],"default":1},
+                    "execution_version":{"type":"integer","enum":[2],"default":2},
                     "actor":actor.clone(),
                     "operation_key":key.clone(),
                     "source":{"type":"integer","minimum":0},
@@ -847,18 +850,19 @@ mod tests {
     }
 
     #[test]
-    fn execution_versions_and_image_selectors_preserve_legacy_requests() {
-        let legacy = json!({
+    fn execution_version_defaults_to_two_and_image_selectors_preserve_requests() {
+        let omitted = json!({
             "expected_document_epoch":"document",
             "guard":{"identity":{"session_id":"graph","document_epoch":"document"},"semantic_revision":0,"semantic_hash":"0".repeat(64)},
             "actor":"agent","operation_key":"run","source":0,"glyphs":["A"]
         });
-        let mut run: GraphRunRequest = serde_json::from_value(legacy.clone()).unwrap();
-        assert_eq!(run.execution_version, 1);
-        assert_eq!(serde_json::to_value(&run).unwrap(), legacy);
-        run.execution_version = 2;
+        let mut run: GraphRunRequest = serde_json::from_value(omitted.clone()).unwrap();
+        assert_eq!(run.execution_version, GRAPH_EXECUTION_VERSION);
         assert!(run.validate().is_ok());
-        assert_eq!(serde_json::to_value(&run).unwrap()["execution_version"], 2);
+        assert_eq!(serde_json::to_value(&run).unwrap(), omitted);
+        run.execution_version = 1;
+        let error = run.validate().unwrap_err();
+        assert!(error.contains("version 2"), "{error}");
         run.execution_version = 3;
         assert!(run.validate().is_err());
 

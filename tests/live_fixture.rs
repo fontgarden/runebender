@@ -667,7 +667,8 @@ json.dump({"schema_version":p["schema_version"],"job_id":p["job_id"],"input_hash
             Some("live.python") => Some(json!({
                 "edit":"set_value","node":node["id"],"field":"code","value":code
             })),
-            Some("live.proof") => {
+            // A specimen page sets one line per line of text, so only one-line proofs change.
+            Some("live.proof") if node["values"]["recipe"]["rendering"]["lines"].is_null() => {
                 let mut recipe = node["values"]["recipe"].clone();
                 recipe["text"] = json!("AA");
                 Some(json!({"edit":"set_value","node":node["id"],"field":"recipe","value":recipe}))
@@ -708,7 +709,17 @@ json.dump({"schema_version":p["schema_version"],"job_id":p["job_id"],"input_hash
         }
     };
     assert_eq!(completed["can_apply"], true);
-    assert_eq!(completed["report"], "Generate and reshape");
+    let python = snapshot["graph"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["type"] == "live.python")
+        .unwrap()["id"]
+        .clone();
+    assert_eq!(
+        completed["report"],
+        format!("node {python}: Generate and reshape\n")
+    );
     assert_eq!(completed["current"], true);
     assert_eq!(fixture.control("state")["canonical_advance"], 412.0);
     assert_eq!(
@@ -942,7 +953,7 @@ fn mcp_dag_chains_branches_and_keeps_successful_proofs_after_partial_failure() {
     ]);
     let epoch = &ready["document_epoch"];
     let discovered = mcp.tool("graph_discover", json!({"expected_document_epoch":epoch}));
-    assert_eq!(discovered["discovery"]["execution_versions"], json!([1, 2]));
+    assert_eq!(discovered["discovery"]["execution_versions"], json!([2]));
     let identity = &discovered["identity"];
     let snapshot = mcp.tool(
         "graph_snapshot",
@@ -1054,10 +1065,11 @@ json.dump({'schema_version':2,'job_id':p['job_id'],'input_hash':p['input_hash'],
     let request = json!({"expected_document_epoch":epoch,"execution_version":2,
         "guard":{"identity":identity,"semantic_revision":snapshot["semantic_revision"],"semantic_hash":snapshot["semantic_hash"]},
         "actor":"dag-fixture","operation_key":"run","source":0,"glyphs":["A"]});
-    let mut legacy = request.clone();
-    legacy.as_object_mut().unwrap().remove("execution_version");
-    legacy["operation_key"] = json!("legacy-rejects-dag");
-    mcp.rejected_tool("graph_run", legacy);
+    let mut version_one = request.clone();
+    version_one["execution_version"] = json!(1);
+    version_one["operation_key"] = json!("version-one-rejected");
+    let rejected = mcp.rejected_tool("graph_run", version_one);
+    assert!(rejected.to_string().contains("version 2"), "{rejected}");
     let started = mcp.tool("graph_run", request.clone());
     let status_args = json!({"expected_document_epoch":epoch,"identity":identity,"handle":started["run"]["receipt"]["handle"]});
     // Layout changes during execution preserve semantic identity and the captured input.

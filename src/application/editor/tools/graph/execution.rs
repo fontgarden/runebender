@@ -1,7 +1,7 @@
 // Copyright 2026 the Runebender Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Native execution adapter for bounded live Python DAGs and legacy comparisons.
+//! Native execution adapter for bounded live Python DAGs.
 //!
 //! This module borrows the Workspace-owned Python queue and never drains jobs owned by another
 //! consumer.
@@ -63,8 +63,6 @@ pub(crate) struct LiveGraphSubmitRequest {
     pub(crate) actor: String,
     /// Idempotency key for this exact run.
     pub(crate) operation_key: String,
-    /// Explicit graph execution contract version.
-    pub(crate) execution_version: u32,
     /// Immutable scoped recipe input captured from Project.
     pub(crate) recipe_input: ScriptRecipeInput,
     /// Frozen whole-family compiler input used by the unchanged proof.
@@ -96,7 +94,7 @@ pub(crate) struct LiveGraphProofRequest {
 pub(crate) struct LiveGraphApplyRequest {
     pub(crate) request: AgentEditRequest,
     pub(crate) candidate: CanonicalDocumentEditTransaction,
-    pub(crate) payload_digest: Option<AgentPayloadDigest>,
+    pub(crate) payload_digest: AgentPayloadDigest,
 }
 
 /// Exact proof artifact identities returned by the existing proof queue.
@@ -177,7 +175,6 @@ impl std::error::Error for LiveGraphExecutionError {}
 struct LiveGraphRecord {
     actor: String,
     operation_key: String,
-    execution_version: u32,
     script: Option<ScriptJobHandle>,
     active_script_node: Option<u32>,
     active_script_input: Option<ScriptRecipeInput>,
@@ -268,10 +265,9 @@ impl LiveGraphExecution {
         }
         validate_submit_capture(session, project, &request)?;
         let capture = session
-            .capture_run_version(
+            .capture_run(
                 graph_font_capture(&request),
                 request.recipe_input.input_hash.clone(),
-                request.execution_version,
             )
             .map_err(graph_error)?;
         let graph = session
@@ -288,7 +284,6 @@ impl LiveGraphExecution {
         let record = LiveGraphRecord {
             actor: request.actor,
             operation_key: request.operation_key,
-            execution_version: request.execution_version,
             script: None,
             active_script_node: None,
             active_script_input: None,
@@ -614,25 +609,18 @@ impl LiveGraphExecution {
         }
         let mut report = String::new();
         let mut stderr = String::new();
-        if record.execution_version == 1 {
-            if let Some((result, diagnostics)) = record.results.values().next() {
-                report = result.report.clone();
-                stderr = diagnostics.clone();
-            }
-        } else {
-            for (node, (result, diagnostics)) in &record.results {
+        for (node, (result, diagnostics)) in &record.results {
+            append_bounded(
+                &mut report,
+                &format!("node {node}: {}\n", result.report),
+                65_536,
+            );
+            if !diagnostics.is_empty() {
                 append_bounded(
-                    &mut report,
-                    &format!("node {node}: {}\n", result.report),
+                    &mut stderr,
+                    &format!("node {node}: {diagnostics}\n"),
                     65_536,
                 );
-                if !diagnostics.is_empty() {
-                    append_bounded(
-                        &mut stderr,
-                        &format!("node {node}: {diagnostics}\n"),
-                        65_536,
-                    );
-                }
             }
         }
         for error in &record.errors {
@@ -724,34 +712,28 @@ impl LiveGraphExecution {
             reads: result.reads.clone(),
             edits: result.edits.clone(),
         };
-        let payload_digest = if record.execution_version == 1 {
-            None
-        } else {
-            let content_hash = record
-                .outputs
-                .iter()
-                .find(|output| output.node == selected)
-                .and_then(|output| match &output.value {
-                    GraphNodeOutputValue::FontVersion { content_sha256, .. } => {
-                        Some(content_sha256)
-                    }
-                    _ => None,
-                })
-                .ok_or_else(|| {
-                    err(
-                        LiveGraphExecutionErrorCode::Staging,
-                        "selected version hash is missing",
-                    )
-                })?;
-            let bytes = serde_json::to_vec(&serde_json::json!({
-                "request": request,
-                "run_identity": identity,
-                "selected_node": selected,
-                "content_hash": content_hash,
-            }))
-            .expect("typed apply payload serializes");
-            Some(AgentPayloadDigest::sha256(&bytes))
-        };
+        let content_hash = record
+            .outputs
+            .iter()
+            .find(|output| output.node == selected)
+            .and_then(|output| match &output.value {
+                GraphNodeOutputValue::FontVersion { content_sha256, .. } => Some(content_sha256),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                err(
+                    LiveGraphExecutionErrorCode::Staging,
+                    "selected version hash is missing",
+                )
+            })?;
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "request": request,
+            "run_identity": identity,
+            "selected_node": selected,
+            "content_hash": content_hash,
+        }))
+        .expect("typed apply payload serializes");
+        let payload_digest = AgentPayloadDigest::sha256(&bytes);
         Ok(LiveGraphApplyRequest {
             request,
             candidate,
@@ -843,16 +825,7 @@ fn drive_ready(
         complete_record(session, record, &current);
         return;
     }
-    if record.execution_version == 1 && !record.errors.is_empty() {
-        complete_record(session, record, &current);
-        return;
-    }
-    let mut order = record.work.plan.order.clone();
-    if record.execution_version == 1 {
-        let script = record.work.plan.scripts[0].node;
-        order.retain(|node| *node != script);
-        order.insert(1, script);
-    }
+    let order = record.work.plan.order.clone();
     for node in order {
         if node == record.work.plan.source_node || record.finished.contains(&node) {
             continue;
@@ -916,10 +889,6 @@ fn drive_ready(
                 Err(message) => node_failed(record, node, "script_capture", &message),
             }
             if record.phase != LiveGraphPhase::Ready {
-                return;
-            }
-            if record.execution_version == 1 && !record.errors.is_empty() {
-                complete_record(session, record, &current);
                 return;
             }
         } else if let Some(proof) = proof {
@@ -1045,9 +1014,6 @@ fn script_input(
         return Err("script parameters must be an object".into());
     };
     let parameters = parameters.into_iter().collect();
-    if record.execution_version == 1 {
-        return Ok(root.clone());
-    }
     let job_id = format!("graph-{}-{node}", record.work.handle.get());
     if parent == record.work.plan.source_node {
         ScriptRecipeInput::new(job_id, root.source, parameters, root.layers.clone())
@@ -1112,58 +1078,48 @@ fn stage_result(
         .ok_or("base compiler input is missing")?
         .with_staged_edit(project, &staged)?;
     let content_sha256 = derived.canonical_input_sha256().to_owned();
-    let lineage = if record.execution_version == 1 {
-        None
+    let parent_hash = if parent == record.work.plan.source_node {
+        record.work.identity.capture.font.capture_sha256.clone()
     } else {
-        let parent_hash = if parent == record.work.plan.source_node {
-            record.work.identity.capture.font.capture_sha256.clone()
-        } else {
-            record
-                .outputs
-                .iter()
-                .find(|output| output.node == parent)
-                .and_then(|output| match &output.value {
-                    GraphNodeOutputValue::FontVersion { content_sha256, .. } => {
-                        Some(content_sha256.clone())
-                    }
-                    _ => None,
-                })
-                .ok_or("parent version hash is missing")?
-        };
-        Some(GraphVersionLineage {
-            parent_node: parent,
-            parent_content_sha256: parent_hash,
-            recipe_input_sha256: record
-                .active_script_input
-                .as_ref()
-                .ok_or("script input is missing")?
-                .input_hash
-                .clone(),
-        })
+        record
+            .outputs
+            .iter()
+            .find(|output| output.node == parent)
+            .and_then(|output| match &output.value {
+                GraphNodeOutputValue::FontVersion { content_sha256, .. } => {
+                    Some(content_sha256.clone())
+                }
+                _ => None,
+            })
+            .ok_or("parent version hash is missing")?
     };
+    let lineage = Some(GraphVersionLineage {
+        parent_node: parent,
+        parent_content_sha256: parent_hash,
+        recipe_input_sha256: record
+            .active_script_input
+            .as_ref()
+            .ok_or("script input is missing")?
+            .input_hash
+            .clone(),
+    });
     record.outputs.push(GraphNodeOutput {
         node,
         value: GraphNodeOutputValue::FontVersion {
             source: record.work.identity.capture.font.source,
-            version_id: if record.execution_version == 1 {
-                format!("graph-run-{}-staged", record.work.handle.get())
-            } else {
-                format!("graph-run-{}-node-{node}", record.work.handle.get())
-            },
+            version_id: format!("graph-run-{}-node-{node}", record.work.handle.get()),
             version_revision: 0,
             content_sha256,
             lineage,
         },
     });
     record.candidates.insert(node, staged);
-    if record.execution_version == 2 {
-        record.outputs.push(GraphNodeOutput {
-            node,
-            value: GraphNodeOutputValue::Report {
-                text: result.report.clone(),
-            },
-        });
-    }
+    record.outputs.push(GraphNodeOutput {
+        node,
+        value: GraphNodeOutputValue::Report {
+            text: result.report.clone(),
+        },
+    });
     record.results.insert(node, (result, stderr));
     record.finished.insert(node);
     Ok(())
@@ -1203,7 +1159,7 @@ fn complete_record(
     let errors = record.errors.clone();
     let outcome = if errors.is_empty() {
         GraphRunOutcome::Completed(outputs)
-    } else if outputs.is_empty() || record.execution_version == 1 {
+    } else if outputs.is_empty() {
         GraphRunOutcome::Failed(errors)
     } else {
         GraphRunOutcome::Partial { outputs, errors }
@@ -1291,7 +1247,6 @@ fn validate_retry_request(
         semantic_hash: identity.semantic_hash.clone(),
     };
     if request.guard != guard
-        || request.execution_version != record.execution_version
         || request.recipe_input.source != identity.capture.font.source
         || request.recipe_input.input_hash != record.root_input_sha256
         || request.base_proof_input.document_revision() != identity.capture.font.document_revision
@@ -1318,29 +1273,13 @@ fn validate_submit_capture(
     project: &Project,
     request: &LiveGraphSubmitRequest,
 ) -> Result<(), LiveGraphExecutionError> {
-    let plan = session
-        .execution_plan(request.execution_version)
-        .map_err(graph_error)?;
+    let plan = session.execution_plan().map_err(graph_error)?;
     // A proof-only run captures no glyphs; Python always gets a validated scope.
     if !plan.scripts.is_empty() || !request.recipe_input.layers.is_empty() {
         request
             .recipe_input
             .validate()
             .map_err(|error| err(LiveGraphExecutionErrorCode::Capture, error.to_string()))?;
-    }
-    if request.execution_version == 1 {
-        let node = plan
-            .scripts
-            .first()
-            .expect("version one plan has a script")
-            .node;
-        let parameters = record_parameters(&session.snapshot().graph, node)?;
-        if parameters != request.recipe_input.parameters {
-            return Err(err(
-                LiveGraphExecutionErrorCode::Capture,
-                "script recipe parameters do not match graph parameters",
-            ));
-        }
     }
     let graph = session.snapshot().graph;
     let mut recipes = Vec::with_capacity(plan.proofs.len());
@@ -1384,24 +1323,6 @@ fn validate_submit_capture(
         ));
     }
     Ok(())
-}
-
-fn record_parameters(
-    graph: &runebender::workflows::graph::NodeGraph,
-    node: u32,
-) -> Result<BTreeMap<String, Value>, LiveGraphExecutionError> {
-    let parameters = graph
-        .node(node)
-        .and_then(|node| node.values.get("parameters"))
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({}));
-    let Value::Object(parameters) = parameters else {
-        return Err(err(
-            LiveGraphExecutionErrorCode::Capture,
-            "script parameters must be an object",
-        ));
-    };
-    Ok(parameters.into_iter().collect())
 }
 
 /// A proof node's recipe for a font with `axes` axes. A recipe that names no location renders
@@ -1566,7 +1487,6 @@ mod tests {
 
     fn setup(
         project: &Project,
-        version: u32,
         graph: runebender::workflows::graph::NodeGraph,
     ) -> (GraphSession, LiveGraphSubmitRequest) {
         let session = GraphSession::new("graph", "document", graph, Registry::core()).unwrap();
@@ -1581,11 +1501,18 @@ mod tests {
                 },
                 actor: "test".into(),
                 operation_key: "run".into(),
-                execution_version: version,
                 recipe_input: input(project, "job-1"),
                 base_proof_input: compiled_proof::capture(project).unwrap(),
             },
         )
+    }
+
+    /// The comparison starter without its source proof, so the Python node is the first job.
+    fn script_first_starter(project: &Project) -> runebender::workflows::graph::NodeGraph {
+        let mut graph = graph_live::comparison_starter(project.source_id(0).unwrap());
+        graph.nodes.retain(|node| node.id != 2);
+        graph.links.retain(|link| link.to() != 2);
+        graph
     }
 
     fn current(project: &Project) -> GraphDocumentState {
@@ -1616,7 +1543,7 @@ mod tests {
             .nth(1)
             .unwrap();
         changed.values.get_mut("recipe").unwrap()["text"] = serde_json::json!("different");
-        let (session, request) = setup(&project, 2, graph.clone());
+        let (session, request) = setup(&project, graph.clone());
         let mismatch = validate_submit_capture(&session, &project, &request).unwrap_err();
         assert!(
             mismatch
@@ -1637,7 +1564,7 @@ mod tests {
             .values
             .insert("recipe".into(), graph_live::default_proof_recipe());
         graph.connect(source_node, "font", extra, "font");
-        let (session, request) = setup(&project, 2, graph);
+        let (session, request) = setup(&project, graph);
         let result = validate_submit_capture(&session, &project, &request);
         assert!(
             result.is_ok(),
@@ -1683,7 +1610,9 @@ mod tests {
     }
 
     #[test]
-    fn legacy_comparison_proves_and_applies_exact_candidate_with_retry_and_release() {
+    /// A `live.python` node fed by `live.font` produces a detached font version: the document
+    /// does not change, both proofs render, and Apply receives the exact staged candidate.
+    fn python_fed_by_font_proves_a_detached_version_and_applies_it() {
         let Some(python) = python() else {
             return;
         };
@@ -1695,12 +1624,11 @@ mod tests {
             .unwrap()
             .values
             .insert("code".into(), Value::String(width_script(777)));
-        let (mut session, request) = setup(&project, 1, graph);
+        let (mut session, request) = setup(&project, graph);
         let retry = LiveGraphSubmitRequest {
             guard: request.guard.clone(),
             actor: request.actor.clone(),
             operation_key: request.operation_key.clone(),
-            execution_version: 1,
             recipe_input: request.recipe_input.clone(),
             base_proof_input: request.base_proof_input.clone(),
         };
@@ -1713,11 +1641,19 @@ mod tests {
         let handle = run.receipt.handle;
         let inspection = finish(&mut adapter, &mut session, &queue, &project, handle, None);
         assert_eq!(inspection.status, GraphRunStatus::Completed);
-        assert_eq!(inspection.outputs.len(), 3);
+        assert_eq!(inspection.outputs.len(), 4);
+        assert!(inspection.outputs.iter().any(|output| output.node == 3
+            && matches!(
+                &output.value,
+                GraphNodeOutputValue::FontVersion {
+                    lineage: Some(lineage),
+                    ..
+                } if lineage.parent_node == 1
+            )));
         assert_eq!(project.document_revision(), root_revision);
         assert_eq!(
             adapter.result_summary(handle).unwrap().report.trim(),
-            "width 777"
+            "node 3: width 777"
         );
         assert!(adapter.can_apply(handle, None));
         let apply = adapter
@@ -1732,7 +1668,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(apply.request.edits.len(), 1);
-        assert!(apply.payload_digest.is_none());
+
         assert_eq!(adapter.proof_node(handle, None, Some(false)).unwrap(), 2);
         assert_eq!(adapter.proof_node(handle, None, Some(true)).unwrap(), 4);
         let replay = adapter
@@ -1750,7 +1686,6 @@ mod tests {
             },
             actor: "test".into(),
             operation_key: "run".into(),
-            execution_version: 1,
             recipe_input: input(&project, "job-1"),
             base_proof_input: compiled_proof::capture(&project).unwrap(),
         };
@@ -1758,49 +1693,6 @@ mod tests {
             .submit(&mut session, &queue, &project, released_retry)
             .unwrap();
         assert_eq!(replay.graph.receipt, run.receipt);
-    }
-
-    #[test]
-    fn legacy_script_failure_does_not_dispatch_any_proofs() {
-        let Some(python) = python() else {
-            return;
-        };
-        let project = project();
-        let mut graph = graph_live::comparison_starter(project.source_id(0).unwrap());
-        graph.node_mut(3).unwrap().values.insert(
-            "code".into(),
-            Value::String("raise RuntimeError('fixture failure')".into()),
-        );
-        let (mut session, request) = setup(&project, 1, graph);
-        let queue = ScriptJobQueue::new(ScriptJobConfig::new(python)).unwrap();
-        let mut adapter = LiveGraphExecution::default();
-        let handle = adapter
-            .submit(&mut session, &queue, &project, request)
-            .unwrap()
-            .graph
-            .receipt
-            .handle;
-        let deadline = Instant::now() + Duration::from_secs(8);
-        loop {
-            adapter.poll_scripts(&mut session, &queue, &project);
-            let phase = adapter.phase(handle).unwrap();
-            assert!(
-                !matches!(
-                    phase,
-                    LiveGraphPhase::ProofReady | LiveGraphPhase::ProofsRunning
-                ),
-                "legacy failure must not dispatch a proof"
-            );
-            if phase == LiveGraphPhase::Terminal(GraphRunStatus::Failed) {
-                break;
-            }
-            assert!(Instant::now() < deadline, "failed script did not settle");
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let run = session.inspect_run(handle).unwrap();
-        assert!(run.outputs.is_empty());
-        assert_eq!(run.errors.len(), 1);
-        assert_eq!(run.errors[0].node, Some(3));
     }
 
     #[test]
@@ -1815,12 +1707,11 @@ mod tests {
             .unwrap()
             .values
             .insert("code".into(), Value::String(width_script(777)));
-        let (mut session, request) = setup(&project, 1, graph);
+        let (mut session, request) = setup(&project, graph);
         let retry = LiveGraphSubmitRequest {
             guard: request.guard.clone(),
             actor: request.actor.clone(),
             operation_key: request.operation_key.clone(),
-            execution_version: 1,
             recipe_input: request.recipe_input.clone(),
             base_proof_input: request.base_proof_input.clone(),
         };
@@ -1855,7 +1746,6 @@ mod tests {
                     guard: retry.guard.clone(),
                     actor: retry.actor.clone(),
                     operation_key: retry.operation_key.clone(),
-                    execution_version: retry.execution_version,
                     recipe_input: retry.recipe_input.clone(),
                     base_proof_input: retry.base_proof_input.clone(),
                 },
@@ -1874,7 +1764,6 @@ mod tests {
                     guard: retry.guard.clone(),
                     actor: retry.actor.clone(),
                     operation_key: retry.operation_key.clone(),
-                    execution_version: 1,
                     recipe_input: changed,
                     base_proof_input: retry.base_proof_input.clone(),
                 },
@@ -1902,7 +1791,6 @@ mod tests {
                     guard: retry.guard,
                     actor: retry.actor,
                     operation_key: retry.operation_key,
-                    execution_version: 1,
                     recipe_input: retry.recipe_input,
                     base_proof_input: compiled_proof::capture(&altered_project).unwrap(),
                 },
@@ -1928,13 +1816,13 @@ mod tests {
             return;
         };
         let project = project();
-        let mut graph = graph_live::comparison_starter(project.source_id(0).unwrap());
+        let mut graph = script_first_starter(&project);
         graph
             .node_mut(3)
             .unwrap()
             .values
             .insert("code".into(), Value::String(width_script(777)));
-        let (mut session, request) = setup(&project, 1, graph);
+        let (mut session, request) = setup(&project, graph);
         let queue = ScriptJobQueue::new(ScriptJobConfig::new(python)).unwrap();
         let mut adapter = LiveGraphExecution::default();
         let run = adapter
@@ -1986,7 +1874,7 @@ mod tests {
             .unwrap()
             .values
             .insert("code".into(), Value::String(width_script(777)));
-        let (mut session, request) = setup(&project, 1, graph);
+        let (mut session, request) = setup(&project, graph);
         let queue = ScriptJobQueue::new(ScriptJobConfig::new(python)).unwrap();
         let mut adapter = LiveGraphExecution::default();
         let run = adapter
@@ -2051,18 +1939,17 @@ mod tests {
                 script: width_script(701),
             })
             .unwrap();
-        let mut graph = graph_live::comparison_starter(project.source_id(0).unwrap());
+        let mut graph = script_first_starter(&project);
         graph
             .node_mut(3)
             .unwrap()
             .values
             .insert("code".into(), Value::String(width_script(777)));
-        let (mut session, request) = setup(&project, 1, graph);
+        let (mut session, request) = setup(&project, graph);
         let retry = LiveGraphSubmitRequest {
             guard: request.guard.clone(),
             actor: request.actor.clone(),
             operation_key: request.operation_key.clone(),
-            execution_version: 1,
             recipe_input: request.recipe_input.clone(),
             base_proof_input: request.base_proof_input.clone(),
         };
@@ -2121,7 +2008,7 @@ mod tests {
         graph.connect(3, "font", next, "font");
         let last_proof = graph.add("live.proof", [1300.0, 0.0]);
         graph.connect(next, "font", last_proof, "font");
-        let (mut session, request) = setup(&project, 2, graph);
+        let (mut session, request) = setup(&project, graph);
         let queue = ScriptJobQueue::new(ScriptJobConfig::new(python)).unwrap();
         let mut adapter = LiveGraphExecution::default();
         let handle = adapter
@@ -2181,7 +2068,6 @@ mod tests {
                 .count(),
             2
         );
-        assert!(last.payload_digest.is_some());
         let overlay = compiled_proof::capture(&project)
             .unwrap()
             .with_staged_edit(&project, &last.candidate)
@@ -2214,7 +2100,7 @@ mod tests {
             .unwrap()
             .values
             .insert("code".into(), Value::String(slow));
-        let (mut session, request) = setup(&project, 1, graph);
+        let (mut session, request) = setup(&project, graph);
         let queue = ScriptJobQueue::new(ScriptJobConfig::new(python)).unwrap();
         let mut adapter = LiveGraphExecution::default();
         let run = adapter
@@ -2276,7 +2162,7 @@ mod tests {
         graph.connect(1, "font", bad, "font");
         let blocked = graph.add("live.proof", [700.0, 400.0]);
         graph.connect(bad, "font", blocked, "font");
-        let (mut session, request) = setup(&project, 2, graph);
+        let (mut session, request) = setup(&project, graph);
         let queue = ScriptJobQueue::new(ScriptJobConfig::new(python)).unwrap();
         let mut adapter = LiveGraphExecution::default();
         let handle = adapter
@@ -2322,7 +2208,7 @@ mod tests {
             .unwrap()
             .values
             .insert("code".into(), Value::String(width_script(777)));
-        let (mut session, request) = setup(&project, 1, graph);
+        let (mut session, request) = setup(&project, graph);
         let queue = ScriptJobQueue::new(ScriptJobConfig::new(python)).unwrap();
         let mut adapter = LiveGraphExecution::default();
         let handle = adapter

@@ -118,24 +118,16 @@ impl Workspace {
         self.apply_agent_edit_candidate(request, None, None)
     }
 
-    /// Commit a host-retained preview through the same authorization, cancellation and history path.
+    /// Commit a host-retained graph result through the same authorization, cancellation and
+    /// history path, bound to its graph ancestry as well as its explicit edit intent.
     /// Only the candidate owner supplies this pair; it is not a transport entry point.
-    pub(crate) fn apply_retained_agent_edit(
-        &mut self,
-        request: AgentEditRequest,
-        candidate: CanonicalDocumentEditTransaction,
-    ) -> Value {
-        self.apply_retained_agent_edit_bound(request, candidate, None)
-    }
-
-    /// Bind a retained DAG result to its graph ancestry as well as its explicit edit intent.
     pub(crate) fn apply_retained_agent_edit_bound(
         &mut self,
         request: AgentEditRequest,
         candidate: CanonicalDocumentEditTransaction,
-        payload_digest: Option<AgentPayloadDigest>,
+        payload_digest: AgentPayloadDigest,
     ) -> Value {
-        self.apply_agent_edit_candidate(request, Some(candidate), payload_digest)
+        self.apply_agent_edit_candidate(request, Some(candidate), Some(payload_digest))
     }
 
     fn apply_agent_edit_candidate(

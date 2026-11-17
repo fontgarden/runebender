@@ -1013,7 +1013,7 @@ mod tests {
         assert!(app.selected_arabic_recipe("beh-ar.medi", source).is_err());
         app.ensure_live_graph_for_sketch(recipe.clone()).unwrap();
         let session = app.live_graph_session().unwrap();
-        let comparison = session.execution_plan(1).unwrap().comparison().unwrap();
+        let comparison = session.execution_plan().unwrap().comparison().unwrap();
         let graph = session.snapshot().graph;
         let proof_recipes: Vec<CompiledProofRecipe> =
             [comparison.unchanged_proof, comparison.changed_proof]

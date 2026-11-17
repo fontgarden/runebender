@@ -4,7 +4,7 @@
 //! One live graph shared by native authoring, Python execution and agent commands.
 //! The existing disk graph workflow remains separate; these commands never save a font.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -705,29 +705,12 @@ impl Workspace {
                 {
                     return Err("enter at least one glyph for the Python recipe to change".into());
                 }
-                let parameters = if request.execution_version == 1 {
-                    snapshot
-                        .graph
-                        .nodes
-                        .iter()
-                        .find(|node| node.type_name == "live.python")
-                        .ok_or("graph has no Python recipe node")?
-                        .values
-                        .get("parameters")
-                        .cloned()
-                        .unwrap_or_else(|| json!({}))
-                } else {
-                    json!({})
-                };
-                let Value::Object(parameters) = parameters else {
-                    return Err("Python parameters must be an object".into());
-                };
                 let input = script_recipe::capture(
                     &self.font.project,
                     SourceId(request.source),
                     &request.glyphs,
                     format!("graph-{}-{}", self.document_id, state.next_job),
-                    parameters.into_iter().collect(),
+                    BTreeMap::new(),
                 )?;
                 let baseline = compiled_proof::capture(&self.font.project)?;
                 let queue = self
@@ -741,7 +724,6 @@ impl Workspace {
                         queue,
                         &self.font.project,
                         LiveGraphSubmitRequest {
-                            execution_version: request.execution_version,
                             guard: request.guard,
                             actor: request.actor,
                             operation_key: request.operation_key,
@@ -893,14 +875,11 @@ impl Workspace {
                         request.authorization,
                     )
                     .map_err(|error| error.to_string())?;
-                let response = match edit.payload_digest {
-                    Some(digest) => self.apply_retained_agent_edit_bound(
-                        edit.request,
-                        edit.candidate,
-                        Some(digest),
-                    ),
-                    None => self.apply_retained_agent_edit(edit.request, edit.candidate),
-                };
+                let response = self.apply_retained_agent_edit_bound(
+                    edit.request,
+                    edit.candidate,
+                    edit.payload_digest,
+                );
                 self.live_graph
                     .as_mut()
                     .expect("Apply does not replace the graph")
@@ -1250,7 +1229,7 @@ mod tests {
         app.text_proof_selection.as_mut().unwrap().document_revision -= 1;
         app.ensure_live_graph().unwrap();
         let session = app.live_graph_session().unwrap();
-        let comparison = session.execution_plan(1).unwrap().comparison().unwrap();
+        let comparison = session.execution_plan().unwrap().comparison().unwrap();
         let graph = session.snapshot().graph;
         let recipes: Vec<_> = [comparison.unchanged_proof, comparison.changed_proof]
             .into_iter()
@@ -1632,7 +1611,11 @@ mod tests {
             .graph
             .nodes
             .iter()
-            .filter(|node| node.type_name == "live.proof")
+            // A specimen page sets one line per line of text, so only one-line proofs change.
+            .filter(|node| {
+                node.type_name == "live.proof"
+                    && node.values["recipe"]["rendering"]["lines"].is_null()
+            })
             .map(|node| {
                 let mut recipe = node.values["recipe"].clone();
                 recipe["text"] = json!("AA");
@@ -1926,7 +1909,10 @@ json.dump({"schema_version":1,"job_id":p["job_id"],"input_hash":p["input_hash"],
                         field: "code".into(),
                         value: json!(script),
                     })
-                } else if node.type_name == "live.proof" {
+                } else if node.type_name == "live.proof"
+                    && node.values["recipe"]["rendering"]["lines"].is_null()
+                {
+                    // A specimen page sets one line per line of text, so it keeps its text.
                     let mut recipe = node.values["recipe"].clone();
                     recipe["text"] = json!("AA");
                     Some(GraphEdit::SetValue {
