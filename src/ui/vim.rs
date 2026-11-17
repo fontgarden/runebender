@@ -95,6 +95,8 @@ enum Span {
 #[derive(Debug, Default)]
 struct Pending {
     count: Option<usize>,
+    /// The count typed before the operator, which multiplies the count typed after it.
+    operator_count: Option<usize>,
     operator: Option<char>,
     /// `g`, `r`, or the `i` of a text object.
     prefix: Option<char>,
@@ -839,6 +841,14 @@ impl VimBuffer {
             }
             _ => {}
         }
+        // `r` replaces with a typed character only, and any other key cancels it.
+        if self.pending.prefix == Some('r') {
+            match key {
+                VimKey::Char(c) => self.normal_command(c),
+                _ => self.pending = Pending::default(),
+            }
+            return;
+        }
         if let Some(c) = Self::as_command(key) {
             self.normal_command(c);
         }
@@ -867,7 +877,11 @@ impl VimBuffer {
             self.pending.count = Some(count.saturating_mul(10).saturating_add(digit as usize));
             return;
         }
-        let count = self.pending.count;
+        // `2d3w` acts on six words: the two counts multiply.
+        let count = match (self.pending.operator_count, self.pending.count) {
+            (Some(before), Some(after)) => Some(before.saturating_mul(after)),
+            (before, after) => before.or(after),
+        };
         let n = count.unwrap_or(1);
         let operator = self.pending.operator;
         let prefix = self.pending.prefix.take();
@@ -913,6 +927,7 @@ impl VimBuffer {
             } else if c == 'g' || c == 'i' {
                 self.pending = Pending {
                     count,
+                    operator_count: None,
                     operator: Some(operator),
                     prefix: Some(c),
                 };
@@ -936,7 +951,8 @@ impl VimBuffer {
         match c {
             'd' | 'c' | 'y' | '>' | '<' => {
                 self.pending = Pending {
-                    count,
+                    count: None,
+                    operator_count: count,
                     operator: Some(c),
                     prefix: None,
                 };
@@ -944,6 +960,7 @@ impl VimBuffer {
             'g' | 'r' => {
                 self.pending = Pending {
                     count,
+                    operator_count: None,
                     operator: None,
                     prefix: Some(c),
                 };
@@ -1264,6 +1281,29 @@ mod tests {
         assert_eq!(run("a", ">>").text(), "    a");
         assert_eq!(run("      a", "<<").text(), "  a");
         assert_eq!(run("abc", "lsx<esc>").text(), "axc");
+    }
+
+    #[test]
+    fn replace_followed_by_a_key_that_is_not_a_character_cancels() {
+        assert_eq!(run("abc", "r<bs>").text(), "abc");
+        assert_eq!(run("abc", "r<cr>").text(), "abc");
+        let mut buffer = VimBuffer::new("abc");
+        buffer.key(VimKey::Char('r'));
+        buffer.key(VimKey::Right);
+        assert_eq!(buffer.text(), "abc");
+        assert_eq!(buffer.cursor(), (0, 0));
+        // The next character is a command again.
+        feed(&mut buffer, "x");
+        assert_eq!(buffer.text(), "bc");
+    }
+
+    #[test]
+    fn counts_before_and_after_an_operator_multiply() {
+        let text = "a b c d e f g h";
+        assert_eq!(run(text, "2d3w").text(), "g h");
+        assert_eq!(run(text, "d3w").text(), "d e f g h");
+        assert_eq!(run(text, "3dw").text(), "d e f g h");
+        assert_eq!(run("1\n2\n3\n4\n5", "2d2d").text(), "5");
     }
 
     #[test]
