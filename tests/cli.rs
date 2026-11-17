@@ -3,20 +3,31 @@
 
 //! The command line as a script sees it: JSON out, exit codes in.
 //!
-//! Needs the Virtua Grotesk fixture next to this checkout, or
-//! `$RUNEBENDER_TEST_FONTS`. Each test copies the UFO into a fresh
-//! temporary directory, so nothing edits the fixture.
+//! The tests use the synthetic font in `tests/fixtures/core`.
+//! Two tests need a full font and are gated on `integration-fonts`.
+//! They use the Virtua Grotesk fixture next to this checkout, or `$RUNEBENDER_TEST_FONTS`.
+//! Each test copies its font into a fresh temporary directory, so nothing edits a fixture.
 
-#![cfg(feature = "integration-fonts")]
-
+#[cfg(feature = "integration-fonts")]
 #[path = "support/virtua.rs"]
 mod virtua;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// The family name of the core fixture.
+const FAMILY: &str = "Runebender Core Fixture";
+
 fn fixture() -> PathBuf {
-    virtua::dir().join("VirtuaGrotesk-Regular.ufo")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/core/Core-Regular.ufo")
+}
+
+/// The file of one glyph in the default layer of a UFO.
+fn glif_path(ufo: &Path, glyph: &str) -> PathBuf {
+    let font = norad::Font::load(ufo).expect("loads");
+    let layer = font.default_layer();
+    ufo.join(layer.path())
+        .join(layer.get_path(glyph).expect("the glyph has a file"))
 }
 
 fn copy_dir(src: &Path, dst: &Path) {
@@ -48,15 +59,30 @@ impl Drop for Scratch {
     }
 }
 
-/// A private copy of the fixture, in a directory that goes away
-/// with the test.
-fn scratch_ufo() -> (Scratch, PathBuf) {
+/// A private copy of a font source, in a directory that goes away with the test.
+fn scratch_copy(source: &Path) -> (Scratch, PathBuf) {
     static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("runebender-cli-test-{}-{n}", std::process::id()));
-    let ufo = dir.join("Virtua.ufo");
-    copy_dir(&fixture(), &ufo);
-    (Scratch(dir), ufo)
+    let copy = dir.join(
+        match source.extension().and_then(|extension| extension.to_str()) {
+            Some(extension) => format!("Font.{extension}"),
+            None => "Font".to_owned(),
+        },
+    );
+    copy_dir(source, &copy);
+    (Scratch(dir), copy)
+}
+
+/// A private copy of the core fixture.
+fn scratch_ufo() -> (Scratch, PathBuf) {
+    scratch_copy(&fixture())
+}
+
+/// A private copy of the Virtua Grotesk regular master.
+#[cfg(feature = "integration-fonts")]
+fn scratch_virtua() -> (Scratch, PathBuf) {
+    scratch_copy(&virtua::dir().join("VirtuaGrotesk-Regular.ufo"))
 }
 
 fn run(args: &[&str]) -> (i32, serde_json::Value) {
@@ -66,6 +92,13 @@ fn run(args: &[&str]) -> (i32, serde_json::Value) {
         .output()
         .expect("the binary runs");
     let code = output.status.code().expect("an exit code");
+    if code != 0 && !output.stderr.is_empty() {
+        // The harness shows this only when the test fails.
+        eprintln!(
+            "runebender {args:?} exited with {code}:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     let stdout = String::from_utf8_lossy(&output.stdout);
     let value = stdout
         .lines()
@@ -75,9 +108,10 @@ fn run(args: &[&str]) -> (i32, serde_json::Value) {
     (code, value)
 }
 
+#[cfg(feature = "integration-fonts")]
 #[test]
 fn info_reports_the_font_as_json() {
-    let (_dir, ufo) = scratch_ufo();
+    let (_dir, ufo) = scratch_virtua();
     let (code, out) = run(&["info", ufo.to_str().expect("utf8")]);
     assert_eq!(code, 0);
     assert_eq!(out["ok"], true);
@@ -467,7 +501,7 @@ fn graph_run_runs_core_nodes_and_skips_them_the_second_time() {
     assert_eq!(proof["status"], "skipped", "{out}");
 
     // Edit a glyph in the font: the proof runs again.
-    let glif = ufo.join("glyphs").join("H_.glif");
+    let glif = glif_path(&ufo, "H");
     let mut text = std::fs::read_to_string(&glif).expect("glif");
     text = text.replacen("<point x=\"", "<point x=\"1", 1);
     std::fs::write(&glif, text).expect("write glif");
@@ -756,7 +790,7 @@ fn mcp_lists_the_agent_tools_and_calls_them() {
     assert_eq!(info["isError"], false);
     let text = info["content"][0]["text"].as_str().expect("text");
     let parsed: serde_json::Value = serde_json::from_str(text).expect("json in text");
-    assert_eq!(parsed["family"], "Virtua Grotesk");
+    assert_eq!(parsed["family"], FAMILY);
 
     // propose through the stand-in, which exits 4: reported, not crashed.
     let propose = &replies[3]["result"];
@@ -939,10 +973,11 @@ fn mcp_protocol_versions_keep_disk_results_in_step_with_the_cli() {
     );
 }
 
+#[cfg(feature = "integration-fonts")]
 #[test]
 fn compose_derives_marks_and_the_result_shapes() {
     use runebender::text::shape::{ShapingFont, ShapingGlyph, ShapingSource};
-    let (_dir, ufo) = scratch_ufo();
+    let (_dir, ufo) = scratch_virtua();
     let path = ufo.to_str().expect("utf8");
     // Make the representative targets stale in our owned copy. The upstream fixture
     // gains finished composites over time, so the font-wide pending count is not a contract.
@@ -1164,7 +1199,7 @@ fn family_requires_explicit_master_and_reports_sources() {
     let file = dir.path().join("Family.designspace");
     let second = dir.path().join("Second.ufo");
     copy_dir(&ufo, &second);
-    std::fs::write(&file, r#"<?xml version="1.0"?><designspace format="5.0"><axes><axis tag="wght" name="Weight" minimum="100" maximum="900" default="100"/></axes><sources><source filename="Virtua.ufo" name="one" stylename="One"><location><dimension name="Weight" xvalue="100"/></location></source><source filename="Second.ufo" name="two" stylename="Two"><location><dimension name="Weight" xvalue="900"/></location></source></sources></designspace>"#).unwrap();
+    std::fs::write(&file, r#"<?xml version="1.0"?><designspace format="5.0"><axes><axis tag="wght" name="Weight" minimum="100" maximum="900" default="100"/></axes><sources><source filename="Font.ufo" name="one" stylename="One"><location><dimension name="Weight" xvalue="100"/></location></source><source filename="Second.ufo" name="two" stylename="Two"><location><dimension name="Weight" xvalue="900"/></location></source></sources></designspace>"#).unwrap();
     let (code, out) = run(&["info", file.to_str().unwrap()]);
     assert_eq!(code, 2);
     assert!(out["error"].as_str().unwrap().contains("single source"));
@@ -1206,8 +1241,10 @@ fn help_version_and_invalid_arguments_finish_without_a_window() {
 
 #[test]
 fn babelfont_info_and_proof_use_the_importer_without_writing_a_ufo() {
-    let package =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/babelfont/Basic.babelfont");
+    // A copy, because this test runs a writing command on the package.
+    let (_dir, package) = scratch_copy(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/babelfont/Basic.babelfont"),
+    );
     let (code, result) = run(&["info", package.to_str().unwrap()]);
     assert_eq!(code, 0, "{result}");
     assert_eq!(result["family"], "Babelfont Test");
