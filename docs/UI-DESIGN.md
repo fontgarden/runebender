@@ -242,6 +242,22 @@ Most of them exist for captures, but each one also applies to a window unless it
 | `RUNEBENDER_SCREENSHOT=<path>` | Render one frame to this PNG file and exit without a window. |
 | `RUNEBENDER_SIZE=1100x720` | Logical size of the capture; the default is 1100 by 720. |
 | `RUNEBENDER_SCALE=2` | Device-pixel scale of the capture at the same logical layout. |
+| `RUNEBENDER_GLYPH=<name>` | Open this glyph in the editor. |
+| `RUNEBENDER_SELECTED=<name>` | In a capture, select this glyph in the grid. |
+| `RUNEBENDER_SELECTALL=1` | Select all points in the open glyph. |
+| `RUNEBENDER_EXPAND=<key>[,<key>]` | In a capture, expand the panel sections with these collapse keys. |
+| `RUNEBENDER_COMPONENT=<n>` | Open the open glyph's component at index `n` in place, inside its composite. |
+| `RUNEBENDER_PREVIEW_TEXT=<text>` | Set the text of the proof strip. |
+| `RUNEBENDER_PREVIEW=<pieces\|model>` | In a capture, show this view of the proof strip; `model` waits for the first drawing of the trained font. |
+| `RUNEBENDER_NEURAL_STATUS=<text>` | In a capture, show this training status in the Neural section. |
+| `RUNEBENDER_PROOF_VIEW=<1\|toggle\|before\|waterfall\|text>` | Open the proof view: `1` opens Compare, `toggle` and `before` open Toggle on the right-hand or left-hand revision, `waterfall` and `text` open those pages. |
+| `RUNEBENDER_PROOF_DARK=1` | Open the proof page in dark mode. |
+| `RUNEBENDER_PROOF_TEXT=<text>` | Set a custom sample of at most 4096 characters for the reading proof. |
+| `RUNEBENDER_PROOF_MENU=1` | Open the sample menu of the reading proof. |
+| `RUNEBENDER_PROOF_SAMPLE=1` | With `RUNEBENDER_GLYPH`, create and select an in-memory sample proposal for the proof view. |
+| `RUNEBENDER_LABEL_SAMPLE=<n>` | With `RUNEBENDER_GLYPH`, select this sample of the label tool. |
+| `RUNEBENDER_GRAPH_SCRIPT=<index>` | In a capture of the Graph view, add a code node with this example script. |
+| `RUNEBENDER_GRAPH_EXPANDED=1` | In a capture of the Graph view, show the first proof image expanded. |
 | `RUNEBENDER_FRAME_STATS=1` | In a window, render every frame and report the frame cadence on stderr. |
 
 ### Variables that other code reads
@@ -251,11 +267,7 @@ A test checks that this section and the previous one name every `RUNEBENDER_*` v
 
 | Variable | Effect |
 | --- | --- |
-| `RUNEBENDER_GLYPH=<name>` | Open this glyph in the editor. |
 | `RUNEBENDER_OPEN=<name>` | Create the workspace with the editor already on this glyph, without the steps of opening it. |
-| `RUNEBENDER_SELECTED=<name>` | In a capture, select this glyph in the grid. |
-| `RUNEBENDER_SELECTALL=1` | Select all points in the open glyph. |
-| `RUNEBENDER_EXPAND=<key>[,<key>]` | In a capture, expand the panel sections with these collapse keys. |
 | `RUNEBENDER_COLLAPSED=<key,...>` | Collapse these panel sections. |
 | `RUNEBENDER_HIDDEN_DOCKS=<left,right>` | Fold these docks away, as the footer toggles do. |
 | `RUNEBENDER_CAT=<Number\|Symbol\|Mark>` | Select this category in the sidebar and expand the Categories section. |
@@ -264,7 +276,6 @@ A test checks that this section and the previous one name every `RUNEBENDER_*` v
 | `RUNEBENDER_RAIL=<ai\|chat\|scripts\|shapes>` | Open this tool pane. |
 | `RUNEBENDER_TOOL=<interpolation\|hand\|metaball\|measure\|label\|text\|sketch\|shapes>` | Start with this tool instead of the selection tool. |
 | `RUNEBENDER_VIEW=<option,...>` | Turn on canvas view options: `comb`, `thickness`, `continuity`, `colorize`, `handles`, `segments`, `bearings`, `popcount`, `components`. |
-| `RUNEBENDER_COMPONENT=<n>` | Open the open glyph's component at index `n` in place, inside its composite. |
 | `RUNEBENDER_AXIS=wght=500,wdth=80` | Set the design-space location. |
 | `RUNEBENDER_MASTER=<name>` | Make this master active, by its style name. |
 | `RUNEBENDER_SHOW_LAYERS=1` | Turn on the eye of every layer of the open glyph. |
@@ -277,17 +288,8 @@ A test checks that this section and the previous one name every `RUNEBENDER_*` v
 | `RUNEBENDER_TEXT_SCRIPT=<tag>` | Shape the text session with this OpenType script tag. |
 | `RUNEBENDER_TEXT_LANGUAGE=<tag>` | Shape the text session with this OpenType language tag. |
 | `RUNEBENDER_TEXT_SELECTION=<start>:<end>` | Select this range of the text session. |
-| `RUNEBENDER_PREVIEW_TEXT=<text>` | Set the text of the proof strip. |
 | `RUNEBENDER_PREVIEW_BLUR=<radius>` | Blur the proof strip by this radius, from 0 to 8. |
 | `RUNEBENDER_PREVIEW_INVERT=1` | Invert the proof strip. |
-| `RUNEBENDER_PREVIEW=<pieces\|model>` | In a capture, show this view of the proof strip; `model` waits for the first drawing of the trained font. |
-| `RUNEBENDER_NEURAL_STATUS=<text>` | In a capture, show this training status in the Neural section. |
-| `RUNEBENDER_PROOF_VIEW=<1\|toggle\|before\|waterfall\|text>` | Open the proof view: `1` opens Compare, `toggle` and `before` open Toggle on the right-hand or left-hand revision, `waterfall` and `text` open those pages. |
-| `RUNEBENDER_PROOF_DARK=1` | Open the proof page in dark mode. |
-| `RUNEBENDER_PROOF_TEXT=<text>` | Set a custom sample of at most 4096 characters for the reading proof. |
-| `RUNEBENDER_PROOF_MENU=1` | Open the sample menu of the reading proof. |
-| `RUNEBENDER_PROOF_SAMPLE=1` | With `RUNEBENDER_GLYPH`, create and select an in-memory sample proposal for the proof view. |
-| `RUNEBENDER_LABEL_SAMPLE=<n>` | With `RUNEBENDER_GLYPH`, select this sample of the label tool. |
 | `RUNEBENDER_SCRIPT_DRAFT=<code>` | Open a script draft with this content in the Scripts pane. |
 | `RUNEBENDER_SCRIPT_NAME=<name>` | Name the script draft; the default is `headless-recipe.py`. |
 | `RUNEBENDER_SCRIPT_PARAMETERS=<json>` | Set the parameters of the script draft. |
@@ -297,8 +299,6 @@ A test checks that this section and the previous one name every `RUNEBENDER_*` v
 | `RUNEBENDER_NODES=<file>` | Open this graph file. |
 | `RUNEBENDER_NODES_CONTENT_FIXTURE=1` | Open the fixed code-and-image graph layout that interface reviews use. |
 | `RUNEBENDER_MODE=graph` | Start in the Graph view. |
-| `RUNEBENDER_GRAPH_SCRIPT=<index>` | In a capture of the Graph view, add a code node with this example script. |
-| `RUNEBENDER_GRAPH_EXPANDED=1` | In a capture of the Graph view, show the first proof image expanded. |
 | `RUNEBENDER_IN_WINDOW_MENU=1` | On macOS, show the in-window menu that the other platforms use. |
 | `RUNEBENDER_MENU_OPEN=<title>` | Open the in-window menu with this title. |
 | `RUNEBENDER_PYTHON=<path>` | The Python executable that runs recipes and graph code nodes. |

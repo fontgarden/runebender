@@ -10,6 +10,7 @@ use crate::application::editor::tools::{
     chat, graph, local_ai, scripts, sketch, voice, weight_debt,
 };
 use crate::application::font_model::FontModel;
+use crate::application::launch_options::LaunchOptions;
 use crate::application::view::canvas;
 use crate::application::view::canvas::grid::cells_of;
 use crate::application::view::panels::sections::metric_bufs;
@@ -412,7 +413,10 @@ impl Workspace {
             // An empty override previews the active glyph itself, which is
             // GPUI's resting edit state. Shaping text remains opt-in through
             // the inspector, sample commands, or the headless environment.
-            preview_text: std::env::var("RUNEBENDER_PREVIEW_TEXT").unwrap_or_default(),
+            preview_text: LaunchOptions::current()
+                .preview_text
+                .clone()
+                .unwrap_or_default(),
             preview_blur: std::env::var("RUNEBENDER_PREVIEW_BLUR")
                 .ok()
                 .and_then(|v| v.parse::<f64>().ok())
@@ -421,10 +425,7 @@ impl Workspace {
                 .clamp(0.0, 8.0),
             preview_visible: true,
             preview_invert: std::env::var("RUNEBENDER_PREVIEW_INVERT").as_deref() == Ok("1"),
-            proof_view: matches!(
-                std::env::var("RUNEBENDER_PROOF_VIEW").as_deref(),
-                Ok("1" | "toggle" | "before" | "waterfall" | "text")
-            ),
+            proof_view: LaunchOptions::current().proof_view.is_some(),
             review: crate::application::editor::tools::review::ReviewState::default(),
             proof_samples: crate::application::platform::proof_samples::ProofSamples::default(),
             panel_sample: None,
@@ -573,10 +574,7 @@ impl Workspace {
             // The tool was set directly, not picked, so scan for its models here.
             app.shapes_rescan();
         }
-        if let Some(index) = std::env::var("RUNEBENDER_COMPONENT")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-        {
+        if let Some(index) = LaunchOptions::current().component {
             Arc::make_mut(&mut app.session).select_component(index);
         }
         if app.show_mark_cloud {
