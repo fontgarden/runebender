@@ -240,7 +240,9 @@ impl CanonicalSourceStructureSnapshot {
                 .get_mut(&address.glyph)
                 .ok_or_else(|| format!("missing canonical geometry for {}", address.glyph))?;
             let (layer, preserved) = snapshot.into_parts();
-            glyph.layers.insert(address.layer.clone(), preserved);
+            glyph
+                .layers
+                .insert(address.layer.clone(), Box::new(preserved));
             glyph.source_metadata.insert(source, source_metadata);
             geometry.layers.push(layer);
         }

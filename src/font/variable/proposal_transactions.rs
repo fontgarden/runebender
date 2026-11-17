@@ -72,7 +72,7 @@ impl CanonicalSourceStructureSnapshot {
                 .get_mut(&name)
                 .expect("validated glyph")
                 .layers
-                .insert(target.clone(), preserved);
+                .insert(target.clone(), Box::new(preserved));
             self.glyph_geometry
                 .get_mut(&name)
                 .expect("validated glyph geometry")

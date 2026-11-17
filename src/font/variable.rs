@@ -165,7 +165,9 @@ pub struct GlyphSource {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct VariableGlyph {
     id: GlyphId,
-    pub(super) layers: BTreeMap<LayerId, super::babelfont::LayerPreservation>,
+    /// Boxed so that a B-tree node, which reserves room for eleven entries, stays small.
+    /// A glyph usually has one to three layers.
+    pub(super) layers: BTreeMap<LayerId, Box<super::babelfont::LayerPreservation>>,
     pub(super) source_metadata:
         BTreeMap<SourceId, super::model::glyph_metadata::CanonicalSourceGlyphMetadata>,
 }
@@ -616,7 +618,7 @@ impl VariableData {
         name: &str,
         id: &LayerId,
     ) -> Option<super::LayerEditDraft> {
-        let preserved = self.glyphs.get(name)?.layers.get(id)?.clone();
+        let preserved = self.glyphs.get(name)?.layers.get(id)?.as_ref().clone();
         let layer = self
             .geometry(name)?
             .get_layer(&super::babelfont::layer_key(id))?
@@ -633,6 +635,7 @@ impl VariableData {
             .get(&address.glyph)?
             .layers
             .get(&address.layer)?
+            .as_ref()
             .clone();
         let layer = self
             .geometry(&address.glyph)?
@@ -785,7 +788,7 @@ impl VariableData {
         }
         let (new_layer, new_preserved) = draft.into_parts();
         *layer = new_layer;
-        *preserved = new_preserved;
+        **preserved = new_preserved;
         self.revision = self.revision.wrapping_add(1);
         let address = GlyphLayerAddress {
             glyph: name.to_owned(),
@@ -830,7 +833,7 @@ impl VariableData {
                     .expect("validated glyph geometry")
                     .get_layer_mut(&super::babelfont::layer_key(&address.layer))
                     .expect("validated glyph layer geometry") = layer;
-                *self
+                **self
                     .glyphs
                     .get_mut(&address.glyph)
                     .expect("validated glyph preservation")
@@ -871,7 +874,7 @@ impl VariableData {
             .get_mut(name)
             .expect("source layer retains its glyph")
             .layers
-            .insert(to.clone(), preserved);
+            .insert(to.clone(), Box::new(preserved));
         self.geometry_mut(name)
             .expect("source layer retains its geometry")
             .layers

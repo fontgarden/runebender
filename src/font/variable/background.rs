@@ -399,7 +399,9 @@ impl VariableData {
             let key = layer_key(&write.address.layer);
             if let Some(replacement) = replacement {
                 let (layer, preserved) = replacement.clone().into_parts();
-                glyph.layers.insert(write.address.layer.clone(), preserved);
+                glyph
+                    .layers
+                    .insert(write.address.layer.clone(), Box::new(preserved));
                 if let Some(existing) = geometry.get_layer_mut(&key) {
                     *existing = layer;
                 } else {

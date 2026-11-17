@@ -89,7 +89,7 @@ impl CanonicalSourceStructureSnapshot {
             let (layer, preserved) = crate::font::babelfont::glyph_transactions::empty_layer(
                 name, &id, true, width, codepoint,
             );
-            glyph.layers.insert(id.clone(), preserved);
+            glyph.layers.insert(id.clone(), Box::new(preserved));
             glyph.source_metadata.insert(
                 source,
                 crate::font::model::glyph_metadata::CanonicalSourceGlyphMetadata::default(),
@@ -148,7 +148,7 @@ impl CanonicalSourceStructureSnapshot {
                 id,
                 name,
             );
-            glyph.layers.insert(id.clone(), preserved);
+            glyph.layers.insert(id.clone(), Box::new(preserved));
             geometry.layers.push(layer);
             addresses.push(GlyphLayerAddress {
                 glyph: name.to_owned(),

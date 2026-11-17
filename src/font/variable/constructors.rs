@@ -62,7 +62,9 @@ impl VariableData {
                 glyph.codepoint,
             );
             let mut variable = VariableGlyph::default();
-            variable.layers.insert(layer_id.clone(), preserved);
+            variable
+                .layers
+                .insert(layer_id.clone(), Box::new(preserved));
             variable
                 .source_metadata
                 .insert(source, CanonicalSourceGlyphMetadata::default());

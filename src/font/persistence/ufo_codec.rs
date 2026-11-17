@@ -118,7 +118,7 @@ pub(in crate::font) fn decode_sources<'a>(
                 let default = layer.name().as_str() == default_layer_name;
                 let (geometry, preserved) = font_babelfont::layer_from_ufo(payload, &id, default);
                 let glyph = data.glyphs.entry(name.to_owned()).or_default();
-                glyph.layers.insert(id.clone(), preserved);
+                glyph.layers.insert(id.clone(), Box::new(preserved));
                 if default {
                     glyph.source_metadata.insert(
                         source,
