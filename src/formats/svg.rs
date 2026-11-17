@@ -5,7 +5,9 @@
 
 use kurbo::{Affine, BezPath, PathEl};
 
+use crate::font::LayerView;
 use crate::font::experiments::Experiment;
+use crate::font::model::font_info::CanonicalFontMetrics;
 use crate::font::project::Project;
 use crate::font::variable::{GlyphLayerAddress, LayerId, SourceId};
 use crate::formats::ufo::bezpath_to_contour;
@@ -147,22 +149,7 @@ pub fn proof_sheet_project(
     let info = project
         .document_font_info(source)
         .ok_or("proof source has no canonical font information")?;
-    let resolved = info.metrics.resolved();
-    let columns = columns.clamp(1, names.len());
-    let cell_w = resolved.units_per_em * 1.2;
-    let cell_h = resolved.units_per_em * 1.4;
-    let rows = names.len().div_ceil(columns);
-    let mut svg = String::new();
-    svg.push_str(&format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" \
-         viewBox=\"0 0 {} {}\">\n<rect width=\"100%\" height=\"100%\" fill=\"white\"/>\n",
-        (cell_w * columns as f64 / 4.0).round(),
-        (cell_h * rows as f64 / 4.0).round(),
-        cell_w * columns as f64,
-        cell_h * rows as f64
-    ));
-    let mut proof_metrics = Vec::new();
-    for (index, name) in names.iter().enumerate() {
+    render_proof_sheet(&info.metrics, names, columns, |name| {
         let layer = requested_layer
             .as_ref()
             .filter(|layer| project.document_layer(name, layer).is_some())
@@ -172,62 +159,11 @@ pub fn proof_sheet_project(
             .ok_or_else(|| format!("no glyph named {name}"))?;
         let path = project
             .document_layer_path(&GlyphLayerAddress {
-                glyph: name.clone(),
+                glyph: name.to_owned(),
                 layer: layer.clone(),
             })
             .map_err(|error| error.to_string())?;
-        let column = (index % columns) as f64;
-        let row = (index / columns) as f64;
-        let x0 = column * cell_w + resolved.units_per_em * 0.1;
-        let baseline = row * cell_h + resolved.units_per_em * 1.05;
-        let label = name
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;");
-        svg.push_str(&format!(
-            "<text x=\"{x0}\" y=\"{}\" font-family=\"sans-serif\" font-size=\"40\">{label}</text>\n",
-            row * cell_h + 60.0
-        ));
-        let line = |y: f64, color: &str| {
-            format!(
-                "<line x1=\"{x0:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" \
-                 stroke=\"{color}\" stroke-width=\"2\"/>\n",
-                baseline - y,
-                x0 + view.width(),
-                baseline - y
-            )
-        };
-        svg.push_str(&line(0.0, "#999"));
-        svg.push_str(&line(resolved.ascender, "#ccc"));
-        svg.push_str(&line(resolved.descender, "#ccc"));
-        if let Some(x_height) = info.metrics.x_height {
-            svg.push_str(&line(x_height, "#bbb"));
-        }
-        if let Some(cap_height) = info.metrics.cap_height {
-            svg.push_str(&line(cap_height, "#bbb"));
-        }
-        svg.push_str(&format!(
-            "<path transform=\"translate({x0:.1} {baseline:.1}) scale(1 -1)\" d=\"{}\" fill=\"black\"/>\n",
-            path.to_svg()
-        ));
-        use kurbo::Shape as _;
-        let bounds = path.bounding_box();
-        let drawn = !path.is_empty();
-        proof_metrics.push(serde_json::json!({
-            "glyph": name,
-            "advance": view.width(),
-            "lsb": if drawn { Some(bounds.x0.round()) } else { None },
-            "rsb": if drawn { Some((view.width() - bounds.x1).round()) } else { None },
-            "bounds": if drawn { Some([bounds.x0, bounds.y0, bounds.x1, bounds.y1]) } else { None },
-            "points": view.contours().map(|contour| contour.points().count()).sum::<usize>(),
-            "contours": view.contours().count(),
-            "components": view.components().count(),
-        }));
-    }
-    svg.push_str("</svg>\n");
-    Ok(ProofSheet {
-        svg,
-        metrics: proof_metrics,
+        Ok(ProofCell::from_layer(view, path))
     })
 }
 
@@ -252,7 +188,69 @@ pub fn proof_sheet_experiment(
     let info = project
         .document_font_info(experiment.root)
         .ok_or("proof source has no canonical font information")?;
-    let resolved = info.metrics.resolved();
+    render_proof_sheet(&info.metrics, names, columns, |name| {
+        let (selected, view) = experiment
+            .selected_layer(name, layer)
+            .or_else(|| experiment.selected_layer(name, None))
+            .ok_or_else(|| format!("no glyph named {name}"))?;
+        let path = experiment
+            .layer_path(name, &selected)
+            .map_err(|error| error.to_string())?;
+        Ok(ProofCell::from_layer(view, path))
+    })
+}
+
+/// One glyph drawn in a proof sheet cell.
+struct ProofCell {
+    /// Advance width in font units.
+    width: f64,
+    /// Rendered outline in font units.
+    path: BezPath,
+    /// Point, contour and component counts of the drawn layer.
+    counts: ProofCounts,
+}
+
+/// Structure counts reported for one proof sheet cell.
+struct ProofCounts {
+    /// Points across every contour.
+    points: usize,
+    /// Contours of the drawn layer.
+    contours: usize,
+    /// Components of the drawn layer.
+    components: usize,
+}
+
+impl ProofCell {
+    /// Read the width, rendered path and structure counts of one canonical layer.
+    fn from_layer(view: LayerView<'_>, path: BezPath) -> Self {
+        Self {
+            width: view.width(),
+            path,
+            counts: ProofCounts {
+                points: view
+                    .contours()
+                    .map(|contour| contour.points().count())
+                    .sum(),
+                contours: view.contours().count(),
+                components: view.components().count(),
+            },
+        }
+    }
+}
+
+/// Draw `names` in cells, `columns` across, with baseline and vertical metrics ruled in each cell.
+///
+/// `cell` resolves each name in order; its first error stops the sheet.
+fn render_proof_sheet(
+    metrics: &CanonicalFontMetrics,
+    names: &[String],
+    columns: usize,
+    mut cell: impl FnMut(&str) -> Result<ProofCell, String>,
+) -> Result<ProofSheet, String> {
+    if names.is_empty() {
+        return Err("no glyph to draw".into());
+    }
+    let resolved = metrics.resolved();
     let columns = columns.clamp(1, names.len());
     let cell_w = resolved.units_per_em * 1.2;
     let cell_h = resolved.units_per_em * 1.4;
@@ -268,13 +266,11 @@ pub fn proof_sheet_experiment(
     ));
     let mut proof_metrics = Vec::new();
     for (index, name) in names.iter().enumerate() {
-        let (selected, view) = experiment
-            .selected_layer(name, layer)
-            .or_else(|| experiment.selected_layer(name, None))
-            .ok_or_else(|| format!("no glyph named {name}"))?;
-        let path = experiment
-            .layer_path(name, &selected)
-            .map_err(|error| error.to_string())?;
+        let ProofCell {
+            width,
+            path,
+            counts,
+        } = cell(name)?;
         let column = (index % columns) as f64;
         let row = (index / columns) as f64;
         let x0 = column * cell_w + resolved.units_per_em * 0.1;
@@ -292,17 +288,17 @@ pub fn proof_sheet_experiment(
                 "<line x1=\"{x0:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" \
                  stroke=\"{color}\" stroke-width=\"2\"/>\n",
                 baseline - y,
-                x0 + view.width(),
+                x0 + width,
                 baseline - y
             )
         };
         svg.push_str(&line(0.0, "#999"));
         svg.push_str(&line(resolved.ascender, "#ccc"));
         svg.push_str(&line(resolved.descender, "#ccc"));
-        if let Some(x_height) = info.metrics.x_height {
+        if let Some(x_height) = metrics.x_height {
             svg.push_str(&line(x_height, "#bbb"));
         }
-        if let Some(cap_height) = info.metrics.cap_height {
+        if let Some(cap_height) = metrics.cap_height {
             svg.push_str(&line(cap_height, "#bbb"));
         }
         svg.push_str(&format!(
@@ -314,13 +310,13 @@ pub fn proof_sheet_experiment(
         let drawn = !path.is_empty();
         proof_metrics.push(serde_json::json!({
             "glyph": name,
-            "advance": view.width(),
+            "advance": width,
             "lsb": if drawn { Some(bounds.x0.round()) } else { None },
-            "rsb": if drawn { Some((view.width() - bounds.x1).round()) } else { None },
+            "rsb": if drawn { Some((width - bounds.x1).round()) } else { None },
             "bounds": if drawn { Some([bounds.x0, bounds.y0, bounds.x1, bounds.y1]) } else { None },
-            "points": view.contours().map(|contour| contour.points().count()).sum::<usize>(),
-            "contours": view.contours().count(),
-            "components": view.components().count(),
+            "points": counts.points,
+            "contours": counts.contours,
+            "components": counts.components,
         }));
     }
     svg.push_str("</svg>\n");
