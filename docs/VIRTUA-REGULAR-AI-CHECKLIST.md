@@ -324,7 +324,7 @@ Legacy tracing is retained; structured outline models can use C1 replacement dir
 Encoded images are capped at 4 MiB, 1024 pixels per edge and 262144 total pixels; larger generator outputs need resizing with adjusted calibration before import.
 Synthetic tests establish placement and detached staging, not Arabic style quality; C3 user-facing retention/provenance integration and real-model trials remain pending.
 - B2 review, not accepted: 13-file uncommitted patch adds selected occurrence capture and a canvas/panel/Workspace event bridge plus pair validation.
-The narrow ownership expansion into existing view/canvas/editor.rs, view/panels/editor.rs, workspace.rs, platform/host.rs and nodes/execution.rs was necessary for a connected implementation.
+The narrow ownership expansion into existing view/canvas/editor/, view/panels/editor.rs, workspace.rs, platform/host.rs and nodes/execution.rs was necessary for a connected implementation.
 `selected_arabic_occurrence_survives_real_compiled_proof_and_rejects_drift` fails at the auto-direction Arabic mark after TextBuffer::clear: proof_selection reads pinned fallback direction rather than the effective line direction.
 The 33-test canvas editor suite has 31 passes and two event-queue failures: parked_text_does_not_consume_outline_tool_typing and select_double_click_activates_the_composed_sort.
 Tests must explicitly verify the additional proof event without weakening text/edit assertions.
