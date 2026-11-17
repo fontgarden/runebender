@@ -32,6 +32,10 @@ use xilem::EventLoop;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> ExitCode {
+    // The library reports feature-file and outline failures through this hook.
+    runebender::text::shape::set_shaping_failure_reporter(|message| {
+        eprintln!("Text shaping failed: {message}");
+    });
     // Headless commands finish in `cli::run`; the remaining path opens the graphical editor.
     let font_path = match cli::run() {
         cli::Startup::Exit(code) => return code,

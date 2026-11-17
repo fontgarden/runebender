@@ -365,13 +365,59 @@ impl ShapingFont {
     }
 }
 
-/// Where a failed feature-file compile goes. Silent in the browser
-/// console rather than fatal: the file will not compile halfway through
-/// an edit, and typing has to keep working.
+/// The host function that receives text shaping failures.
+static SHAPING_FAILURE_REPORTER: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
+
+/// Install the host function that receives text shaping failures.
+///
+/// The library does not print; the native editor installs a reporter that writes to standard
+/// error.
+/// Only the first installation takes effect, and the return value says whether this one did.
+pub fn set_shaping_failure_reporter(reporter: fn(&str)) -> bool {
+    SHAPING_FAILURE_REPORTER.set(reporter).is_ok()
+}
+
+/// Pass a failed feature-file compile or outline read to the installed reporter.
+///
+/// The failure is not fatal: a feature file does not compile halfway through an edit, and typing
+/// has to keep working.
+/// The text buffer rebuilds its shaping font after each clone, so a message that repeats the
+/// previous one is not reported again.
+/// Without an installed reporter the failure is discarded.
 pub fn log_shaping_failure(message: &str) {
-    // Hosts that want browser-console output can wrap this; core
-    // stays free of platform crates.
-    let _ = message;
+    let Some(report) = SHAPING_FAILURE_REPORTER.get() else {
+        return;
+    };
+    static LAST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    let mut last = LAST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if record_new_failure(&mut last, message) {
+        report(message);
+    }
+}
+
+/// Store `message` as the last reported failure, and return whether it differs from the previous one.
+fn record_new_failure(last: &mut Option<String>, message: &str) -> bool {
+    if last.as_deref() == Some(message) {
+        return false;
+    }
+    *last = Some(message.to_owned());
+    true
+}
+
+#[cfg(test)]
+mod failure_report_tests {
+    use super::record_new_failure;
+
+    #[test]
+    fn a_repeated_failure_is_reported_once() {
+        let mut last = None;
+        assert!(record_new_failure(&mut last, "feature file: syntax error"));
+        assert!(!record_new_failure(&mut last, "feature file: syntax error"));
+        assert!(record_new_failure(&mut last, "feature file: unknown glyph"));
+        assert!(record_new_failure(&mut last, "feature file: syntax error"));
+    }
 }
 
 #[cfg(test)]
