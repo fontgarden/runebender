@@ -2384,10 +2384,15 @@ impl Project {
         &self.variable
     }
 
-    /// Save every source from the variable project, then its Designspace metadata.
+    /// Save every edited source from the variable project, then its Designspace metadata.
     pub fn save(&mut self) -> Result<(), String> {
         let mut exports = Vec::with_capacity(self.sources.len());
         for index in 0..self.sources.len() {
+            // A source without edits since it was read or saved is already on disk.
+            let source = &self.sources[index];
+            if !source.dirty && source.source_path.exists() {
+                continue;
+            }
             let font = super::persistence::ufo_codec::encode_source(
                 &self.variable,
                 self.source_id(index).expect("source identity"),
@@ -2412,6 +2417,14 @@ impl Project {
         } else {
             None
         };
+        if self.sources.is_empty() {
+            return Err("a filesystem export needs at least one UFO source".into());
+        }
+        // Nothing was edited since the last save, so the files on disk are current.
+        if exports.is_empty() && designspace.is_none() {
+            self.mark_saved();
+            return Ok(());
+        }
         super::persistence::ExportPlan::new(exports, designspace)?.execute()?;
         self.mark_saved();
         if let (Some(foreign), Some(working)) = (&self.foreign_source, &self.export_source) {

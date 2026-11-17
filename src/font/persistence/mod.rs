@@ -50,7 +50,9 @@ impl PreservedFiles {
         Ok(())
     }
 
-    fn restore_glif_paths(&self, root: &Path, font: &norad::Font) -> Result<(), String> {
+    /// Returns whether any glyph file was moved.
+    fn restore_glif_paths(&self, root: &Path, font: &norad::Font) -> Result<bool, String> {
+        let mut moved = false;
         for layer in font.layers.iter() {
             let layer_path = root.join(layer.path());
             let contents_path = layer_path.join("contents.plist");
@@ -70,6 +72,10 @@ impl PreservedFiles {
                     moves.push((glyph.name().to_string(), current.clone(), desired.clone()));
                 }
             }
+            if moves.is_empty() {
+                continue;
+            }
+            moved = true;
             let mut temporary = Vec::new();
             for (name, current, desired) in moves {
                 let current_path = layer_path.join(&current);
@@ -97,10 +103,12 @@ impl PreservedFiles {
             plist::to_file_xml(&contents_path, &contents)
                 .map_err(|error| format!("{}: {error}", contents_path.display()))?;
         }
-        Ok(())
+        Ok(moved)
     }
 
-    fn restore_unchanged_glifs(&self, root: &Path, font: &norad::Font) -> Result<(), String> {
+    /// Returns whether any glyph file was rewritten with its original bytes.
+    fn restore_unchanged_glifs(&self, root: &Path, font: &norad::Font) -> Result<bool, String> {
+        let mut restored = false;
         for layer in font.layers.iter() {
             for glyph in layer.iter() {
                 let key = (layer.name().to_string(), glyph.name().to_string());
@@ -110,14 +118,19 @@ impl PreservedFiles {
                     continue;
                 };
                 let encoded = glyph.encode_xml().map_err(|error| error.to_string())?;
-                if let Some(bytes) = original.unchanged_bytes(&encoded) {
+                // The staged file already holds `encoded`; write only when the original
+                // bytes differ from it, as they do for a file another tool formatted.
+                if let Some(bytes) = original.unchanged_bytes(&encoded)
+                    && bytes != encoded.as_slice()
+                {
                     let path = root.join(layer.path()).join(file);
                     fs::write(&path, bytes)
                         .map_err(|error| format!("{}: {error}", path.display()))?;
+                    restored = true;
                 }
             }
         }
-        Ok(())
+        Ok(restored)
     }
 
     fn validate_glif_paths(&self, font: &norad::Font) -> Result<(), String> {
@@ -242,7 +255,8 @@ impl ExportPlan {
         sources: Vec<SourceExport>,
         designspace: Option<(PathBuf, norad::designspace::DesignSpaceDocument)>,
     ) -> Result<Self, String> {
-        if sources.is_empty() {
+        // A save of a family whose masters are unchanged writes only its designspace.
+        if sources.is_empty() && designspace.is_none() {
             return Err("a filesystem export needs at least one UFO source".into());
         }
         let plan = Self {
@@ -312,18 +326,51 @@ impl ExportPlan {
     }
 
     pub(crate) fn execute(self) -> Result<(), String> {
-        let mut staged = Vec::new();
-        for source in self.sources {
-            let stage = fresh_sibling(&source.destination, "stage")?;
-            if let Err(error) = stage_ufo(&source, &stage) {
-                remove_any(&stage);
-                return Err(error);
+        // Each source is staged in its own directory, so the sources are staged in parallel.
+        // A `StagedArtifact` removes its directory when dropped, which also cleans up after
+        // a failure in another source.
+        let source_count = self.sources.len();
+        let stages = self
+            .sources
+            .iter()
+            .map(|source| fresh_sibling(&source.destination, "stage"))
+            .collect::<Result<Vec<_>, _>>()?;
+        let results: Vec<(StagedArtifact, Result<(), String>)> = std::thread::scope(|scope| {
+            let workers: Vec<_> = self
+                .sources
+                .into_iter()
+                .zip(stages)
+                .map(|(source, stage)| {
+                    // A norad font is moved to its worker; it cannot be shared between threads.
+                    scope.spawn(move || {
+                        let result = stage_ufo(&source, &stage);
+                        let artifact = StagedArtifact {
+                            destination: source.destination,
+                            stage,
+                            created_parents: Vec::new(),
+                        };
+                        (artifact, result)
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .filter_map(|worker| worker.join().ok())
+                .collect()
+        });
+        let mut staged = Vec::with_capacity(results.len());
+        let mut failure = None;
+        for (artifact, result) in results {
+            staged.push(artifact);
+            if let Err(error) = result {
+                failure.get_or_insert(error);
             }
-            staged.push(StagedArtifact {
-                destination: source.destination,
-                stage,
-                created_parents: Vec::new(),
-            });
+        }
+        if let Some(error) = failure {
+            return Err(error);
+        }
+        if staged.len() != source_count {
+            return Err("staging a UFO source stopped unexpectedly".into());
         }
         if let Some((destination, document)) = self.designspace {
             let stage = fresh_sibling(&destination, "stage")?;
@@ -518,14 +565,20 @@ fn stage_ufo(source: &SourceExport, stage: &Path) -> Result<(), String> {
             source.destination.display()
         ));
     }
-    source.preserved.restore_glif_paths(stage, &source.font)?;
-    source
+    let moved = source.preserved.restore_glif_paths(stage, &source.font)?;
+    let restored = source
         .preserved
         .restore_unchanged_glifs(stage, &source.font)?;
     source.preserved.write_into(stage)?;
-    let final_font = norad::Font::load(stage)
-        .map_err(|error| format!("staged {}: {error}", source.destination.display()))?;
-    source.preserved.validate_glif_paths(&final_font)?;
+    // The staged UFO was read back and compared above. Read it again only when a file
+    // changed after that check.
+    if moved || restored || !source.preserved.files.is_empty() {
+        let final_font = norad::Font::load(stage)
+            .map_err(|error| format!("staged {}: {error}", source.destination.display()))?;
+        source.preserved.validate_glif_paths(&final_font)?;
+    } else {
+        source.preserved.validate_glif_paths(&actual)?;
+    }
     Ok(())
 }
 
@@ -894,6 +947,77 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn project_save_writes_only_the_edited_master() {
+        use std::os::unix::fs::MetadataExt as _;
+        let scratch = Scratch::new("edited-master");
+        let regular = scratch.0.join("Regular.ufo");
+        let bold = scratch.0.join("Bold.ufo");
+        write_ufo(&regular, "Regular", false);
+        write_ufo(&bold, "Bold", false);
+        let designspace = scratch.0.join("Family.designspace");
+        fs::write(
+            &designspace,
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<designspace format="5.0">
+  <axes><axis name="Weight" tag="wght" minimum="400" default="400" maximum="700"/></axes>
+  <sources>
+    <source filename="Regular.ufo" familyname="Filesystem Fixture" stylename="Regular">
+      <location><dimension name="Weight" xvalue="400"/></location>
+    </source>
+    <source filename="Bold.ufo" familyname="Filesystem Fixture" stylename="Bold">
+      <location><dimension name="Weight" xvalue="700"/></location>
+    </source>
+  </sources>
+</designspace>"#,
+        )
+        .unwrap();
+
+        let mut project = Project::load(&designspace).unwrap();
+        // A save replaces a written UFO directory, so an unchanged inode means it was skipped.
+        let inode = |path: &Path| fs::metadata(path).unwrap().ino();
+        let (regular_before, bold_before) = (inode(&regular), inode(&bold));
+        let layer = project
+            .document_source(project.source_id(0).unwrap())
+            .unwrap()
+            .default_layer();
+        assert!(matches!(
+            project.edit_document_layer("A", &layer, |draft| {
+                draft.set_width(612.5)?;
+                Ok(())
+            }),
+            Ok(DocumentEditOutcome::Changed { .. })
+        ));
+        project.save().unwrap();
+
+        assert_ne!(
+            inode(&regular),
+            regular_before,
+            "the edited master is written"
+        );
+        assert_eq!(
+            inode(&bold),
+            bold_before,
+            "the unedited master is left alone"
+        );
+        let width = |path: &Path| {
+            norad::Font::load(path)
+                .unwrap()
+                .default_layer()
+                .get_glyph("A")
+                .unwrap()
+                .width
+        };
+        assert_eq!(width(&regular), 612.5);
+        assert_ne!(width(&bold), 612.5);
+
+        // A second save has nothing to write.
+        let regular_saved = inode(&regular);
+        project.save().unwrap();
+        assert_eq!(inode(&regular), regular_saved);
     }
 
     #[test]
