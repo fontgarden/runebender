@@ -11,7 +11,9 @@
 use kurbo::{Affine, BezPath, Rect, Shape as _, Vec2};
 use nufo::NeuralSample;
 
-use crate::outline::label_pieces::OVERLAP;
+/// How far the polygon of a seed region, written by an older editor, reaches past each cut
+/// into its neighbors, in font units.
+const OVERLAP: f64 = 24.0;
 
 /// Space left between words, in font units.
 pub const WORD_GAP: f64 = 160.0;

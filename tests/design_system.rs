@@ -132,7 +132,7 @@ const BUDGET: &[(&str, &str, usize)] = &[
     ("view/canvas/editor/ai_shapes.rs", "literal opacity", 1),
     ("view/canvas/editor/ai_shapes.rs", "literal stroke", 1),
     ("view/canvas/editor/labels.rs", "literal opacity", 7),
-    ("view/canvas/editor/labels.rs", "literal stroke", 2),
+    ("view/canvas/editor/labels.rs", "literal stroke", 1),
     ("view/canvas/editor/metrics_card.rs", "literal opacity", 1),
     ("view/canvas/editor/paint.rs", "literal opacity", 16),
     ("view/canvas/editor/paint.rs", "literal stroke", 5),

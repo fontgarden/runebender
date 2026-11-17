@@ -56,30 +56,6 @@ impl EditorWidget {
                 }
             });
         }
-        // Cuts: thin lines; the selected or hovered one carries its end handles.
-        let picked_cut = match (&self.session.label.selected, &self.label_hover) {
-            (Some(LabelSelection::Cut(cut)), _) => Some(*cut),
-            (_, Some(LabelHit::Cut { cut } | LabelHit::CutEnd { cut, .. })) => Some(*cut),
-            _ => None,
-        };
-        for (index, cut) in self.session.label_cuts().into_iter().enumerate() {
-            let picked = picked_cut == Some(index);
-            let line = Line::new(affine * cut.p0, affine * cut.p1);
-            painter
-                .stroke(
-                    line,
-                    &Stroke::new(if picked { 1.5 } else { 1.0 }),
-                    pal.text.with_alpha(if picked { 0.9 } else { 0.5 }),
-                )
-                .draw();
-            if picked {
-                for end in [line.p0, line.p1] {
-                    let handle = Circle::new(end, 3.5);
-                    painter.fill(handle, pal.canvas).draw();
-                    painter.stroke(handle, &Stroke::new(1.5), pal.text).draw();
-                }
-            }
-        }
         // Every lasso polygon: a translucent fill in its letter's color and the same dark
         // outline as the drawing. The active letter's and the selected one carry colored
         // corner handles.
@@ -241,8 +217,6 @@ impl EditorWidget {
                 "Drag: move the corner with any that meet it. Option-drag: only this one".into()
             }
             Some(LabelHit::Edge { .. }) => "Click: add a corner".into(),
-            Some(LabelHit::CutEnd { .. }) => "Drag: move the end of the cut".into(),
-            Some(LabelHit::Cut { .. }) => "Drag: move the cut. Delete: remove it".into(),
             Some(LabelHit::Lasso { .. }) => "Click: pick this shape. Drag: move it".into(),
             _ => format!("Drag a loop around the ink of {letter}. Enter: next letter"),
         })

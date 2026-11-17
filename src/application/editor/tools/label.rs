@@ -3,13 +3,17 @@
 
 //! The label tool: mark the samples on a neural canvas and say which ink is which letter.
 //!
-//! A canvas holds samples, each one connected piece of writing. With no sample selected, a
-//! loop drawn around some ink makes a new sample. With a sample selected, its text gives the
-//! letters; one letter is active at a time. Labeling is painting: a click gives the piece of
-//! ink under the pointer to the active letter, a drag across a stroke cuts it into two
-//! pieces, and a loop lassos a polygon for the odd cases. Pieces are the sample's contours
-//! cut by its cuts; a seed names one. Corners, cuts and regions can be selected, moved and
-//! deleted, so a mistake is a small fix. Escape leaves a sample.
+//! A canvas holds samples, each one connected piece of writing.
+//! With no sample selected, a loop drawn around some ink makes a new sample.
+//! With a sample selected, its text gives the letters, and one letter is active at a time.
+//! A loop drawn around ink is a lasso: a polygon with few corners that gives the ink inside it
+//! to the active letter.
+//! Corners and polygons can be selected, moved and deleted, so a mistake is a small fix.
+//! Escape leaves a sample.
+//!
+//! Older files can also hold cuts and seed regions.
+//! The editor keeps them in the file unchanged, but does not show or edit them: a region
+//! shows only its polygon.
 //!
 //! `runebender::font::model::neural_item` owns the data. This module owns the gestures.
 
@@ -17,10 +21,7 @@ use crate::application::editor::session::Session;
 use crate::application::workspace::Workspace;
 use kurbo::{BezPath, Line, Point, Shape as _};
 use runebender::font::model::neural_item::{NeuralItem, NeuralRegion, NeuralSample};
-pub(crate) use runebender::outline::label_pieces::DragKind;
-use runebender::outline::label_pieces::{
-    OVERLAP, drag_kind, nearest_on_segment, piece_at, pieces, seed_polygon, simplify_loop,
-};
+use runebender::outline::label_pieces::{nearest_on_segment, simplify_loop};
 use runebender::outline::path::Path;
 use std::sync::Arc;
 
@@ -30,8 +31,6 @@ pub(crate) enum LabelSelection {
     /// Corners of lasso polygons, each a region and a corner. Corners that sit on one spot
     /// are picked together, and Shift adds to the set.
     Corners(Vec<(usize, usize)>),
-    /// A cut, by its position in the sample's cuts.
-    Cut(usize),
     /// A whole region.
     Region(usize),
 }
@@ -47,10 +46,6 @@ pub(crate) enum LabelMoving {
     },
     /// Several corners, moved by this much.
     Corners { by: kurbo::Vec2 },
-    /// One end of a cut, now at this point.
-    CutEnd { cut: usize, end: usize, to: Point },
-    /// A whole cut, moved by this much.
-    Cut { cut: usize, by: kurbo::Vec2 },
     /// A whole lasso polygon, moved by this much.
     Region { region: usize, by: kurbo::Vec2 },
 }
@@ -62,18 +57,11 @@ pub(crate) enum LabelHit {
         region: usize,
         corner: usize,
     },
-    CutEnd {
-        cut: usize,
-        end: usize,
-    },
     /// A lasso polygon's edge: a click adds a corner after `after`, at `at`.
     Edge {
         region: usize,
         after: usize,
         at: Point,
-    },
-    Cut {
-        cut: usize,
     },
     /// Inside a lasso polygon: a click selects it and makes its letter active.
     Lasso {
@@ -99,7 +87,7 @@ pub(crate) struct LabelState {
     pub hover_letter: Option<usize>,
 }
 
-/// Corners and cut ends sit on this grid, in font units, so neighbors meet exactly.
+/// Corners sit on this grid, in font units, so neighbors meet exactly.
 pub(crate) const LABEL_GRID: f64 = 8.0;
 
 /// A move rounded to whole grid steps.
@@ -129,7 +117,7 @@ pub(crate) struct LabelArea {
     pub sample: usize,
     /// The letter's position in its sample's letters.
     pub letter: usize,
-    /// The letter's polygons and whole contours, in font units.
+    /// The letter's polygons, in font units.
     pub area: BezPath,
 }
 
@@ -155,50 +143,7 @@ impl Session {
         if let (Some(position), Some(moving)) = (self.label.sample, self.label.moving)
             && let Some(sample) = item.samples.get_mut(position)
         {
-            match moving {
-                LabelMoving::Corner { region, corner, to } => {
-                    if let Some(at) = sample
-                        .regions
-                        .get_mut(region)
-                        .and_then(|region| region.polygon.get_mut(corner))
-                    {
-                        *at = [to.x, to.y];
-                    }
-                }
-                LabelMoving::CutEnd { cut, end, to } => {
-                    if let Some(cut) = sample.cuts.get_mut(cut) {
-                        cut[end.min(1)] = [to.x, to.y];
-                    }
-                }
-                LabelMoving::Cut { cut, by } => {
-                    if let Some(cut) = sample.cuts.get_mut(cut) {
-                        for end in cut {
-                            end[0] += by.x;
-                            end[1] += by.y;
-                        }
-                    }
-                }
-                LabelMoving::Region { region, by } => {
-                    if let Some(region) = sample.regions.get_mut(region) {
-                        for corner in &mut region.polygon {
-                            corner[0] += by.x;
-                            corner[1] += by.y;
-                        }
-                    }
-                }
-                LabelMoving::Corners { by } => {
-                    for (region, corner) in self.selected_corners() {
-                        if let Some(at) = sample
-                            .regions
-                            .get_mut(region)
-                            .and_then(|region| region.polygon.get_mut(corner))
-                        {
-                            at[0] += by.x;
-                            at[1] += by.y;
-                        }
-                    }
-                }
-            }
+            move_in_sample(sample, moving, &self.selected_corners(), false);
         }
         item
     }
@@ -226,9 +171,6 @@ impl Session {
         };
         let mut out = Vec::new();
         for (position, region) in sample.regions.iter().enumerate() {
-            if region.seed.is_some() {
-                continue;
-            }
             for (corner, p) in region.polygon.iter().enumerate() {
                 if Point::new(p[0], p[1]).distance(at) <= LABEL_GRID / 2.0 {
                     out.push((position, corner));
@@ -265,9 +207,6 @@ impl Session {
         };
         let mut out = Vec::new();
         for (position, region) in sample.regions.iter().enumerate() {
-            if region.seed.is_some() {
-                continue;
-            }
             for (corner, p) in region.polygon.iter().enumerate() {
                 if rect.contains(Point::new(p[0], p[1])) {
                     out.push((position, corner));
@@ -277,7 +216,7 @@ impl Session {
         out
     }
 
-    /// Snap every lasso corner and cut end of the selected sample to the grid, as one edit.
+    /// Snap every lasso corner of the selected sample to the grid, as one edit.
     /// Older files were drawn off the grid.
     pub(crate) fn snap_sample_to_grid(&mut self) -> bool {
         let Some(position) = self.label.sample else {
@@ -295,17 +234,12 @@ impl Session {
                 changed = true;
             }
         };
-        for region in &mut sample.regions {
-            if region.seed.is_none() {
-                for corner in &mut region.polygon {
-                    snap(corner);
-                }
-            }
-        }
-        for cut in &mut sample.cuts {
-            for end in cut {
-                snap(end);
-            }
+        for corner in sample
+            .regions
+            .iter_mut()
+            .flat_map(|region| &mut region.polygon)
+        {
+            snap(corner);
         }
         changed && self.store_label(item)
     }
@@ -444,30 +378,13 @@ impl Session {
         self.store_label(item)
     }
 
-    /// Each contour of the open layer as a path, for cutting.
-    fn label_paths(&self) -> Vec<Path> {
+    /// Each contour of the open layer as its own path.
+    pub(crate) fn label_contours(&self) -> Vec<BezPath> {
         self.current_layer()
             .into_iter()
             .flat_map(|layer| layer.contours())
-            .map(Path::from_document_contour)
+            .map(|contour| Path::from_document_contour(contour).to_bezpath())
             .collect()
-    }
-
-    /// Each contour of the open layer as its own path.
-    pub(crate) fn label_contours(&self) -> Vec<BezPath> {
-        self.label_paths().iter().map(Path::to_bezpath).collect()
-    }
-
-    /// The selected sample's cuts as lines, as shown.
-    pub(crate) fn label_cuts(&self) -> Vec<Line> {
-        let Some(position) = self.label.sample else {
-            return Vec::new();
-        };
-        let item = self.shown_neural_item();
-        item.samples
-            .get(position)
-            .map(|sample| sample.cuts.iter().map(|c| cut_line(*c)).collect())
-            .unwrap_or_default()
     }
 
     /// What is under `at` within `reach` font units, in the order a press takes it.
@@ -475,8 +392,6 @@ impl Session {
         let Some((_, sample)) = self.selected_sample() else {
             return LabelHit::Nothing;
         };
-        // Every lasso polygon can be edited; a press on it makes its letter active.
-        let editable = |_position: usize, region: &NeuralRegion| region.seed.is_none();
         // The nearest of one kind within reach, each kind tried in turn.
         struct Nearest(Option<(f64, LabelHit)>);
         impl Nearest {
@@ -492,9 +407,6 @@ impl Session {
         };
         let active = self.active_letter().map(|(index, _)| index);
         for (position, region) in sample.regions.iter().enumerate() {
-            if !editable(position, region) {
-                continue;
-            }
             // The active letter's corner is on top where corners meet: a hair nearer.
             let on_top = active.is_some_and(|index| region.owners.contains(&index));
             for (corner, p) in region.polygon.iter().enumerate() {
@@ -513,20 +425,8 @@ impl Session {
         if let Some((_, hit)) = best.0.take() {
             return hit;
         }
-        for (cut, line) in sample.cuts.iter().enumerate() {
-            for (end, p) in line.iter().enumerate() {
-                consider(
-                    &mut best,
-                    Point::new(p[0], p[1]).distance(at),
-                    LabelHit::CutEnd { cut, end },
-                );
-            }
-        }
-        if let Some((_, hit)) = best.0.take() {
-            return hit;
-        }
         for (position, region) in sample.regions.iter().enumerate() {
-            if !editable(position, region) || region.polygon.len() < 3 {
+            if region.polygon.len() < 3 {
                 continue;
             }
             let corners = &region.polygon;
@@ -548,19 +448,12 @@ impl Session {
         if let Some((_, hit)) = best.0.take() {
             return hit;
         }
-        for (cut, line) in sample.cuts.iter().enumerate() {
-            let (_, distance) = nearest_on_segment(at, cut_line(*line));
-            consider(&mut best, distance, LabelHit::Cut { cut });
-        }
-        if let Some((_, hit)) = best.0.take() {
-            return hit;
-        }
         // Inside a lasso polygon: that region, the smallest when they nest.
         let lasso = sample
             .regions
             .iter()
             .enumerate()
-            .filter(|(_, region)| region.seed.is_none() && region.polygon_path().contains(at))
+            .filter(|(_, region)| region.polygon_path().contains(at))
             .min_by(|a, b| {
                 let area = |r: &NeuralRegion| r.polygon_path().area().abs();
                 area(a.1).total_cmp(&area(b.1))
@@ -603,7 +496,7 @@ impl Session {
             }
         }
         if polygon.len() < 3 {
-            self.label.error = Some("Drag a loop to lasso, or across a stroke to cut".into());
+            self.label.error = Some("Drag a larger loop around the ink".into());
             return false;
         }
         if self.label.sample.is_none() {
@@ -677,7 +570,7 @@ impl Session {
             .regions
             .iter()
             .enumerate()
-            .filter(|(position, region)| Some(*position) != skip && region.seed.is_none())
+            .filter(|(position, _)| Some(*position) != skip)
             .flat_map(|(_, region)| region.polygon.iter())
             .map(|p| Point::new(p[0], p[1]))
             .filter(|corner| corner.distance(at) <= reach)
@@ -701,7 +594,6 @@ impl Session {
         }
     }
 
-    /// Store whatever was dragged where it was dropped.
     /// Move the picked shape or the picked corners by `by`, as an arrow key does.
     pub(crate) fn nudge_label_selection(&mut self, by: kurbo::Vec2) -> bool {
         self.label.moving = match &self.label.selected {
@@ -715,6 +607,8 @@ impl Session {
         self.finish_label_move(true)
     }
 
+    /// Store whatever was dragged where it was dropped, on the grid; with `keep` false, drop
+    /// the move.
     pub(crate) fn finish_label_move(&mut self, keep: bool) -> bool {
         let Some(moving) = self.label.moving.take() else {
             return false;
@@ -726,82 +620,11 @@ impl Session {
         let Some(sample) = item.samples.get_mut(position) else {
             return false;
         };
-        let round = |p: Point| {
-            let p = on_grid(p);
-            [p.x, p.y]
-        };
-        match moving {
-            LabelMoving::Corner { region, corner, to } => {
-                let Some(at) = sample
-                    .regions
-                    .get_mut(region)
-                    .and_then(|region| region.polygon.get_mut(corner))
-                else {
-                    return false;
-                };
-                if *at == round(to) {
-                    return false;
-                }
-                *at = round(to);
-                self.store_label(item)
-            }
-            LabelMoving::CutEnd { cut, end, to } => {
-                let Some(line) = sample.cuts.get_mut(cut) else {
-                    return false;
-                };
-                if line[end.min(1)] == round(to) {
-                    return false;
-                }
-                line[end.min(1)] = round(to);
-                self.derive_and_store(item)
-            }
-            LabelMoving::Cut { cut, by } => {
-                let Some(line) = sample.cuts.get_mut(cut) else {
-                    return false;
-                };
-                if by.hypot() < 0.5 {
-                    return false;
-                }
-                for end in line.iter_mut() {
-                    let moved = on_grid(Point::new(end[0] + by.x, end[1] + by.y));
-                    *end = [moved.x, moved.y];
-                }
-                self.derive_and_store(item)
-            }
-            LabelMoving::Corners { by } => {
-                if by.hypot() < 0.5 {
-                    return false;
-                }
-                for (region, corner) in self.selected_corners() {
-                    if let Some(at) = sample
-                        .regions
-                        .get_mut(region)
-                        .and_then(|region| region.polygon.get_mut(corner))
-                    {
-                        let moved = on_grid(Point::new(at[0] + by.x, at[1] + by.y));
-                        *at = [moved.x, moved.y];
-                    }
-                }
-                self.store_label(item)
-            }
-            LabelMoving::Region { region, by } => {
-                let Some(polygon) = sample.regions.get_mut(region).map(|r| &mut r.polygon) else {
-                    return false;
-                };
-                if by.hypot() < 0.5 {
-                    return false;
-                }
-                for corner in polygon.iter_mut() {
-                    let moved = on_grid(Point::new(corner[0] + by.x, corner[1] + by.y));
-                    *corner = [moved.x, moved.y];
-                }
-                self.store_label(item)
-            }
-        }
+        move_in_sample(sample, moving, &self.selected_corners(), true) && self.store_label(item)
     }
 
-    /// Delete what is selected: a corner (a polygon keeps three), a cut (its pieces merge), or
-    /// a region. With nothing selected, the active letter's newest region.
+    /// Delete what is selected: a corner (a polygon keeps three) or a region. With nothing
+    /// selected, the active letter's newest region.
     pub(crate) fn delete_label_selection(&mut self) -> bool {
         let Some(position) = self.label.sample else {
             return false;
@@ -837,13 +660,6 @@ impl Session {
                 }
                 self.store_label(item)
             }
-            Some(LabelSelection::Cut(cut)) => {
-                if cut >= sample.cuts.len() {
-                    return false;
-                }
-                sample.cuts.remove(cut);
-                self.derive_and_store(item)
-            }
             Some(LabelSelection::Region(region)) => {
                 if region >= sample.regions.len() {
                     return false;
@@ -853,7 +669,7 @@ impl Session {
             }
             None => {
                 // Nothing picked: the active letter's newest region, or an empty sample itself.
-                if sample.regions.is_empty() && sample.cuts.is_empty() {
+                if sample.regions.is_empty() {
                     return self.delete_sample();
                 }
                 let Some((index, _)) = self.active_letter() else {
@@ -866,28 +682,6 @@ impl Session {
                 self.store_label(item)
             }
         }
-    }
-
-    /// Write every seed region's training polygon from the pieces, then store.
-    fn derive_and_store(&mut self, mut item: NeuralItem) -> bool {
-        if let Some(sample) = self.label.sample.and_then(|p| item.samples.get_mut(p)) {
-            let paths = self.label_paths();
-            let cuts: Vec<Line> = sample.cuts.iter().map(|c| cut_line(*c)).collect();
-            let mut lost = 0;
-            for region in &mut sample.regions {
-                let Some(seed) = region.seed else {
-                    continue;
-                };
-                match seed_polygon(&paths, &cuts, Point::new(seed[0], seed[1]), OVERLAP) {
-                    Some(polygon) if polygon.len() >= 3 => region.polygon = polygon,
-                    _ => lost += 1,
-                }
-            }
-            if lost > 0 {
-                self.label.error = Some(format!("{lost} seeds sit on no ink; move or delete them"));
-            }
-        }
-        self.store_label(item)
     }
 
     fn store_label(&mut self, item: NeuralItem) -> bool {
@@ -917,7 +711,7 @@ impl Session {
             .regions
             .iter()
             .enumerate()
-            .filter(|(_, region)| region.seed.is_none() && !region.polygon.is_empty())
+            .filter(|(_, region)| !region.polygon.is_empty())
             .filter_map(|(position, region)| {
                 let owner = region.owners.first()?;
                 Some(LabelPolygon {
@@ -933,40 +727,17 @@ impl Session {
             .collect()
     }
 
-    /// The area every letter of every sample owns, in font units: its polygons and its whole
-    /// contours. Painting clips the outline to each area.
+    /// The area every letter of every sample owns, in font units: its polygons. A region
+    /// without a polygon, such as a seed region of an older file, owns nothing here. Painting
+    /// clips the outline to each area.
     pub(crate) fn label_areas(&self) -> Vec<LabelArea> {
         let item = self.shown_neural_item();
-        let contours = self.label_contours();
         let mut areas = Vec::new();
         for (sample_position, sample) in item.samples.iter().enumerate() {
-            // While something moves, the shown item's seed polygons are stale: pieces are
-            // cut again from the shown cuts.
-            let moving_here =
-                self.label.moving.is_some() && self.label.sample == Some(sample_position);
-            let pieces = moving_here.then(|| {
-                let cuts: Vec<Line> = sample.cuts.iter().map(|c| cut_line(*c)).collect();
-                pieces(&self.label_paths(), &cuts)
-            });
             for (letter, (index, _)) in sample.letters().into_iter().enumerate() {
                 let mut area = BezPath::new();
                 for position in sample.regions_of(index) {
-                    let region = &sample.regions[position];
-                    if let (Some(pieces), Some(seed)) = (&pieces, region.seed) {
-                        if let Some(at) = piece_at(pieces, Point::new(seed[0], seed[1])) {
-                            area.extend(pieces[at].elements().iter().copied());
-                        }
-                    } else if region.polygon.is_empty()
-                        && let Some(at) = region.seed
-                    {
-                        let at = Point::new(at[0], at[1]);
-                        // A little larger than the contour, so the clip keeps its whole edge.
-                        for contour in contours.iter().filter(|contour| contour.contains(at)) {
-                            area.extend(contour.bounding_box().inflate(2.0, 2.0).to_path(0.1));
-                        }
-                    } else {
-                        area.extend(region.polygon_path());
-                    }
+                    area.extend(sample.regions[position].polygon_path());
                 }
                 if !area.elements().is_empty() {
                     areas.push(LabelArea {
@@ -981,13 +752,62 @@ impl Session {
     }
 }
 
-fn cut_line(cut: [[f64; 2]; 2]) -> Line {
-    Line::new((cut[0][0], cut[0][1]), (cut[1][0], cut[1][1]))
+/// The corner `corner` of the polygon of region `region`.
+fn corner_mut(sample: &mut NeuralSample, region: usize, corner: usize) -> Option<&mut [f64; 2]> {
+    sample
+        .regions
+        .get_mut(region)
+        .and_then(|region| region.polygon.get_mut(corner))
 }
 
-/// What a freehand drag over this layer's ink is, with `near` in font units.
-pub(crate) fn drag_is(points: &[Point], contours: &[BezPath], near: f64) -> DragKind {
-    drag_kind(points, contours, near)
+/// Apply `moving` to `sample`; `corners` are the picked corners that a corners move takes.
+/// With `snap`, each moved point lands on the grid and a move shorter than half a unit, or one
+/// that changes nothing, is no move. Returns whether the sample changed.
+fn move_in_sample(
+    sample: &mut NeuralSample,
+    moving: LabelMoving,
+    corners: &[(usize, usize)],
+    snap: bool,
+) -> bool {
+    let place = |p: Point| {
+        let p = if snap { on_grid(p) } else { p };
+        [p.x, p.y]
+    };
+    let shift = |at: &mut [f64; 2], by: kurbo::Vec2| *at = place(Point::new(at[0], at[1]) + by);
+    match moving {
+        LabelMoving::Corner { region, corner, to } => {
+            let Some(at) = corner_mut(sample, region, corner) else {
+                return false;
+            };
+            let to = place(to);
+            if *at == to {
+                return false;
+            }
+            *at = to;
+        }
+        LabelMoving::Corners { by } => {
+            if snap && by.hypot() < 0.5 {
+                return false;
+            }
+            for &(region, corner) in corners {
+                if let Some(at) = corner_mut(sample, region, corner) {
+                    shift(at, by);
+                }
+            }
+        }
+        LabelMoving::Region { region, by } => {
+            let Some(polygon) = sample.regions.get_mut(region).map(|r| &mut r.polygon) else {
+                return false;
+            };
+            if snap && by.hypot() < 0.5 {
+                return false;
+            }
+            for at in polygon.iter_mut() {
+                shift(at, by);
+            }
+        }
+    }
+    true
 }
 
 impl Workspace {
@@ -1257,6 +1077,71 @@ mod tests {
                 .len(),
             4
         );
+        std::fs::remove_dir_all(&path).ok();
+    }
+
+    #[test]
+    fn an_older_seed_region_and_its_cut_open_save_unchanged_and_show_nothing() {
+        let path =
+            std::env::temp_dir().join(format!("xilem-label-seed-{}.ufo", std::process::id()));
+        let item = NeuralItem {
+            version: 3,
+            samples: vec![NeuralSample {
+                boundary: vec![[50.0, -50.0], [650.0, -50.0], [650.0, 300.0], [50.0, 300.0]],
+                text: "بس".into(),
+                cuts: vec![[[350.0, -20.0], [350.0, 120.0]]],
+                regions: vec![NeuralRegion {
+                    owners: vec![0],
+                    polygon: Vec::new(),
+                    seed: Some([200.0, 50.0]),
+                }],
+            }],
+        };
+        let mut font = norad::Font::new();
+        let mut glyph = norad::Glyph::new("item");
+        glyph.width = 700.0;
+        glyph.contours.push(rect_contour(100.0, 0.0, 600.0, 100.0));
+        glyph.lib.insert(
+            runebender::font::model::neural_item::NEURAL_ITEM_KEY.into(),
+            plist::to_value(&item).unwrap(),
+        );
+        font.default_layer_mut().insert_glyph(glyph);
+        font.save(&path).unwrap();
+
+        let mut app = Workspace::open(&path).unwrap();
+        app.open_glyph(app.font.index_of("item").unwrap());
+        app.select_tool(Tool::Label);
+        assert_eq!(app.session.neural_item(), item);
+        Arc::make_mut(&mut app.session).select_sample(Some(0));
+        assert_eq!(
+            app.session.neural_item(),
+            item,
+            "opening a sample edits nothing"
+        );
+        assert!(app.session.label_areas().is_empty());
+        assert!(app.session.label_polygons().is_empty());
+        assert_eq!(
+            app.session.label_hit(Point::new(200.0, 50.0), 8.0),
+            LabelHit::Nothing
+        );
+
+        // An edit elsewhere in the glyph saves the item as it was read.
+        let layer = app
+            .font
+            .project
+            .document_source(app.font.project.source_id(0).unwrap())
+            .unwrap()
+            .default_layer();
+        app.font
+            .project
+            .edit_document_layer("item", &layer, |draft| {
+                draft.set_width(701.0)?;
+                Ok(())
+            })
+            .unwrap();
+        app.font.project.save().unwrap();
+        let source = nufo::Source::load(&path).unwrap();
+        assert_eq!(source.canvases[0].item, item);
         std::fs::remove_dir_all(&path).ok();
     }
 

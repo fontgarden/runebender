@@ -2320,12 +2320,6 @@ pub(crate) enum LabelPress {
     NewCorner { region: usize },
     /// The selected corners follow the pointer from `start`.
     Corners { start: Point },
-    /// A cut, or the end `end` of it, follows the pointer from `start`.
-    Cut {
-        cut: usize,
-        end: Option<usize>,
-        start: Point,
-    },
     /// A whole polygon follows the pointer from `start`.
     Region { region: usize, start: Point },
     /// A box that selects corners starts at `start`.
@@ -2523,31 +2517,6 @@ impl Session {
                 });
                 LabelPress::NewCorner { region }
             }
-            LabelHit::CutEnd { cut, end } => {
-                self.label.selected = Some(LabelSelection::Cut(cut));
-                self.label.moving = Some(LabelMoving::CutEnd {
-                    cut,
-                    end,
-                    to: design,
-                });
-                LabelPress::Cut {
-                    cut,
-                    end: Some(end),
-                    start: design,
-                }
-            }
-            LabelHit::Cut { cut } => {
-                self.label.selected = Some(LabelSelection::Cut(cut));
-                self.label.moving = Some(LabelMoving::Cut {
-                    cut,
-                    by: kurbo::Vec2::ZERO,
-                });
-                LabelPress::Cut {
-                    cut,
-                    end: None,
-                    start: design,
-                }
-            }
             LabelHit::Lasso { region } => {
                 // A press inside a lasso picks it up: its letter becomes
                 // active and its corners show. A drag moves the whole shape.
@@ -2624,23 +2593,6 @@ impl Session {
         });
     }
 
-    /// Move the label cut `cut`, or its end `end`, with the pointer at `to`.
-    pub(crate) fn drag_label_cut(
-        &mut self,
-        cut: usize,
-        end: Option<usize>,
-        start: Point,
-        to: Point,
-    ) {
-        self.label.moving = Some(match end {
-            Some(end) => label::LabelMoving::CutEnd { cut, end, to },
-            None => label::LabelMoving::Cut {
-                cut,
-                by: to - start,
-            },
-        });
-    }
-
     /// Select the label corners inside `rect`, or deselect when it holds none.
     pub(crate) fn select_label_corners_in(&mut self, rect: Rect) {
         let picked = self.corners_in(rect);
@@ -2662,7 +2614,6 @@ impl Session {
         moved: bool,
         near: f64,
     ) -> bool {
-        let contours = self.label_contours();
         if !moved {
             // A click on nothing lets go of the picked shape.
             self.label.selected = None;
@@ -2670,7 +2621,7 @@ impl Session {
         }
         // Labels are polygons: a loop makes one, any other drag
         // does nothing.
-        if label::drag_is(design, &contours, near) == label::DragKind::Lasso {
+        if runebender::outline::label_pieces::is_loop(design, near) {
             self.add_label_lasso(design)
         } else {
             self.label.error = Some("Drag a loop: close it near where it began".into());

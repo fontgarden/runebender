@@ -1,14 +1,14 @@
 // Copyright 2026 the Runebender Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! The label tool: polygons, corners and cuts that label the ink of a neural item.
+//! The label tool: lasso polygons and their corners, which label the ink of a neural item.
 
 use super::super::*;
 use masonry::core::KeyboardEvent;
 use masonry::ui_events::pointer::PointerState;
 
 /// A drag of the label tool.
-/// The session holds where a moved corner, cut or polygon is shown.
+/// The session holds where a moved corner or polygon is shown.
 pub(in super::super) enum LabelDrag {
     /// A press in screen space.
     /// A loop becomes a polygon; a click lets go of the picked shape.
@@ -26,12 +26,6 @@ pub(in super::super) enum LabelDrag {
     Corners { start: Point },
     /// A whole lasso polygon follows the pointer.
     Region { region: usize, start: Point },
-    /// A cut, or one end of it, follows the pointer.
-    Cut {
-        cut: usize,
-        end: Option<usize>,
-        start: Point,
-    },
 }
 
 /// Apply a press of the label tool and start the drag it names.
@@ -65,11 +59,6 @@ pub(in super::super) fn press(
         }
         LabelPress::Corners { start } => {
             editor.drag = Drag::Label(LabelDrag::Corners { start });
-            ctx.capture_pointer();
-            editor.emit(ctx, false);
-        }
-        LabelPress::Cut { cut, end, start } => {
-            editor.drag = Drag::Label(LabelDrag::Cut { cut, end, start });
             ctx.capture_pointer();
             editor.emit(ctx, false);
         }
@@ -110,7 +99,7 @@ pub(in super::super) fn hover(
     }
 }
 
-/// Move the dragged corner, cut or polygon, or extend the freehand path.
+/// Move the dragged corner or polygon, or extend the freehand path.
 pub(in super::super) fn drag(
     editor: &mut EditorWidget,
     ctx: &mut EventCtx<'_>,
@@ -141,12 +130,6 @@ pub(in super::super) fn drag(
                 .drag_label_region(*region, *start, glyph_design);
             ctx.request_render();
         }
-        Drag::Label(LabelDrag::Cut { cut, end, start }) => {
-            editor
-                .session
-                .drag_label_cut(*cut, *end, *start, glyph_design);
-            ctx.request_render();
-        }
         Drag::Label(LabelDrag::Freehand { points })
             if points.last().is_none_or(|last| last.distance(at) >= 2.0) =>
         {
@@ -174,7 +157,6 @@ pub(in super::super) fn release(
         }
         Drag::Label(LabelDrag::Corner { .. })
         | Drag::Label(LabelDrag::Corners { .. })
-        | Drag::Label(LabelDrag::Cut { .. })
         | Drag::Label(LabelDrag::Region { .. }) => {
             let changed = editor.session.finish_label_move(!cancelled);
             editor.drag = Drag::None;

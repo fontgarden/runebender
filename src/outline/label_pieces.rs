@@ -1,97 +1,21 @@
 // Copyright 2026 the Runebender Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! The pieces of a labeled sample's ink: its contours cut by the sample's cuts.
+//! Lasso geometry for the label tool.
 //!
-//! A seed names the piece around it. Its polygon for training is that piece's outline,
-//! grown across each cut by an overlap, so joined letters share a band of ink and neither
-//! ends in a flat face. A lasso loop becomes a polygon with few corners.
+//! A freehand drag that comes back near where it started is a loop, and a loop becomes a
+//! polygon with few corners.
 
-use kurbo::{BezPath, Line, PathEl, Point, Shape as _, Vec2};
+use kurbo::{Line, Point};
 
-use crate::outline::knife::slice_paths;
-use crate::outline::path::Path;
-
-/// How far a seed's polygon reaches past each of its cuts, in font units.
-pub const OVERLAP: f64 = 24.0;
-
-/// `contours` cut along every line in `cuts`, as closed paths.
-pub fn pieces(contours: &[Path], cuts: &[Line]) -> Vec<BezPath> {
-    let mut paths: Vec<Path> = contours.to_vec();
-    for cut in cuts {
-        paths = slice_paths(&paths, *cut);
-    }
-    paths.iter().map(Path::to_bezpath).collect()
-}
-
-/// The piece of `pieces` that holds `seed`: the smallest, so a hole's own outline wins
-/// over the ring around it.
-pub fn piece_at(pieces: &[BezPath], seed: Point) -> Option<usize> {
-    pieces
-        .iter()
-        .enumerate()
-        .filter(|(_, piece)| piece.contains(seed))
-        .min_by(|a, b| a.1.area().abs().total_cmp(&b.1.area().abs()))
-        .map(|(index, _)| index)
-}
-
-/// The training polygon of the piece around `seed`: its outline, with every cut pushed
-/// `overlap` away from the seed first, so the polygon reaches into the neighbor's ink.
-///
-/// None when no piece holds the seed.
-pub fn seed_polygon(
-    contours: &[Path],
-    cuts: &[Line],
-    seed: Point,
-    overlap: f64,
-) -> Option<Vec<[f64; 2]>> {
-    let grown: Vec<Line> = cuts
-        .iter()
-        .map(|cut| {
-            let along = cut.p1 - cut.p0;
-            if along.hypot() < 1e-9 {
-                return *cut;
-            }
-            let normal = Vec2::new(-along.y, along.x).normalize();
-            // Push the cut toward the side the seed is not on.
-            let side = (seed - cut.p0).dot(normal);
-            let shift = if side >= 0.0 { -normal } else { normal } * overlap;
-            Line::new(cut.p0 + shift, cut.p1 + shift)
-        })
-        .collect();
-    let pieces = pieces(contours, &grown);
-    let index = piece_at(&pieces, seed)?;
-    // Few enough corners for the record, within a unit of the piece's edge.
-    let corners: Vec<Point> = flatten(&pieces[index], 0.5)
-        .into_iter()
-        .map(|p| Point::new(p[0], p[1]))
-        .collect();
-    Some(
-        simplify_loop(&corners, 1.0, SEED_POLYGON_MAX_CORNERS)
-            .into_iter()
-            .map(|p| [p.x, p.y])
-            .collect(),
-    )
-}
-
-/// A seed's polygon keeps at most this many corners.
-pub const SEED_POLYGON_MAX_CORNERS: usize = 1024;
-
-/// A closed path as a polygon, flattened to within `tolerance` font units.
-pub fn flatten(path: &BezPath, tolerance: f64) -> Vec<[f64; 2]> {
-    let mut corners: Vec<[f64; 2]> = Vec::new();
-    kurbo::flatten(
-        path.elements().iter().copied(),
-        tolerance,
-        |element| match element {
-            PathEl::MoveTo(p) | PathEl::LineTo(p) => corners.push([p.x, p.y]),
-            _ => {}
-        },
-    );
-    if corners.len() > 1 && corners.first() == corners.last() {
-        corners.pop();
-    }
-    corners
+/// Whether a freehand drag is a loop: it is longer than three times `near` and ends within
+/// `near`, or a fifth of its length, of where it started. `near` is in the units of the points.
+pub fn is_loop(points: &[Point], near: f64) -> bool {
+    let (Some(first), Some(last)) = (points.first(), points.last()) else {
+        return false;
+    };
+    let length: f64 = points.windows(2).map(|w| w[0].distance(w[1])).sum();
+    length >= near && length > near * 3.0 && first.distance(*last) <= near.max(length * 0.2)
 }
 
 /// A freehand loop as a polygon with few corners (Ramer-Douglas-Peucker).
@@ -168,98 +92,12 @@ pub fn nearest_on_segment(point: Point, line: Line) -> (Point, f64) {
     (at, point.distance(at))
 }
 
-/// What a freehand drag is: a cut when it is an open stroke that crosses the edge of the
-/// ink, a lasso when it comes back near where it started, and nothing otherwise.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DragKind {
-    /// An open stroke that crosses the edge of the ink.
-    Cut,
-    /// A loop that comes back near where it started.
-    Lasso,
-    /// Too short, or a stroke that never crosses an edge.
-    Nothing,
-}
-
-/// Classify a freehand drag. `near` is how close the end must come to the start, in the same
-/// units as the points, for the drag to be a loop.
-pub fn drag_kind(points: &[Point], ink: &[BezPath], near: f64) -> DragKind {
-    let (Some(first), Some(last)) = (points.first(), points.last()) else {
-        return DragKind::Nothing;
-    };
-    let length: f64 = points.windows(2).map(|w| w[0].distance(w[1])).sum();
-    if length < near {
-        return DragKind::Nothing;
-    }
-    let closed = first.distance(*last) <= near.max(length * 0.2) && length > near * 3.0;
-    if closed {
-        return DragKind::Lasso;
-    }
-    let inside = |p: &Point| ink.iter().any(|contour| contour.contains(*p));
-    let crosses = {
-        let mut seen_in = false;
-        let mut seen_out = false;
-        for p in points {
-            if inside(p) {
-                seen_in = true;
-            } else {
-                seen_out = true;
-            }
-        }
-        seen_in && seen_out
-    };
-    if crosses {
-        DragKind::Cut
-    } else {
-        DragKind::Nothing
-    }
-}
-
-/// Whether a freehand drag is a cut: it starts and ends outside the ink and crosses it.
-pub fn is_cut_gesture(points: &[Point], ink: &[BezPath]) -> bool {
-    drag_kind(points, ink, 8.0) == DragKind::Cut
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::outline::path::Path;
-
-    fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Path {
-        let mut contour = norad::Contour::default();
-        for (x, y) in [(x0, y0), (x1, y0), (x1, y1), (x0, y1)] {
-            contour.points.push(norad::ContourPoint::new(
-                x,
-                y,
-                norad::PointType::Line,
-                false,
-                None,
-                None,
-            ));
-        }
-        Path::from_contour(&crate::outline::path::hyper_model::Contour::from_norad(
-            &contour,
-        ))
-    }
 
     #[test]
-    fn a_cut_splits_a_bar_and_a_seed_names_one_side() {
-        let bar = rect(0.0, 0.0, 300.0, 100.0);
-        let cut = Line::new(Point::new(100.0, -20.0), Point::new(100.0, 120.0));
-        let pieces = pieces(std::slice::from_ref(&bar), &[cut]);
-        assert_eq!(pieces.len(), 2);
-        let left = piece_at(&pieces, Point::new(50.0, 50.0)).unwrap();
-        let right = piece_at(&pieces, Point::new(200.0, 50.0)).unwrap();
-        assert_ne!(left, right);
-        assert!(piece_at(&pieces, Point::new(50.0, 500.0)).is_none());
-
-        // the right piece grows 20 units past the cut into the left one
-        let polygon = seed_polygon(&[bar], &[cut], Point::new(200.0, 50.0), 20.0).unwrap();
-        let min_x = polygon.iter().map(|p| p[0]).fold(f64::MAX, f64::min);
-        assert!((min_x - 80.0).abs() < 1e-6, "{min_x}");
-    }
-
-    #[test]
-    fn a_loop_simplifies_to_few_corners_and_a_drag_across_ink_is_a_cut() {
+    fn a_loop_simplifies_to_few_corners_and_an_open_drag_is_no_loop() {
         let circle: Vec<Point> = (0..200)
             .map(|i| {
                 let t = f64::from(i) / 200.0 * std::f64::consts::TAU;
@@ -272,15 +110,14 @@ mod tests {
             "{}",
             corners.len()
         );
+        assert!(is_loop(&circle, 8.0));
 
-        let ink = vec![rect(0.0, 0.0, 300.0, 100.0).to_bezpath()];
         let across = [
             Point::new(150.0, -10.0),
             Point::new(150.0, 50.0),
             Point::new(150.0, 110.0),
         ];
-        assert!(is_cut_gesture(&across, &ink));
-        let inside = [Point::new(10.0, 50.0), Point::new(150.0, 50.0)];
-        assert!(!is_cut_gesture(&inside, &ink));
+        assert!(!is_loop(&across, 8.0));
+        assert!(!is_loop(&[Point::new(0.0, 0.0), Point::new(4.0, 0.0)], 8.0));
     }
 }
