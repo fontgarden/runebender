@@ -205,7 +205,8 @@ impl Server {
                 return Err(error);
             }
         };
-        listener.set_nonblocking(true)?;
+        // The listener blocks in `accept`, so an idle editor does not wake to poll it.
+        // Dropping the server connects once to wake it; see `Drop`.
         let (sender, receiver) = mpsc::sync_channel(MAX_PENDING_REQUESTS);
         let pending = Arc::new(AtomicBool::new(false));
         let cancellations = AgentCancellationRegistry::new(&epoch, CANCELLATION_CAPACITY)
@@ -221,6 +222,9 @@ impl Server {
             while !stopping.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        if stopping.load(Ordering::Relaxed) {
+                            break;
+                        }
                         let _ = stream.set_nonblocking(false);
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
                         let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
@@ -311,8 +315,14 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        // The listener is blocked in `accept`; one connection wakes it to see the stop flag.
+        // If the socket file is already gone the listener cannot be woken, so it is left
+        // behind and ends with the process.
+        let woken = UnixStream::connect(&self.path).is_ok();
         let _ = std::fs::remove_file(&self.path);
-        if let Some(worker) = self.listener_worker.take() {
+        if let Some(worker) = self.listener_worker.take()
+            && woken
+        {
             let _ = worker.join();
         }
         let deadline = Instant::now() + Duration::from_secs(2);

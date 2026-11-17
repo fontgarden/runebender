@@ -31,6 +31,7 @@ pub(crate) struct FrameStatsWidget<W: Widget + FromDynWidget + ?Sized> {
     /// Nanoseconds between consecutive frames since the last report.
     intervals: Vec<u64>,
     reported: Instant,
+    first_frame_reported: bool,
 }
 
 impl<W: Widget + FromDynWidget + ?Sized> FrameStatsWidget<W> {
@@ -81,6 +82,12 @@ impl<W: Widget + FromDynWidget + ?Sized> Widget for FrameStatsWidget<W> {
 
     fn on_anim_frame(&mut self, ctx: &mut UpdateCtx<'_>, _: &mut PropertiesMut<'_>, interval: u64) {
         if interval > 0 {
+            // A nonzero interval means the display has already shown one frame.
+            // A script that started the editor reads this line to time its startup.
+            if !self.first_frame_reported {
+                self.first_frame_reported = true;
+                eprintln!("first frame presented");
+            }
             self.intervals.push(interval);
         }
         if self.reported.elapsed().as_secs() >= 1 {
@@ -147,6 +154,7 @@ impl<State: 'static, V: WidgetView<State>> View<State, (), ViewCtx> for FrameSta
                 child: child.new_widget.to_pod(),
                 intervals: Vec::with_capacity(256),
                 reported: Instant::now(),
+                first_frame_reported: false,
             }),
             state,
         )

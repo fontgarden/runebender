@@ -12,8 +12,7 @@
 //! posts the result back into the application.
 
 use std::path::PathBuf;
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::application::workspace::Workspace;
 
@@ -35,7 +34,10 @@ pub(crate) fn with_watch<V: xilem::WidgetView<Workspace>>(
             move |proxy: xilem::core::MessageProxy<SourcesChanged>, _: &mut Workspace| {
                 let paths = paths.clone();
                 async move {
-                    let (tx, rx) = mpsc::channel();
+                    // The watcher's thread sends into an async channel, so this task sleeps
+                    // until a file changes. It used to poll a blocking channel every 16 ms,
+                    // which woke the process 60 times a second while idle.
+                    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
                     let mut watcher = match notify::recommended_watcher(
                         move |result: Result<notify::Event, notify::Error>| {
                             if result.is_ok() {
@@ -53,36 +55,19 @@ pub(crate) fn with_watch<V: xilem::WidgetView<Workspace>>(
                             notify::RecursiveMode::Recursive,
                         );
                     }
-                    // A save is many file events. Wait for them to stop
-                    // before saying anything, or one save reloads five
-                    // times.
-                    //
-                    // Polled, never blocked. `recv()` is a synchronous
-                    // call: inside an async task it parks a runtime
-                    // worker and never gives it back, and then dropping
-                    // the runtime on quit waits for a thread that cannot
-                    // finish. The window closes and the process hangs.
-                    const TICK: Duration = Duration::from_millis(16);
+                    // A save is many file events. Wait for them to stop before saying
+                    // anything, or one save reloads five times.
                     const SETTLE: Duration = Duration::from_millis(400);
                     loop {
-                        match rx.try_recv() {
-                            Ok(()) => {}
-                            Err(mpsc::TryRecvError::Empty) => {
-                                tokio::time::sleep(TICK).await;
-                                continue;
-                            }
-                            Err(mpsc::TryRecvError::Disconnected) => return,
+                        if rx.recv().await.is_none() {
+                            return;
                         }
-                        // Something changed. Keep reading until the
-                        // events stop for `SETTLE`.
-                        let mut quiet = Instant::now();
-                        while quiet.elapsed() < SETTLE {
-                            match rx.try_recv() {
-                                Ok(()) => quiet = Instant::now(),
-                                Err(mpsc::TryRecvError::Empty) => {
-                                    tokio::time::sleep(TICK).await;
-                                }
-                                Err(mpsc::TryRecvError::Disconnected) => return,
+                        // Something changed. Keep reading until the events stop for `SETTLE`.
+                        loop {
+                            match tokio::time::timeout(SETTLE, rx.recv()).await {
+                                Ok(Some(())) => {}
+                                Ok(None) => return,
+                                Err(_) => break,
                             }
                         }
                         if proxy.message(SourcesChanged).is_err() {

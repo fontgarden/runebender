@@ -1560,33 +1560,38 @@ pub(crate) fn with_menu_events<V: xilem::WidgetView<AppState>>(
         view,
         task(
             |proxy: xilem::core::MessageProxy<Option<muda::MenuId>>, _: &mut AppState| async move {
-                let channel = muda::MenuEvent::receiver();
-                let mut next_update_poll = std::time::Instant::now();
+                // muda calls this handler for each menu click, and the task sleeps until one
+                // arrives. It used to poll muda's channel every 16 ms.
+                let (clicks, mut clicked) = tokio::sync::mpsc::unbounded_channel();
+                muda::MenuEvent::set_event_handler(Some(move |event: muda::MenuEvent| {
+                    let _ = clicks.send(event.id);
+                }));
+                // The updater is polled once a second. Without it there is nothing to poll,
+                // and a tick would only rebuild an idle interface every second.
+                let updater = cfg!(feature = "macos-updater");
+                if updater && proxy.message(None).is_err() {
+                    return;
+                }
                 loop {
-                    if std::time::Instant::now() >= next_update_poll {
-                        if proxy.message(None).is_err() {
-                            return;
-                        }
-                        next_update_poll =
-                            std::time::Instant::now() + std::time::Duration::from_secs(1);
-                    }
-                    // Polled, never blocked. `recv()` is a synchronous call:
-                    // inside an async task it parks a runtime worker and
-                    // never gives it back, and then dropping the runtime on
-                    // quit waits for a thread that cannot finish. The window
-                    // closes and the process hangs.
-                    match channel.try_recv() {
-                        Ok(event) => {
-                            if proxy.message(Some(event.id)).is_err() {
-                                return;
+                    let id = if updater {
+                        let tick = std::time::Duration::from_secs(1);
+                        match tokio::time::timeout(tick, clicked.recv()).await {
+                            Ok(id) => id,
+                            Err(_) => {
+                                if proxy.message(None).is_err() {
+                                    return;
+                                }
+                                continue;
                             }
                         }
-                        // Empty, or (never, for a static channel)
-                        // disconnected. Either way, wait a frame and look
-                        // again.
-                        Err(_) => {
-                            tokio::time::sleep(std::time::Duration::from_millis(16)).await;
-                        }
+                    } else {
+                        clicked.recv().await
+                    };
+                    let Some(id) = id else {
+                        return;
+                    };
+                    if proxy.message(Some(id)).is_err() {
+                        return;
                     }
                 }
             },
