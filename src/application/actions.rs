@@ -329,7 +329,40 @@ impl Entry {
             | A::GradeYellow
             | A::GradeGreen => editor && app.proof_view,
             A::GraphSave => app.graph.open.is_some(),
-            _ => true,
+            // Always available while a font is open.
+            // The match has no wildcard, so a new action must choose its arm.
+            A::Quit
+            | A::OpenFont
+            | A::SaveAs
+            | A::Overview
+            | A::Tool(_)
+            | A::BeginSpacePan
+            | A::EndSpacePan
+            | A::NewFont
+            | A::CycleTheme
+            | A::Theme(_)
+            | A::ToggleTranslucency
+            | A::GridDots
+            | A::GridLines
+            | A::MeasureColorize
+            | A::MeasureHandles
+            | A::MeasureSegments
+            | A::MeasureSizes
+            | A::MeasureSpans
+            | A::MeasureSideBearings
+            | A::MeasurePopcount
+            | A::MeasureAllOn
+            | A::MeasureAllOff
+            | A::GraphTab
+            | A::GraphNew
+            | A::GraphOpen
+            | A::GraphRun
+            | A::NewGlyph
+            | A::UpdateMetrics
+            | A::CheckJoining
+            | A::ComposeFromAnchors
+            | A::SortByName
+            | A::SortByUnicode => true,
         }
     }
 
