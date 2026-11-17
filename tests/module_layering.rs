@@ -83,7 +83,6 @@ const LIBRARY_BACK_EDGES: &[(&str, &str, usize)] = &[
 
 /// Permitted back edges between application modules, in the form of [`LIBRARY_BACK_EDGES`].
 const APPLICATION_BACK_EDGES: &[(&str, &str, usize)] = &[
-
     ("widgets", "workspace", 19),
     ("editor", "view", 16),
     ("platform", "editor", 16),
