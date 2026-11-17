@@ -182,7 +182,8 @@ pub(crate) fn info_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
                             row("Selected".into(), format!("{}", app.multi_selected.len()))
                         }),
                         (!pts.is_empty()).then(|| row("Points".into(), pts)),
-                        editing.then(|| row("Selected".into(), format!("{}", app.selected_points))),
+                        editing
+                            .then(|| row("Selected".into(), format!("{}", app.selected_points()))),
                     ),
                 )
             }),

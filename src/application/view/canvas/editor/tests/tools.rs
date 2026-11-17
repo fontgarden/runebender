@@ -124,10 +124,8 @@ fn label_clicks_through_the_workspace_keep_the_sample_and_make_only_polygons() {
         while let Some((event, _)) = harness.pop_action::<EditorEvent>() {
             harness.edit_root_widget(|root| {
                 dispatch_editor_event(workspace, &mut root.widget.session, event, |app, event| {
-                    match event {
-                        EditorEvent::Edited => app.finish_open_glyph_refresh(),
-                        EditorEvent::Selection(count) => app.selected_points = count,
-                        _ => {}
+                    if let EditorEvent::Edited = event {
+                        app.finish_open_glyph_refresh();
                     }
                 });
             });
@@ -349,7 +347,7 @@ fn check_metaball_drag_preview(cancel: bool) {
                             edited += 1;
                             app.finish_open_glyph_refresh();
                         }
-                        EditorEvent::Selection(count) => app.selected_points = count,
+                        EditorEvent::Selection => {}
                         _ => panic!("unexpected metaball gesture event"),
                     }
                 });

@@ -320,7 +320,6 @@ impl Workspace {
                 .collect(),
             active_tab: 0,
             session,
-            selected_points: 0,
             interpolation:
                 crate::application::editor::tools::interpolation::InterpolationState::default(),
             tool,

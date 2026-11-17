@@ -126,9 +126,7 @@ fn shapes_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
                 format!("Contour {} · {} nodes", ci + 1, point_count),
                 active,
                 move |app: &mut Workspace| {
-                    let session = Arc::make_mut(&mut app.session);
-                    let points = session.select_contour(ci);
-                    app.selected_points = points;
+                    Arc::make_mut(&mut app.session).select_contour(ci);
                     app.refresh_coord_bufs();
                 },
             )
@@ -147,7 +145,6 @@ fn shapes_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
                 app.session.component_selected(index),
                 move |app: &mut Workspace| {
                     Arc::make_mut(&mut app.session).select_component(index);
-                    app.selected_points = 0;
                     app.refresh_coord_bufs();
                 },
             )

@@ -166,7 +166,7 @@ impl Entry {
             | A::RoundCorners
             | A::Harmonize
             | A::Balance
-            | A::Optimize => editor && app.selected_points > 0,
+            | A::Optimize => editor && app.selected_points() > 0,
             A::FlipHorizontal
             | A::FlipVertical
             | A::Rotate90

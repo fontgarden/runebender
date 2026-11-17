@@ -687,7 +687,6 @@ impl Workspace {
                     if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                         tab.session = self.session.clone();
                     }
-                    self.selected_points = self.session.selection.len();
                     self.refresh_coord_bufs();
                 }
                 self.modified = true;

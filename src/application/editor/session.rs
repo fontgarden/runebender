@@ -2879,7 +2879,6 @@ impl Workspace {
             self.tool = tool;
             self.restore_text_context(text_context);
         }
-        self.selected_points = 0;
         self.shapes_context_changed();
     }
 
@@ -2907,7 +2906,6 @@ impl Workspace {
             self.selected = Some(glyph);
             self.mode = Mode::Editor(glyph);
         }
-        self.selected_points = 0;
         self.refresh_metric_bufs();
         self.refresh_coord_bufs();
         self.name_buf = name;
@@ -3023,7 +3021,6 @@ impl Workspace {
                 self.active_tab = self.tabs.len() - 1;
             }
             self.selected = Some(index);
-            self.selected_points = 0;
             self.mode = Mode::Editor(index);
             if context_changed {
                 self.shapes_context_changed();
@@ -3125,7 +3122,6 @@ impl Workspace {
             if retain_session {
                 self.session = Arc::new(session.clone());
                 self.refresh_metric_bufs();
-                self.selected_points = self.session.selection.len();
             }
             return outcome;
         }
@@ -3134,7 +3130,6 @@ impl Workspace {
         // (sidebearing/advance drags). This path is never hit by typing in
         // the field, so it does not clobber input.
         self.refresh_metric_bufs();
-        self.selected_points = self.session.selection.len();
         outcome
     }
 
@@ -3194,7 +3189,6 @@ impl Workspace {
         }
         self.refresh_metric_bufs();
         self.refresh_coord_bufs();
-        self.selected_points = self.session.selection.len();
         self.modified = true;
         true
     }
@@ -3251,7 +3245,6 @@ impl Workspace {
         self.refresh_cells_if_reshaped();
         self.refresh_metric_bufs();
         self.refresh_coord_bufs();
-        self.selected_points = self.session.selection.len();
         self.modified = true;
         self.note.clear();
     }
@@ -3525,7 +3518,6 @@ impl Workspace {
                     .unwrap_or_default();
                 self.refresh_metric_bufs();
                 self.refresh_coord_bufs();
-                self.selected_points = 0;
             } else {
                 self.settle_on_overview();
             }

@@ -89,8 +89,8 @@ pub(crate) enum EditorEvent {
     Interpolation(crate::application::editor::tools::interpolation::InterpolationEvent),
     /// The glyph changed; the app should refresh its cached preview.
     Edited,
-    /// Selection changed; carries how many points are selected.
-    Selection(usize),
+    /// The selection changed.
+    Selection,
     /// Change manual placement for the component selected by the context click.
     ToggleComponentAlignment,
     /// A composed sort was activated: open that glyph without losing the line,
@@ -299,7 +299,7 @@ impl EditorWidget {
         if edited {
             ctx.submit_action::<EditorEvent>(EditorEvent::Edited);
         }
-        ctx.submit_action::<EditorEvent>(EditorEvent::Selection(self.session.selection.len()));
+        ctx.submit_action::<EditorEvent>(EditorEvent::Selection);
         ctx.request_render();
     }
 

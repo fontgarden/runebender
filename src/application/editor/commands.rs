@@ -1237,7 +1237,6 @@ impl Workspace {
                     } else {
                         session.select_all();
                     }
-                    self.selected_points = session.selection.len();
                     self.session = Arc::new(session);
                 }
             }
@@ -1245,7 +1244,6 @@ impl Workspace {
                 if matches!(self.mode, Mode::Editor(_)) {
                     let mut session = (*self.session).clone();
                     session.selection.clear();
-                    self.selected_points = 0;
                     self.session = Arc::new(session);
                 }
             }
@@ -1255,7 +1253,6 @@ impl Workspace {
                     let all: std::collections::HashSet<_> =
                         session.points().into_iter().map(|point| point.id).collect();
                     session.selection = all.difference(&session.selection).copied().collect();
-                    self.selected_points = session.selection.len();
                     self.session = Arc::new(session);
                 }
             }
@@ -1348,7 +1345,6 @@ impl Workspace {
         {
             let mut session = (*self.session).clone();
             session.select_canonical_points(layer, &pasted.points);
-            self.selected_points = session.selection.len();
             self.session = Arc::new(session);
             if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                 tab.session = self.session.clone();
@@ -1580,7 +1576,7 @@ mod tests {
             assert_eq!(app.active_tab, 0);
             assert_ne!(app.session.glyph_name, "A");
             assert_eq!(app.selected, None);
-            assert_eq!(app.selected_points, 0);
+            assert_eq!(app.selected_points(), 0);
             assert_eq!(matches!(app.mode, Mode::Graph), was_graph);
             assert!(!matches!(app.mode, Mode::Editor(_)));
         }

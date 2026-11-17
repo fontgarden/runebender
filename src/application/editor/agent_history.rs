@@ -115,7 +115,6 @@ impl Workspace {
             {
                 tab.session = self.session.clone();
             }
-            self.selected_points = self.session.selection.len();
             self.refresh_metric_bufs();
             self.refresh_coord_bufs();
         }

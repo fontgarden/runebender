@@ -86,8 +86,7 @@ pub(crate) fn editor_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<>
         app.editor_focus.clone(),
         |app: &mut Workspace, ev| match ev {
             canvas::editor::EditorEvent::Interpolation(event) => app.interpolation_event(event),
-            canvas::editor::EditorEvent::Selection(n) => {
-                app.selected_points = n;
+            canvas::editor::EditorEvent::Selection => {
                 app.refresh_coord_bufs();
             }
             canvas::editor::EditorEvent::Edited => app.finish_open_glyph_refresh(),

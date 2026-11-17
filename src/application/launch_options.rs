@@ -830,7 +830,6 @@ impl LaunchOptions {
         if self.select_all {
             let mut session = (*workspace.session).clone();
             session.select_all();
-            workspace.selected_points = session.point_count();
             workspace.session = Arc::new(session);
             workspace.refresh_coord_bufs();
         }

@@ -545,7 +545,6 @@ impl Workspace {
             self.selected = Some(index);
             self.mode = Mode::Editor(index);
         }
-        self.selected_points = self.session.selection.len();
         self.name_buf = name;
         self.unicode_buf = self
             .session

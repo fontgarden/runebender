@@ -236,21 +236,12 @@ fn pointer_cancel_restores_pen_preview_and_preserves_canonical_redo() {
     assert!(
         events
             .iter()
-            .all(|event| matches!(event, EditorEvent::Selection(_))),
+            .all(|event| matches!(event, EditorEvent::Selection)),
         "a cancelled pen preview never emits Edited"
     );
     for event in events {
         harness.edit_root_widget(|root| {
-            dispatch_editor_event(
-                &mut workspace,
-                &mut root.widget.session,
-                event,
-                |app, event| {
-                    if let EditorEvent::Selection(count) = event {
-                        app.selected_points = count;
-                    }
-                },
-            );
+            dispatch_editor_event(&mut workspace, &mut root.widget.session, event, |_, _| {});
         });
     }
 
@@ -281,13 +272,11 @@ fn pointer_cancel_restores_pen_preview_and_preserves_canonical_redo() {
                 &mut workspace,
                 &mut root.widget.session,
                 event,
-                |app, event| match event {
-                    EditorEvent::Edited => {
+                |app, event| {
+                    if let EditorEvent::Edited = event {
                         edited = true;
                         app.finish_open_glyph_refresh();
                     }
-                    EditorEvent::Selection(count) => app.selected_points = count,
-                    _ => {}
                 },
             );
         });
@@ -328,7 +317,7 @@ fn pointer_cancel_never_applies_shape_or_knife_gestures() {
         });
         while let Some((event, _)) = harness.pop_action::<EditorEvent>() {
             assert!(
-                matches!(event, EditorEvent::Selection(1)),
+                matches!(event, EditorEvent::Selection),
                 "a cancelled {tool:?} gesture never emits Edited"
             );
         }

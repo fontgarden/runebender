@@ -243,7 +243,6 @@ pub(crate) struct Workspace {
     /// name, so a rename or a master switch does not lose it.
     pub(crate) tabs: Vec<Tab>,
     pub(crate) active_tab: usize,
-    pub(crate) selected_points: usize,
     pub(crate) interpolation: crate::application::editor::tools::interpolation::InterpolationState,
     pub(crate) tool: Tool,
     /// The persistent tool restored when a temporary Space-held pan ends.
@@ -425,6 +424,11 @@ pub(crate) struct Workspace {
 }
 
 impl Workspace {
+    /// How many points the open glyph has selected.
+    pub(crate) fn selected_points(&self) -> usize {
+        self.session.selection.len()
+    }
+
     /// Retain a small receipt after a shared UI action, without interpreting success from a click.
     pub(crate) fn record_ui_action(
         &mut self,
