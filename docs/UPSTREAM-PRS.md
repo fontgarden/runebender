@@ -92,7 +92,8 @@ Each of these workarounds is a file in `src/application/widgets/`.
 
 - Workaround: `input_typography.rs`, 450 lines, of which 290 are tests.
 - Problem as recorded in the file: the Xilem `TextInput` view sets `ContentColor` on the outer input, but Masonry reads that property from the inner `TextArea`, so a color change on rebuild has no effect. The placeholder label also does not take the font of the input.
-- Upstream state: not confirmed on current `main`. The first step is a small upstream test that shows the defect. If it no longer reproduces, delete the workaround and this item.
+- Upstream state, confirmed by reading `main` at `dc496876`: the view is now `xilem_masonry/src/view/text_input.rs`. `build` puts `ContentColor` in the property set of the inner `TextArea`. `rebuild` calls `element.insert_prop(ContentColor { color })` and `element.remove_prop::<ContentColor>()` on the outer `TextInput`, under a `TODO` comment. `TextArea` reads the property from itself (`masonry/src/widgets/text_area.rs`). So a color that changes after the first build has no effect.
+- The first step is a small upstream test that changes `text_color` on rebuild and shows the old color. The placeholder font part was not checked against `main`.
 - This is a defect report with a correction, not new API, so it is the best first pull request.
 - Runebender code removed after merge: the file.
 
@@ -100,7 +101,7 @@ Each of these workarounds is a file in `src/application/widgets/`.
 
 - Workaround: `selectable_text.rs`, 114 lines.
 - Problem: the Xilem `prose` view gives selection and wrapping but has no font family setter, so prose cannot use the bundled interface font.
-- Upstream state: not confirmed on current `main`; the view file was not found at the old path. Check where `prose` is now and whether a setter exists.
+- Upstream state, confirmed by reading `main` at `dc496876`: the view is now `xilem_masonry/src/view/prose.rs`. Its setters are `text_color`, `text_alignment`, `text_size`, `line_break_mode` and `weight`. It has no font family setter. The `text_input` view in the same folder has one (`font`), which is the pattern to follow.
 - Proposed change: a font family setter on the `prose` view, matching the one on `label`.
 - Runebender code removed after merge: the file.
 
