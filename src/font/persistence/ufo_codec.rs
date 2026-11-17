@@ -10,7 +10,7 @@
 use super::super::project::ProjectImportError;
 use super::super::{
     LayerView, babelfont as font_babelfont, font_ops, interpolation, model,
-    variable::{LayerId, SourceId, SourceMetadata, VariableData},
+    variable::{LayerId, SourceId, SourceMetadata, VariableData, VariableGlyph},
 };
 
 pub(crate) fn decode_font_metadata(
@@ -118,7 +118,10 @@ pub(in crate::font) fn decode_sources<'a>(
                 let name = payload.name().as_str();
                 let default = layer.name().as_str() == default_layer_name;
                 let (geometry, preserved) = font_babelfont::layer_from_ufo(payload, &id, default);
-                let glyph = data.glyphs.entry(name.to_owned()).or_default();
+                let glyph = data
+                    .glyphs
+                    .entry(name.to_owned())
+                    .or_insert_with(VariableGlyph::new);
                 glyph.layers.insert(id.clone(), Box::new(preserved));
                 if default {
                     glyph.source_metadata.insert(

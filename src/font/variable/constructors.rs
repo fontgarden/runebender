@@ -61,7 +61,7 @@ impl VariableData {
                 glyph.width,
                 glyph.codepoint,
             );
-            let mut variable = VariableGlyph::default();
+            let mut variable = VariableGlyph::new();
             variable
                 .layers
                 .insert(layer_id.clone(), Box::new(preserved));

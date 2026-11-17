@@ -226,13 +226,8 @@ fn finite(values: &[f64]) -> Result<(), String> {
 }
 
 pub(crate) fn validate_batch(batch: &EditBatch) -> Result<(), String> {
-    if batch.task.is_empty()
-        || !batch
-            .task
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || "-_".contains(character))
-    {
-        return Err("task must contain only ASCII letters, digits, hyphens, or underscores".into());
+    if !proposal::is_task_name(&batch.task) {
+        return Err(proposal::TASK_NAME_RULE.into());
     }
     if batch.reason.trim().is_empty() || batch.edits.is_empty() {
         return Err("reason and edits must not be empty".into());

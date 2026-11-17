@@ -107,30 +107,7 @@ impl Project {
             .and_then(|info| info.names.style_name.clone())
             .unwrap_or_else(|| "Regular".into())
             .into();
-        let state = SourceState::new(path, dirty);
-        let mut project = Self {
-            sources: vec![state],
-            variable,
-            source_history: sources::SourceHistory::default(),
-            hoi_history: super::super::history::TransactionHistory::default(),
-            document_history: super::super::history::DocumentHistory::default(),
-            edit_transaction_history: edit_transactions::EditTransactionHistory::default(),
-            source_metadata_history: super::super::history::SourceMetadataHistory::default(),
-            active: 0,
-            master_names: vec![name],
-            axes: Vec::new(),
-            master_locations: vec![Location::new()],
-            model: None,
-            location: Location::new(),
-            compat: HashMap::new(),
-            export_source: None,
-            instances: Vec::new(),
-            ds_dirty: false,
-            brace: Vec::new(),
-            experiments: super::super::experiments::Experiments::default(),
-            foreign_source: None,
-            import_warnings: Vec::new(),
-        };
+        let mut project = Self::single_source(variable, SourceState::new(path, dirty), name);
         project.compute_compat();
         Ok(project)
     }

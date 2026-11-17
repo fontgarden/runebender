@@ -257,7 +257,7 @@ impl Project {
             }
         }
         self.ds_dirty |= designspace_changed;
-        self.record_glyph_changes(&transaction.history, &transaction.affected_layers);
+        self.mark_every_source_changed();
         Ok(DocumentEditOutcome::Changed {
             revision: self.variable.revision,
             change: DocumentChange {
@@ -328,7 +328,8 @@ impl Project {
         self.commit_glyph_transaction(transaction)
     }
 
-    fn record_glyph_changes(&mut self, _: &HistoryUpdate, _: &[GlyphLayerAddress]) {
+    /// A glyph-set change touches every source: mark each one dirty and recheck compatibility.
+    fn mark_every_source_changed(&mut self) {
         for source in &mut self.sources {
             source.dirty = true;
         }

@@ -521,12 +521,7 @@ pub fn fork(
     parent: Option<&str>,
     reason: &str,
 ) -> Result<(), String> {
-    if name.is_empty()
-        || name.len() > 64
-        || !name
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || "-_".contains(character))
-    {
+    if name.len() > 64 || !crate::font::proposal::is_task_name(name) {
         return Err("name must use 1 to 64 ASCII letters, digits, hyphens or underscores".into());
     }
     if project.experiments.versions.len() >= 16 || project.experiments.versions.contains_key(name) {

@@ -24,14 +24,8 @@ impl GlyphId {
         self.0.to_string()
     }
 
-    fn next() -> Self {
+    pub(super) fn next() -> Self {
         Self(NEXT_GLYPH_ID.fetch_add(1, Ordering::Relaxed))
-    }
-}
-
-impl Default for GlyphId {
-    fn default() -> Self {
-        Self::next()
     }
 }
 
@@ -71,8 +65,7 @@ impl CanonicalSourceStructureSnapshot {
             return Err(format!("inconsistent canonical glyph {name:?}"));
         }
         if !present {
-            self.glyphs
-                .insert(name.to_owned(), VariableGlyph::default());
+            self.glyphs.insert(name.to_owned(), VariableGlyph::new());
             self.glyph_geometry.0.push(Glyph::new(name));
         }
         let default_layers = self
@@ -127,7 +120,7 @@ impl CanonicalSourceStructureSnapshot {
             .ok_or_else(|| format!("missing glyph geometry for {source:?}"))?
             .clone();
         let mut glyph = VariableGlyph {
-            id: GlyphId::default(),
+            id: GlyphId::next(),
             layers: BTreeMap::default(),
             source_metadata: source_glyph.source_metadata,
         };

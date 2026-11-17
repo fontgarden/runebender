@@ -572,7 +572,11 @@ impl Workspace {
             }
             MetadataEdit::LayerStructure { label, .. } => {
                 self.park();
-                match self.font.project.undo_sources(redo) {
+                match self.font.project.undo_sources(if redo {
+                    HistoryDirection::Redo
+                } else {
+                    HistoryDirection::Undo
+                }) {
                     Ok(true) => {
                         // A restored or removed layer changes which layers exist to show
                         // and edit; a choice that no longer exists falls back to the master.

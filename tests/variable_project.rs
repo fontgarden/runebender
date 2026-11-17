@@ -6928,9 +6928,9 @@ fn source_authoring_keeps_identity_and_round_trips_the_designspace() {
         project.document_font_info(SourceId(0)).unwrap().note
     );
     let after = project.document_snapshot();
-    assert!(project.undo_sources(false).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Undo).unwrap());
     assert_eq!(project.document_snapshot(), before);
-    assert!(project.undo_sources(true).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Redo).unwrap());
     assert_eq!(project.document_snapshot(), after);
     assert!(project.move_source(SourceId(1), 0).unwrap());
     assert_eq!(project.source_index(SourceId(1)), Some(0));
@@ -6957,7 +6957,7 @@ fn source_authoring_keeps_identity_and_round_trips_the_designspace() {
         "removing a source must retain its files"
     );
     assert!(project.encode_ufo_source(added).is_none());
-    assert!(project.undo_sources(false).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Undo).unwrap());
     assert_glyph_content_eq(
         project
             .encode_ufo_source(added)
@@ -6966,7 +6966,7 @@ fn source_authoring_keeps_identity_and_round_trips_the_designspace() {
             .unwrap(),
         &expected,
     );
-    assert!(project.undo_sources(true).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Redo).unwrap());
     assert!(project.encode_ufo_source(added).is_none());
     assert!(
         project.remove_source(SourceId(0)).is_err(),
@@ -7010,7 +7010,7 @@ fn full_source_can_replace_intermediate_participation_without_losing_the_layer()
             .unwrap(),
         expected
     );
-    assert!(project.undo_sources(false).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Undo).unwrap());
     assert_eq!(project.brace.len(), 1);
 }
 
@@ -7051,7 +7051,7 @@ fn canonical_layer_history_survives_source_removal_and_restore() {
 
     project.remove_source(source).unwrap();
     assert!(project.document_layer("A", &address.layer).is_none());
-    assert!(project.undo_sources(false).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Undo).unwrap());
     assert_eq!(
         project
             .document_layer("A", &address.layer)
@@ -7125,15 +7125,15 @@ fn source_undo_refuses_to_overwrite_later_edits_and_layer_operations_preserve_ot
         draft.set_width(draft.view().width() + 10.0)?;
         Ok(())
     }));
-    assert!(project.undo_sources(false).is_err());
+    assert!(project.undo_sources(HistoryDirection::Undo).is_err());
     assert!(replay_layer_edit(&mut project, "A", &from, false));
-    assert!(project.undo_sources(false).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Undo).unwrap());
     assert_eq!(project.encode_ufo_source(SourceId(0)).unwrap(), original);
-    assert!(project.undo_sources(true).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Redo).unwrap());
     project.remove_glyph_layer("A", &layer).unwrap();
     assert!(project.encode_ufo_layer("A", &layer).is_none());
     assert!(project.encode_ufo_layer("A", &from).is_some());
-    assert!(project.undo_sources(false).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Undo).unwrap());
     assert!(project.encode_ufo_layer("A", &layer).is_some());
 }
 
@@ -7201,9 +7201,9 @@ fn auxiliary_layer_structure_mutates_the_canonical_document_atomically() {
     );
     assert_eq!(project.document_snapshot(), copied_snapshot);
     assert_eq!(project.document_revision(), copied_revision);
-    assert!(project.undo_sources(false).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Undo).unwrap());
     assert!(project.document_layer("A", &copied).is_none());
-    assert!(project.undo_sources(true).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Redo).unwrap());
     assert_eq!(
         project
             .document_layer("A", &copied)
@@ -7225,7 +7225,7 @@ fn auxiliary_layer_structure_mutates_the_canonical_document_atomically() {
     );
     assert_eq!(project.document_snapshot(), removed_snapshot);
     assert_eq!(project.document_revision(), removed_revision);
-    assert!(project.undo_sources(false).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Undo).unwrap());
     assert_eq!(
         project
             .document_layer("A", &copied)
@@ -7254,7 +7254,7 @@ fn structural_undo_and_redo_advance_the_live_document_revision() {
     let after_second_copy = project.document_revision();
     assert!(after_second_copy > after_first_copy);
 
-    assert!(project.undo_sources(false).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Undo).unwrap());
     let after_undo = project.document_revision();
     assert!(
         after_undo > after_second_copy,
@@ -7263,7 +7263,7 @@ fn structural_undo_and_redo_advance_the_live_document_revision() {
     assert!(project.document_layer("A", &copied).is_none());
     assert!(project.document_layer("B", &copied).is_some());
 
-    assert!(project.undo_sources(true).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Redo).unwrap());
     let after_redo = project.document_revision();
     assert!(
         after_redo > after_undo,

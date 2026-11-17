@@ -88,14 +88,8 @@ impl Project {
         directory: &Path,
         task: &str,
     ) -> Result<BTreeMap<SourceId, PathBuf>, String> {
-        if task.is_empty()
-            || !task
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric() || "-_".contains(character))
-        {
-            return Err(
-                "task must contain only ASCII letters, digits, hyphens, or underscores".into(),
-            );
+        if !crate::font::proposal::is_task_name(task) {
+            return Err(crate::font::proposal::TASK_NAME_RULE.into());
         }
         let plan = SaveAsPlan::new(self, directory, Some(task))?;
         let targets = self

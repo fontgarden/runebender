@@ -27,6 +27,36 @@ use crate::font::var_model::{Location, VariationModel};
 use crate::formats::binary_import::import_binary_font;
 use crate::formats::metadata::lib_keys::hoi_quad_at;
 
+/// Resolve one glyph outline with every component, failing on a missing or cyclic component.
+///
+/// `layer_at` supplies the interpolated layer of each glyph in the component graph.
+/// A graph deeper than 64 glyphs is rejected like a cycle.
+pub(super) fn resolve_component_outline(
+    glyph: &str,
+    layer_at: &mut impl FnMut(&str) -> Result<super::interpolation::InterpolatedLayer, String>,
+) -> Result<BezPath, String> {
+    fn resolve(
+        name: &str,
+        layer_at: &mut impl FnMut(&str) -> Result<super::interpolation::InterpolatedLayer, String>,
+        seen: &mut HashSet<String>,
+    ) -> Result<BezPath, String> {
+        if seen.len() >= 64 || !seen.insert(name.to_owned()) {
+            return Err(format!(
+                "{name}: cyclic or excessively deep component graph"
+            ));
+        }
+        let layer = layer_at(name)?;
+        let mut path = layer.contours_to_bezpath();
+        for component in layer.components() {
+            let outline = resolve(&component.reference, layer_at, seen)?;
+            path.extend((component.transform * outline).elements().iter().copied());
+        }
+        seen.remove(name);
+        Ok(path)
+    }
+    resolve(glyph, layer_at, &mut HashSet::new())
+}
+
 #[path = "project/glyph_transactions.rs"]
 mod glyph_transactions;
 pub use glyph_transactions::{CanonicalGlyphTransaction, GlyphTransactionError};
@@ -503,16 +533,24 @@ impl Project {
             .clone()
             .unwrap_or_else(|| "Regular".into());
         let variable = super::persistence::ufo_codec::decode_source(&input.font)?;
-        let mut project = Self {
+        let mut project =
+            Self::single_source(variable, SourceState::from_input(input), name.into());
+        project.compute_compat();
+        Ok(project)
+    }
+
+    /// A project of one source, with empty histories and no designspace projections.
+    fn single_source(variable: VariableData, source: SourceState, name: Arc<str>) -> Self {
+        Self {
             variable,
             source_history: sources::SourceHistory::default(),
             hoi_history: super::history::TransactionHistory::default(),
             document_history: super::history::DocumentHistory::default(),
             edit_transaction_history: edit_transactions::EditTransactionHistory::default(),
             source_metadata_history: super::history::SourceMetadataHistory::default(),
-            sources: vec![SourceState::from_input(input)],
+            sources: vec![source],
             active: 0,
-            master_names: vec![name.into()],
+            master_names: vec![name],
             axes: Vec::new(),
             master_locations: vec![Location::new()],
             model: None,
@@ -525,9 +563,7 @@ impl Project {
             experiments: super::experiments::Experiments::default(),
             foreign_source: None,
             import_warnings: Vec::new(),
-        };
-        project.compute_compat();
-        Ok(project)
+        }
     }
 
     /// Opens a designspace, UFO, Glyphs source, Babelfont package, or binary font. Sets `export_source` to `path` when the loader left it unset.
@@ -813,29 +849,17 @@ impl Project {
             None
         };
         let location = axes.iter().map(|axis| (axis.name.clone(), 0.0)).collect();
-        let mut project = Self {
-            sources: inputs.into_iter().map(SourceState::from_input).collect(),
-            variable,
-            source_history: sources::SourceHistory::default(),
-            hoi_history: super::history::TransactionHistory::default(),
-            document_history: super::history::DocumentHistory::default(),
-            edit_transaction_history: edit_transactions::EditTransactionHistory::default(),
-            source_metadata_history: super::history::SourceMetadataHistory::default(),
-            active: default_index,
-            master_names,
-            axes,
-            master_locations,
-            model,
-            location,
-            compat: HashMap::new(),
-            export_source: None,
-            instances: Vec::new(),
-            ds_dirty: false,
-            brace,
-            experiments: super::experiments::Experiments::default(),
-            foreign_source: None,
-            import_warnings: Vec::new(),
-        };
+        let mut sources = inputs.into_iter().map(SourceState::from_input);
+        let first = sources.next().ok_or("designspace has no full sources")?;
+        let mut project = Self::single_source(variable, first, Arc::from(""));
+        project.sources.extend(sources);
+        project.active = default_index;
+        project.master_names = master_names;
+        project.axes = axes;
+        project.master_locations = master_locations;
+        project.model = model;
+        project.location = location;
+        project.brace = brace;
         project.refresh_instances_from_doc();
         Ok(project)
     }
@@ -1003,27 +1027,9 @@ impl Project {
         glyph_name: &str,
         location: &Location,
     ) -> Result<BezPath, String> {
-        fn resolve(
-            project: &Project,
-            name: &str,
-            location: &Location,
-            seen: &mut HashSet<String>,
-        ) -> Result<BezPath, String> {
-            if seen.len() >= 64 || !seen.insert(name.to_owned()) {
-                return Err(format!(
-                    "{name}: cyclic or excessively deep component graph"
-                ));
-            }
-            let layer = project.try_interpolated_layer_at(name, location)?;
-            let mut path = layer.contours_to_bezpath();
-            for component in layer.components() {
-                let outline = resolve(project, &component.reference, location, seen)?;
-                path.extend((component.transform * outline).elements().iter().copied());
-            }
-            seen.remove(name);
-            Ok(path)
-        }
-        resolve(self, glyph_name, location, &mut HashSet::new())
+        resolve_component_outline(glyph_name, &mut |name| {
+            self.try_interpolated_layer_at(name, location)
+        })
     }
 
     /// Interpolate resolved glyph-pair kerning, including each source's group fallback.
@@ -2497,9 +2503,17 @@ mod tests {
         let instance = project.document_designspace().unwrap().instances()[0].id();
         assert!(project.remove_instance(instance).unwrap());
         assert_eq!(project.instances.len(), before - 1);
-        assert!(project.undo_sources(false).unwrap());
+        assert!(
+            project
+                .undo_sources(crate::font::history::HistoryDirection::Undo)
+                .unwrap()
+        );
         assert_eq!(project.instances.len(), before);
-        assert!(project.undo_sources(true).unwrap());
+        assert!(
+            project
+                .undo_sources(crate::font::history::HistoryDirection::Redo)
+                .unwrap()
+        );
         assert_eq!(project.instances.len(), before - 1);
     }
 
@@ -2551,12 +2565,20 @@ mod tests {
             refined.contours[0].points[0].x,
             orig + 40.0,
         );
-        assert!(project.undo_sources(false).unwrap());
+        assert!(
+            project
+                .undo_sources(crate::font::history::HistoryDirection::Undo)
+                .unwrap()
+        );
         let linear = project
             .try_encode_interpolated_ufo_at(name, &loc_500)
             .unwrap_or_else(|error| panic!("interpolates without the sparse source: {error}"));
         assert!((linear.contours[0].points[0].x - (orig + 40.0)).abs() > 1.0);
-        assert!(project.undo_sources(true).unwrap());
+        assert!(
+            project
+                .undo_sources(crate::font::history::HistoryDirection::Redo)
+                .unwrap()
+        );
         let restored = project
             .try_encode_interpolated_ufo_at(name, &loc_500)
             .unwrap_or_else(|error| {

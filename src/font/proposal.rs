@@ -183,15 +183,23 @@ fn project_error(reason: impl Into<String>) -> ProposalError {
     }
 }
 
-fn validate_task(task: &str) -> Result<(), ProposalError> {
-    if task.is_empty()
-        || !task
+/// The rule a task name follows, as an error message.
+pub(crate) const TASK_NAME_RULE: &str =
+    "task must contain only ASCII letters, digits, hyphens, or underscores";
+
+/// Whether `task` is one or more ASCII letters, digits, hyphens or underscores.
+///
+/// Task names become UFO layer names and file names, so the set is deliberately small.
+pub(crate) fn is_task_name(task: &str) -> bool {
+    !task.is_empty()
+        && task
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || "-_".contains(character))
-    {
-        return Err(project_error(
-            "task must contain only ASCII letters, digits, hyphens, or underscores",
-        ));
+}
+
+fn validate_task(task: &str) -> Result<(), ProposalError> {
+    if !is_task_name(task) {
+        return Err(project_error(TASK_NAME_RULE));
     }
     Ok(())
 }

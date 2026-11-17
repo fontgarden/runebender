@@ -112,10 +112,6 @@ pub fn realign_component_offsets(components: &[AlignInput], seed: &[(String, Poi
 /// The anchors a layer carries itself, as `(name, position)`: what alignment reads from a
 /// component's base glyph.
 pub fn layer_anchors(layer: LayerView<'_>) -> Vec<(String, Point)> {
-    document_anchors(layer)
-}
-
-fn document_anchors(layer: LayerView<'_>) -> Vec<(String, Point)> {
     layer
         .anchors()
         .map(|anchor| (anchor.name().to_owned(), anchor.position()))
@@ -137,7 +133,7 @@ pub fn effective_document_anchors<'a>(
         resolve: &mut impl FnMut(&str) -> Option<LayerView<'a>>,
         depth: usize,
     ) -> Vec<(String, Point)> {
-        let own = document_anchors(layer);
+        let own = layer_anchors(layer);
         if !own.is_empty() || depth > 8 {
             return own;
         }
@@ -194,7 +190,7 @@ pub fn realign_document_layer<'a>(
 ) -> Result<bool, DocumentEditError> {
     realign_document_layer_with(
         draft,
-        |base| resolve(base).map(document_anchors).unwrap_or_default(),
+        |base| resolve(base).map(layer_anchors).unwrap_or_default(),
         seed_own_anchors,
     )
 }
@@ -212,7 +208,7 @@ pub fn realign_document_layer_with(
         return Ok(false);
     }
     let seed = if seed_own_anchors {
-        document_anchors(layer)
+        layer_anchors(layer)
     } else {
         Vec::new()
     };

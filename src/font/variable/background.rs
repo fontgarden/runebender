@@ -108,6 +108,29 @@ impl VariableData {
             layer: other.clone(),
         };
         let second = self.layer_snapshot(&target).ok_or("missing glyph layer")?;
+        self.exchange_layer_contours(
+            (address.clone(), first),
+            (target, second),
+            true,
+            other.clone(),
+            "use layer as master",
+        )
+    }
+
+    /// Exchange the contours of two layers of one glyph, as one history group.
+    ///
+    /// The second layer also takes the width of the first.
+    /// With `exchange_widths`, the first layer takes the width of the second as well.
+    /// Returns `None` when nothing changes.
+    fn exchange_layer_contours(
+        &self,
+        (first_address, first): (GlyphLayerAddress, CanonicalLayerSnapshot),
+        (second_address, second): (GlyphLayerAddress, CanonicalLayerSnapshot),
+        exchange_widths: bool,
+        history_layer: LayerId,
+        label: &'static str,
+    ) -> Result<Option<BackgroundEdit>, String> {
+        let glyph = first_address.glyph.clone();
         let (layer, preserved) = first.clone().into_parts();
         let mut first_draft = LayerEditDraft::new(layer, preserved);
         let (layer, preserved) = second.clone().into_parts();
@@ -118,9 +141,11 @@ impl VariableData {
         changed |= second_draft
             .replace_layer_contours_only(first.view())
             .map_err(|error| error.to_string())?;
-        changed |= first_draft
-            .set_width(second.view().width())
-            .map_err(|error| error.to_string())?;
+        if exchange_widths {
+            changed |= first_draft
+                .set_width(second.view().width())
+                .map_err(|error| error.to_string())?;
+        }
         changed |= second_draft
             .set_width(first.view().width())
             .map_err(|error| error.to_string())?;
@@ -128,22 +153,22 @@ impl VariableData {
             return Ok(None);
         }
         let (layer, preserved) = first_draft.into_parts();
-        let first_after = CanonicalLayerSnapshot::new(address.clone(), layer, preserved);
+        let first_after = CanonicalLayerSnapshot::new(first_address.clone(), layer, preserved);
         let (layer, preserved) = second_draft.into_parts();
-        let second_after = CanonicalLayerSnapshot::new(target.clone(), layer, preserved);
+        let second_after = CanonicalLayerSnapshot::new(second_address.clone(), layer, preserved);
         self.background_edit(
-            &address.glyph,
-            other.clone(),
-            "use layer as master",
+            &glyph,
+            history_layer,
+            label,
             Vec::new(),
             vec![
                 BackgroundLayerEdit {
-                    address: address.clone(),
+                    address: first_address,
                     before: Some(first),
                     after: Some(first_after),
                 },
                 BackgroundLayerEdit {
-                    address: target,
+                    address: second_address,
                     before: Some(second),
                     after: Some(second_after),
                 },
@@ -172,45 +197,13 @@ impl VariableData {
         let back = self
             .background_snapshot(&target)?
             .ok_or("missing background glyph layer")?;
-        let (layer, preserved) = foreground.clone().into_parts();
-        let mut front_draft = LayerEditDraft::new(layer, preserved);
-        let (layer, preserved) = back.clone().into_parts();
-        let mut back_draft = LayerEditDraft::new(layer, preserved);
-        let front_changed = front_draft
-            .replace_layer_contours_only(back.view())
-            .map_err(|error| error.to_string())?;
-        let back_changed = back_draft
-            .replace_layer_contours_only(foreground.view())
-            .map_err(|error| error.to_string())?;
-        let width_changed = back_draft
-            .set_width(foreground.view().width())
-            .map_err(|error| error.to_string())?;
-        if !front_changed && !back_changed && !width_changed {
-            return Ok(None);
-        }
-        let (layer, preserved) = front_draft.into_parts();
-        let front_after = CanonicalLayerSnapshot::new(address.clone(), layer, preserved);
-        let (layer, preserved) = back_draft.into_parts();
-        let back_after = CanonicalLayerSnapshot::new(target.clone(), layer, preserved);
-        self.background_edit(
-            &address.glyph,
+        self.exchange_layer_contours(
+            (address.clone(), foreground),
+            (target, back),
+            false,
             background,
             "swap background",
-            Vec::new(),
-            vec![
-                BackgroundLayerEdit {
-                    address: address.clone(),
-                    before: Some(foreground),
-                    after: Some(front_after),
-                },
-                BackgroundLayerEdit {
-                    address: target,
-                    before: Some(back),
-                    after: Some(back_after),
-                },
-            ],
         )
-        .map(Some)
     }
 
     pub(in crate::font) fn clear_background_layer(

@@ -226,6 +226,17 @@ impl Project {
         self.source_history.transactions.record(before, after);
     }
 
+    /// Restore the structure captured in `before` after a step that should not fail did fail.
+    ///
+    /// Returns `error` for the caller, so a rejected command leaves no partial change.
+    fn abandon_source_change(&mut self, before: &SourceFrame, error: &str) -> String {
+        let current = SourceFrame::capture(self);
+        match before.restore_if_current(self, &current) {
+            Ok(()) => error.into(),
+            Err(restore) => format!("{error}; {restore}"),
+        }
+    }
+
     fn record_canonical_source_change(&mut self, before: SourceFrame) {
         self.finish_source_restore();
         let after = SourceFrame::capture(self);
@@ -333,12 +344,7 @@ impl Project {
     }
 
     /// Undo or redo one source/layer transaction, preserving later unrelated edits.
-    pub fn undo_sources(&mut self, redo: bool) -> Result<bool, String> {
-        let direction = if redo {
-            HistoryDirection::Redo
-        } else {
-            HistoryDirection::Undo
-        };
+    pub fn undo_sources(&mut self, direction: HistoryDirection) -> Result<bool, String> {
         let current = SourceFrame::capture(self);
         let mut history = std::mem::take(&mut self.source_history);
         let transactions = &mut history.transactions;
@@ -773,10 +779,9 @@ impl Project {
         }
         let before = SourceFrame::capture(self);
         self.variable.ensure_layer_container(&target_id)?;
-        assert!(
-            self.variable.copy_layer(glyph, from, &target_id),
-            "validated source layer must remain copyable"
-        );
+        if !self.variable.copy_layer(glyph, from, &target_id) {
+            return Err(self.abandon_source_change(&before, "the source layer cannot be copied"));
+        }
         self.sources[index].dirty = true;
         self.record_source_change(before);
         Ok(target_id)
@@ -807,6 +812,18 @@ impl Project {
 
     /// Remove one auxiliary glyph layer, retaining the layer and other glyphs.
     pub fn remove_glyph_layer(&mut self, glyph: &str, id: &LayerId) -> Result<(), String> {
+        self.remove_auxiliary_glyph_layer(glyph, id, false)
+    }
+
+    /// Remove one glyph's auxiliary layer as one undoable source change.
+    ///
+    /// With `remove_unused_container`, the layer container goes too when no other glyph uses it.
+    fn remove_auxiliary_glyph_layer(
+        &mut self,
+        glyph: &str,
+        id: &LayerId,
+        remove_unused_container: bool,
+    ) -> Result<(), String> {
         let index = self.source_index(id.source).ok_or("unknown source")?;
         if self.variable.default_layer_name(id.source) == Some(id.name.as_str()) {
             return Err("remove the source to remove a default layer".into());
@@ -815,10 +832,15 @@ impl Project {
             return Err("missing glyph layer".into());
         }
         let before = SourceFrame::capture(self);
-        assert!(
-            self.variable.remove_layer(glyph, id),
-            "validated canonical layer must remain removable"
-        );
+        if !self.variable.remove_layer(glyph, id) {
+            return Err("the glyph layer cannot be removed".into());
+        }
+        if remove_unused_container
+            && !self.variable.has_layer(id)
+            && self.variable.source_contains_layer(id)
+        {
+            self.variable.remove_empty_layer_container(id);
+        }
         self.sources[index].dirty = true;
         self.record_source_change(before);
         Ok(())
@@ -854,14 +876,9 @@ impl Project {
         }
         let before = SourceFrame::capture(self);
         self.variable.ensure_layer_container(&target)?;
-        assert!(
-            self.variable.copy_layer(glyph, id, &target),
-            "validated source layer must remain copyable"
-        );
-        assert!(
-            self.variable.remove_layer(glyph, id),
-            "validated canonical layer must remain removable"
-        );
+        if !self.variable.copy_layer(glyph, id, &target) || !self.variable.remove_layer(glyph, id) {
+            return Err(self.abandon_source_change(&before, "the glyph layer cannot be renamed"));
+        }
         if !self.variable.has_layer(id) && self.variable.source_contains_layer(id) {
             self.variable.remove_empty_layer_container(id);
         }
@@ -873,24 +890,7 @@ impl Project {
     /// Delete one glyph's auxiliary layer and, when no other glyph uses that layer, its
     /// container, as one undoable source change. The default layer is rejected.
     pub fn delete_glyph_layer(&mut self, glyph: &str, id: &LayerId) -> Result<(), String> {
-        let index = self.source_index(id.source).ok_or("unknown source")?;
-        if self.variable.default_layer_name(id.source) == Some(id.name.as_str()) {
-            return Err("remove the source to remove a default layer".into());
-        }
-        if self.document_layer(glyph, id).is_none() {
-            return Err("missing glyph layer".into());
-        }
-        let before = SourceFrame::capture(self);
-        assert!(
-            self.variable.remove_layer(glyph, id),
-            "validated canonical layer must remain removable"
-        );
-        if !self.variable.has_layer(id) && self.variable.source_contains_layer(id) {
-            self.variable.remove_empty_layer_container(id);
-        }
-        self.sources[index].dirty = true;
-        self.record_source_change(before);
-        Ok(())
+        self.remove_auxiliary_glyph_layer(glyph, id, true)
     }
 
     /// Remove an empty auxiliary layer container from canonical persistence and its projection.

@@ -162,7 +162,7 @@ pub struct GlyphSource {
 }
 
 /// One glyph across all sources, including sparse and auxiliary layers.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct VariableGlyph {
     id: GlyphId,
     /// Boxed so that a B-tree node, which reserves room for eleven entries, stays small.
@@ -261,6 +261,15 @@ impl DocumentSnapshot {
 }
 
 impl VariableGlyph {
+    /// An empty glyph with a new session-local identity.
+    pub(super) fn new() -> Self {
+        Self {
+            id: GlyphId::next(),
+            layers: BTreeMap::new(),
+            source_metadata: BTreeMap::new(),
+        }
+    }
+
     /// Stable addresses of all of this glyph's layers.
     pub fn layer_ids(&self) -> impl Iterator<Item = &LayerId> {
         self.layers.keys()

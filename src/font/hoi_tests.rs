@@ -649,7 +649,7 @@ fn source_location_edits_and_removal_suspend_records_without_discarding_them() {
         memory.project.hoi_trajectories().unwrap(),
         vec![curve.clone()]
     );
-    memory.project.undo_sources(false).unwrap();
+    memory.project.undo_sources(HistoryDirection::Undo).unwrap();
     memory.project.bind_hoi_trajectory(&curve).unwrap();
     memory
         .project
@@ -666,7 +666,7 @@ fn source_location_edits_and_removal_suspend_records_without_discarding_them() {
         memory.project.hoi_trajectories().unwrap(),
         vec![curve.clone()]
     );
-    memory.project.undo_sources(false).unwrap();
+    memory.project.undo_sources(HistoryDirection::Undo).unwrap();
     memory.project.bind_hoi_trajectory(&curve).unwrap();
 }
 

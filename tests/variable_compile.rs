@@ -711,7 +711,11 @@ fn source_structure_history_invalidates_compiled_preview() {
         vec![added, SourceId(0), SourceId(1)]
     );
 
-    assert!(project.undo_sources(false).unwrap());
+    assert!(
+        project
+            .undo_sources(runebender::font::history::HistoryDirection::Undo)
+            .unwrap()
+    );
     let after_move_undo = project.compiled_preview().unwrap();
     assert!(!std::sync::Arc::ptr_eq(&after_move, &after_move_undo));
     assert_eq!(
@@ -725,7 +729,11 @@ fn source_structure_history_invalidates_compiled_preview() {
         vec![SourceId(0), SourceId(1), added]
     );
 
-    assert!(project.undo_sources(false).unwrap());
+    assert!(
+        project
+            .undo_sources(runebender::font::history::HistoryDirection::Undo)
+            .unwrap()
+    );
     let after_add_undo = project.compiled_preview().unwrap();
     assert!(!std::sync::Arc::ptr_eq(&after_move_undo, &after_add_undo));
     assert_eq!(
@@ -740,10 +748,18 @@ fn source_structure_history_invalidates_compiled_preview() {
     );
     assert_eq!(after_add_undo.bytes, initial.bytes);
 
-    assert!(project.undo_sources(true).unwrap());
+    assert!(
+        project
+            .undo_sources(runebender::font::history::HistoryDirection::Redo)
+            .unwrap()
+    );
     let after_add_redo = project.compiled_preview().unwrap();
     assert!(!std::sync::Arc::ptr_eq(&after_add_undo, &after_add_redo));
-    assert!(project.undo_sources(true).unwrap());
+    assert!(
+        project
+            .undo_sources(runebender::font::history::HistoryDirection::Redo)
+            .unwrap()
+    );
     let after_move_redo = project.compiled_preview().unwrap();
     assert!(!std::sync::Arc::ptr_eq(&after_add_redo, &after_move_redo));
     assert_eq!(

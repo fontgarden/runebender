@@ -3,8 +3,6 @@
 
 //! Read-only authoring geometry and transient previews for interactive HOI tools.
 
-use std::collections::HashSet;
-
 use kurbo::{BezPath, Point};
 
 use super::{AxisId, HoiTrajectory, LayerId, LayerPointType, Project};
@@ -130,26 +128,9 @@ impl Project {
                 return Err("Duplicate HOI trajectory in preview".into());
             }
         }
-        fn resolve(
-            project: &Project,
-            glyph: &str,
-            location: &Location,
-            records: &[HoiTrajectory],
-            seen: &mut HashSet<String>,
-        ) -> Result<BezPath, String> {
-            if seen.len() >= 64 || !seen.insert(glyph.to_owned()) {
-                return Err("Cyclic or excessively deep component graph".into());
-            }
-            let layer = project.try_interpolated_layer_with_hoi(glyph, location, records)?;
-            let mut path = layer.contours_to_bezpath();
-            for component in layer.components() {
-                let child = resolve(project, &component.reference, location, records, seen)?;
-                path.extend((component.transform * child).elements().iter().copied());
-            }
-            seen.remove(glyph);
-            Ok(path)
-        }
-        resolve(self, glyph, location, records, &mut HashSet::new())
+        crate::font::project::resolve_component_outline(glyph, &mut |name| {
+            self.try_interpolated_layer_with_hoi(name, location, records)
+        })
     }
 }
 

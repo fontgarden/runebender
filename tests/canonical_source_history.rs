@@ -104,7 +104,7 @@ fn removed_source_roundtrip_preserves_both_existing_layer_history_piles() {
         .unwrap();
 
     project.remove_source(SourceId(1)).unwrap();
-    assert!(project.undo_sources(false).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Undo).unwrap());
     assert_eq!(
         project.capture_document_layer(&address),
         Some(first.clone())
@@ -117,14 +117,14 @@ fn removed_source_roundtrip_preserves_both_existing_layer_history_piles() {
         Some(second.clone())
     );
 
-    assert!(project.undo_sources(true).is_err());
+    assert!(project.undo_sources(HistoryDirection::Redo).is_err());
     assert!(project.has_source_history(true));
     project
         .replay_document_layer_history(&address, HistoryDirection::Undo)
         .unwrap();
-    assert!(project.undo_sources(true).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Redo).unwrap());
     assert!(project.document_source(SourceId(1)).is_none());
-    assert!(project.undo_sources(false).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Undo).unwrap());
 
     project
         .replay_document_layer_history(&address, HistoryDirection::Undo)
@@ -155,7 +155,7 @@ fn descriptor_replay_keeps_a_pending_layer_transaction_and_rejected_redo() {
         .update_source(source, &original_name, &target)
         .unwrap();
     let edited_revision = project.document_revision();
-    assert!(project.undo_sources(false).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Undo).unwrap());
     assert_eq!(project.document_revision(), edited_revision.wrapping_add(1));
     project
         .commit_document_layer_transaction(transaction)
@@ -163,7 +163,7 @@ fn descriptor_replay_keeps_a_pending_layer_transaction_and_rejected_redo() {
     let committed = project.capture_document_layer(&address).unwrap();
     let revision = project.document_revision();
 
-    assert!(project.undo_sources(true).is_err());
+    assert!(project.undo_sources(HistoryDirection::Redo).is_err());
     assert_eq!(project.document_revision(), revision);
     assert_eq!(project.capture_document_layer(&address), Some(committed));
     assert!(project.has_source_history(true));
@@ -171,7 +171,7 @@ fn descriptor_replay_keeps_a_pending_layer_transaction_and_rejected_redo() {
         .replay_document_layer_history(&address, HistoryDirection::Undo)
         .unwrap();
     let revision = project.document_revision();
-    assert!(project.undo_sources(true).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Redo).unwrap());
     assert_eq!(project.document_revision(), revision.wrapping_add(1));
     assert_eq!(project.document_source(source).unwrap().location(), &target);
 }
@@ -195,7 +195,7 @@ fn removed_source_roundtrip_preserves_auxiliary_compatibility_history() {
     ));
 
     project.remove_source(source).unwrap();
-    assert!(project.undo_sources(false).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Undo).unwrap());
     assert!(matches!(
         project.replay_document_layer_history(&address, HistoryDirection::Undo),
         Ok(DocumentHistoryReplayOutcome::Changed { .. })
@@ -262,12 +262,12 @@ fn source_move_and_history_preserve_full_sparse_serialized_interleaving() {
         ]
     );
 
-    assert!(project.undo_sources(false).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Undo).unwrap());
     assert_eq!(
         project.document_designspace().unwrap().source_order(),
         original
     );
-    assert!(project.undo_sources(true).unwrap());
+    assert!(project.undo_sources(HistoryDirection::Redo).unwrap());
     assert_eq!(
         project.document_designspace().unwrap().source_order(),
         moved

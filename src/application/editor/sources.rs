@@ -64,8 +64,16 @@ impl Workspace {
                 .project
                 .move_source(id, (index + 1).min(self.font.master_count() - 1))
                 .map(|_| ()),
-            "undo" => self.font.project.undo_sources(false).map(|_| ()),
-            "redo" => self.font.project.undo_sources(true).map(|_| ()),
+            "undo" => self
+                .font
+                .project
+                .undo_sources(runebender::font::history::HistoryDirection::Undo)
+                .map(|_| ()),
+            "redo" => self
+                .font
+                .project
+                .undo_sources(runebender::font::history::HistoryDirection::Redo)
+                .map(|_| ()),
             "layer-add" => {
                 let from = LayerId {
                     source: id,
