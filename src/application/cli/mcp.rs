@@ -5,8 +5,73 @@
 
 use super::agent_commands::dispatch_call;
 use super::font_commands::proof_content;
+use super::mcp_install::{self, McpClient};
 use super::*;
 use runebender::automation::tool_contracts::{self, ToolSurface};
+
+/// Arguments of `mcp`.
+#[derive(clap::Args)]
+pub(super) struct McpArgs {
+    /// The designspace or UFO the client works on.
+    #[arg(long, required_unless_present_any = ["session", "live", "install"], conflicts_with_all = ["session", "live", "install"])]
+    font: Option<PathBuf>,
+    /// The live editor socket. Never reads or writes source files.
+    #[arg(long)]
+    session: Option<PathBuf>,
+    /// Discover and connect to editor sessions through tools, without changing client config.
+    #[arg(long, conflicts_with = "session")]
+    live: bool,
+    /// The font-ml binary, for propose.
+    #[arg(long)]
+    tool: Option<PathBuf>,
+    /// Write this binary, by absolute path, as the `runebender` MCP
+    /// server into the named clients' settings files, or into all
+    /// of them. Other entries in those files are kept.
+    #[arg(long, num_args = 0.., value_delimiter = ',', conflicts_with_all = ["session", "live", "tool"])]
+    install: Option<Vec<McpClient>>,
+    /// With --install, report what would change and write nothing.
+    #[arg(long, requires = "install")]
+    dry_run: bool,
+}
+
+/// `mcp`: install the server into client settings, or serve until standard input ends.
+pub(super) fn mcp_command(args: &McpArgs, json: bool) -> i32 {
+    match &args.install {
+        Some(clients) => emit(json, install_server(clients, args.dry_run)),
+        None => mcp_serve(
+            args.font.as_deref(),
+            args.session.as_deref(),
+            args.live,
+            args.tool.as_deref(),
+        ),
+    }
+}
+
+/// `mcp --install`: one line per client, or the reports as JSON.
+fn install_server(clients: &[McpClient], dry_run: bool) -> CommandResult {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| CliError::failed("HOME is not set"))?;
+    let binary = std::env::current_exe()
+        .and_then(std::fs::canonicalize)
+        .map_err(|error| CliError::failed(format!("this binary's path: {error}")))?;
+    let reports =
+        mcp_install::install(clients, dry_run, &home, &binary).map_err(CliError::failed)?;
+    let mut text = String::new();
+    for report in &reports {
+        let verb = match (report.written, report.changed) {
+            (true, _) => "wrote",
+            (false, true) => "would write",
+            (false, false) => "already set in",
+        };
+        push_line!(text, "{}: {verb} {}", report.client, report.path);
+    }
+    push_line!(text, "server: {} mcp --live", binary.display());
+    Ok(CommandOutput::new(
+        json!({"ok": true, "command": binary, "clients": reports}),
+        text,
+    ))
+}
 
 /// The MCP server: JSON-RPC 2.0 over stdio, one message per line,
 /// the way the protocol's stdio transport works. Handles what a
@@ -14,16 +79,11 @@ use runebender::automation::tool_contracts::{self, ToolSurface};
 /// "method not found". Operation descriptors are shared with CLI discovery;
 /// the live host adds connection selection and explicit proof export.
 /// Guarded live mutations remain owned by the editor.
-pub(super) fn mcp_serve(
-    font: Option<&Path>,
-    session: Option<&Path>,
-    live: bool,
-    tool: Option<&Path>,
-) -> i32 {
+fn mcp_serve(font: Option<&Path>, session: Option<&Path>, live: bool, tool: Option<&Path>) -> i32 {
     use std::io::BufRead as _;
     if font.is_some_and(|font| !font.exists()) {
-        eprintln!("font not found");
-        return exit::USAGE;
+        // The server prints this as text with or without `--json`.
+        return emit(false, Err(CliError::usage("font not found")));
     }
     let live_mode = live || session.is_some();
     let connected = std::sync::Arc::new(McpSession {

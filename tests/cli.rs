@@ -128,6 +128,35 @@ fn a_bad_path_is_a_usage_error() {
     assert_eq!(out["ok"], false);
 }
 
+/// A source that loads and does not compile is a failure, not a mistake in the command.
+#[test]
+fn a_font_that_does_not_compile_is_a_failure() {
+    let (dir, ufo) = scratch_ufo();
+    std::fs::write(
+        ufo.join("features.fea"),
+        "feature liga { sub nosuchglyph by A; } liga;\n",
+    )
+    .expect("write features");
+    let out = dir.0.join("Font.ttf");
+    let (code, result) = run(&[
+        "compile",
+        ufo.to_str().expect("utf8"),
+        "--out",
+        out.to_str().expect("utf8"),
+    ]);
+    assert_eq!(code, 4, "{result}");
+    assert_eq!(result["ok"], false);
+    assert!(!out.exists(), "nothing is written for a failed compile");
+    // A missing source is still a usage error.
+    let (code, _) = run(&[
+        "compile",
+        "/nowhere/Nothing.ufo",
+        "--out",
+        out.to_str().expect("utf8"),
+    ]);
+    assert_eq!(code, 2);
+}
+
 #[test]
 fn proof_writes_svg_and_metrics() {
     let (dir, ufo) = scratch_ufo();

@@ -2,8 +2,147 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Single agent tool calls and their source-font adapters.
+//!
+//! A disk tool that is also a command calls the command function in process and returns its
+//! JSON document, so the reach of a model is exactly the reach of the command line.
 
+use super::font_commands::{
+    PROOF_COLUMNS, ProposalDiscardArgs, ProposalListArgs, proposal_discard, proposal_list,
+};
+use super::graph_commands::{GraphRunArgs, graph_run};
+use super::output::document;
 use super::*;
+
+#[derive(clap::Subcommand)]
+pub(super) enum AgentAction {
+    /// Open a font as an unsaved headless editor session for scripts and MCP (Unix only).
+    Serve {
+        /// Designspace or UFO to load into memory. This host never saves source files.
+        #[arg(long)]
+        font: PathBuf,
+        /// Glyph to select for state checks and ordinary undo/redo.
+        #[arg(long)]
+        glyph: String,
+        /// Maximum lifetime; keep stdin open. All unsaved edits disappear on exit.
+        #[arg(long, default_value_t = 3600, value_parser = clap::value_parser!(u64).range(1..=86400))]
+        duration_seconds: u64,
+    },
+    /// Serve a synthetic unsaved application fixture for headless live-client tests (Unix only).
+    Fixture {
+        /// Maximum lifetime; keep stdin open and send newline-delimited control JSON.
+        #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(1..=3600))]
+        duration_seconds: u64,
+    },
+    /// The system prompt and every tool, as JSON.
+    Tools {
+        /// Include versioned result contracts and effect metadata alongside legacy tool schemas.
+        #[arg(long)]
+        contracts: bool,
+    },
+    /// Run one tool call and print its result as JSON.
+    Call(AgentCallArgs),
+}
+
+/// Arguments of `agent call`.
+#[derive(clap::Args)]
+pub(super) struct AgentCallArgs {
+    /// The tool name.
+    name: String,
+    /// The designspace or UFO the model is working on.
+    #[arg(long, required_unless_present = "session", conflicts_with = "session")]
+    font: Option<PathBuf>,
+    /// The live editor socket. Never reads or writes source files.
+    #[arg(long)]
+    session: Option<PathBuf>,
+    /// The arguments, as a JSON object.
+    #[arg(long, default_value = "{}")]
+    args: String,
+    /// Read arguments from a JSON file, or - for stdin.
+    #[arg(long, conflicts_with = "args")]
+    args_file: Option<PathBuf>,
+    /// The font-ml binary, for propose.
+    #[arg(long)]
+    tool: Option<PathBuf>,
+}
+
+/// `agent`: one of its four actions, printed as JSON with or without `--json`.
+pub(super) fn agent_command(action: &AgentAction) -> i32 {
+    // A served session prints nothing of its own when it ends normally.
+    let served = |result: Result<(), CliError>| {
+        result.map_or_else(|error| emit(true, Err(error)), |()| exit::OK)
+    };
+    match action {
+        AgentAction::Serve {
+            font,
+            glyph,
+            duration_seconds,
+        } => served(agent_serve(font, glyph, *duration_seconds)),
+        AgentAction::Fixture { duration_seconds } => served(agent_fixture(*duration_seconds)),
+        AgentAction::Tools { contracts } => emit(true, Ok(agent_tools(*contracts))),
+        AgentAction::Call(args) => emit(true, agent_call(args)),
+    }
+}
+
+/// `agent serve`: a headless live session until the deadline or the end of standard input.
+fn agent_serve(font: &Path, glyph: &str, duration_seconds: u64) -> Result<(), CliError> {
+    #[cfg(unix)]
+    return crate::application::platform::live_host::serve_font(
+        font,
+        glyph,
+        std::time::Duration::from_secs(duration_seconds),
+    )
+    .map_err(CliError::failed);
+    #[cfg(not(unix))]
+    {
+        let _ = (font, glyph, duration_seconds);
+        Err(CliError::usage("headless live sessions require Unix"))
+    }
+}
+
+/// `agent fixture`: the synthetic live fixture until the deadline or the end of standard input.
+fn agent_fixture(duration_seconds: u64) -> Result<(), CliError> {
+    #[cfg(unix)]
+    return crate::application::platform::live_fixture::serve(std::time::Duration::from_secs(
+        duration_seconds,
+    ))
+    .map_err(CliError::failed);
+    #[cfg(not(unix))]
+    {
+        let _ = duration_seconds;
+        Err(CliError::usage("live fixtures require Unix"))
+    }
+}
+
+/// `agent tools`: the system prompt and the tool list of the disk or live surface.
+fn agent_tools(contracts: bool) -> CommandOutput {
+    let live = std::env::var_os("RUNEBENDER_LIVE_SESSION").is_some();
+    let tools = if live {
+        runebender::automation::live::tools()
+    } else {
+        agent::tools()
+    };
+    let prompt = if live {
+        runebender::automation::live::system_prompt(&tools)
+    } else {
+        agent::system_prompt(&tools)
+    };
+    let mut result = json!({ "ok": true, "prompt": prompt, "tools": tools });
+    if contracts {
+        use runebender::automation::tool_contracts::{self, ToolSurface};
+        let surface = if live {
+            ToolSurface::Live
+        } else {
+            ToolSurface::Disk
+        };
+        result["contracts"] = json!(
+            tools
+                .into_iter()
+                .map(|tool| tool_contracts::describe(tool, surface))
+                .collect::<Vec<_>>()
+        );
+    }
+    CommandOutput::json(result)
+}
 
 /// The UFO a font path stands for: the UFO itself, or the first
 /// master of a designspace.
@@ -29,27 +168,6 @@ fn project_info(font: &Path) -> serde_json::Value {
             .collect::<Vec<_>>()})
         }
         Err(e) => json!({"ok": false, "error": e}),
-    }
-}
-
-/// Runs this same binary with `args` and returns the last JSON line
-/// it printed. Every tool is a command the binary already has, so the
-/// model's reach is exactly the command line's.
-fn self_json(args: &[String]) -> serde_json::Value {
-    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("runebender"));
-    let output = std::process::Command::new(exe).args(args).output();
-    match output {
-        Ok(o) => {
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            stdout
-                .lines()
-                .rev()
-                .find_map(|l| serde_json::from_str(l).ok())
-                .unwrap_or_else(
-                    || json!({ "ok": false, "error": String::from_utf8_lossy(&o.stderr).trim() }),
-                )
-        }
-        Err(e) => json!({ "ok": false, "error": e.to_string() }),
     }
 }
 
@@ -226,34 +344,32 @@ fn strip_html(html: &str) -> String {
 }
 
 /// `agent call`: one tool, mapped onto the command it already is.
-pub(super) fn agent_call(
-    name: &str,
-    font: Option<&Path>,
-    session: Option<&Path>,
-    args: &str,
-    tool: Option<&Path>,
-) -> i32 {
-    let args: serde_json::Value = match serde_json::from_str(args) {
-        Ok(v) => v,
-        Err(e) => {
-            println!(
-                "{}",
-                json!({ "ok": false, "error": format!("arguments: {e}") })
-            );
-            return exit::USAGE;
-        }
-    };
-    let result = dispatch_call(name, font, session, &args, tool);
-    let ok = result.get("ok").and_then(|v| v.as_bool()).unwrap_or(true);
-    println!(
-        "{}",
-        json!(agent::ToolResult {
-            name: name.to_string(),
-            ok,
-            result
-        })
+///
+/// Arguments that cannot be read are a usage error; a tool result that is not ok is a failure.
+fn agent_call(call: &AgentCallArgs) -> CommandResult {
+    let input = match &call.args_file {
+        Some(path) if path.as_os_str() == "-" => std::io::read_to_string(std::io::stdin()),
+        Some(path) => std::fs::read_to_string(path),
+        None => Ok(call.args.clone()),
+    }
+    .map_err(CliError::usage)?;
+    let args: serde_json::Value = serde_json::from_str(&input)
+        .map_err(|error| CliError::usage(format!("arguments: {error}")))?;
+    let name = &call.name;
+    let result = dispatch_call(
+        name,
+        call.font.as_deref(),
+        call.session.as_deref(),
+        &args,
+        call.tool.as_deref(),
     );
-    if ok { exit::OK } else { exit::FAILED }
+    let ok = result.get("ok").and_then(|v| v.as_bool()).unwrap_or(true);
+    let value = json!(agent::ToolResult {
+        name: name.to_string(),
+        ok,
+        result
+    });
+    Ok(CommandOutput::json(value).with_code(if ok { exit::OK } else { exit::FAILED }))
 }
 
 /// Selects the explicitly requested transport; a failed live connection never uses disk.
@@ -341,27 +457,25 @@ fn agent_call_value(
 
 fn agent_call_source(
     name: &str,
-    _font: &Path,
+    font: &Path,
     source: &Path,
     args: &serde_json::Value,
     tool: Option<&Path>,
 ) -> serde_json::Value {
-    let src = source.display().to_string();
     let glyphs = agent::glyph_list(args);
+    let glyphs = (!glyphs.is_empty()).then_some(glyphs);
     let text = |key: &str| args.get(key).and_then(|v| v.as_str()).map(str::to_string);
     match name {
-        "font_info" => self_json(&["--json".into(), "info".into(), src]),
+        "font_info" => document(info(&InfoArgs {
+            source: source.to_owned(),
+            glyphs: false,
+        })),
         "read_glyph" => match text("glyph") {
             Some(g) => read_glyph(source, &g, args.get("layer").and_then(|v| v.as_str())),
             None => json!({ "ok": false, "error": "glyph is required" }),
         },
         "analyze_glyph" => match text("glyph") {
-            Some(g) => analyze_glyph(
-                _font,
-                source,
-                &g,
-                args.get("layer").and_then(|v| v.as_str()),
-            ),
+            Some(g) => analyze_glyph(font, source, &g, args.get("layer").and_then(|v| v.as_str())),
             None => json!({ "ok": false, "error": "glyph is required" }),
         },
         "proof" => {
@@ -373,24 +487,15 @@ fn agent_call_source(
                     .unwrap_or_default()
                     .as_nanos()
             ));
-            let mut a = vec![
-                "--json".to_string(),
-                "proof".into(),
-                src,
-                "--out".into(),
-                out.display().to_string(),
-            ];
-            if !glyphs.is_empty() {
-                a.push("--glyphs".into());
-                a.push(glyphs.join(","));
-            }
-            if let Some(layer) = text("layer") {
-                a.extend(["--layer".into(), layer]);
-            }
-            let mut result = self_json(&a);
+            let mut result = document(proof(&ProofArgs {
+                source: source.to_owned(),
+                out: Some(out.clone()),
+                glyphs,
+                columns: PROOF_COLUMNS,
+                layer: text("layer"),
+            }));
             if result["ok"] == true
-                && let Some(path) = result["svg"].as_str()
-                && let Ok(svg) = std::fs::read_to_string(path)
+                && let Ok(svg) = std::fs::read_to_string(&out)
             {
                 result["svg_content"] = json!(svg);
             }
@@ -421,26 +526,17 @@ fn agent_call_source(
                     .find(|(n, _)| *n == model)
                     .map(|(_, p)| p)
                     .unwrap_or_else(|| PathBuf::from(&model));
-                let mut a = vec![
-                    "--json".to_string(),
-                    "propose".into(),
+                let mut v = document(propose(&ProposeArgs {
                     task,
-                    src,
-                    "--model".into(),
-                    model_dir.display().to_string(),
-                ];
-                if !glyphs.is_empty() {
-                    a.push("--glyphs".into());
-                    a.push(glyphs.join(","));
-                }
-                if let Some(t) = tool {
-                    a.push("--tool".into());
-                    a.push(t.display().to_string());
-                }
+                    source: source.to_owned(),
+                    model: Some(model_dir),
+                    glyphs,
+                    tool: tool.map(Path::to_path_buf),
+                    rest: Vec::new(),
+                }));
                 // The per-point deltas are for a tool, not a model
                 // reading prose; without them the result is a few
                 // hundred characters instead of thousands.
-                let mut v = self_json(&a);
                 if let Some(rows) = v
                     .get_mut("report")
                     .and_then(|r| r.get_mut("glyphs"))
@@ -460,38 +556,31 @@ fn agent_call_source(
             _ => json!({ "ok": false, "error": "task and model are required" }),
         },
         "graph_run" => match text("file") {
-            Some(file) => {
-                let mut a = vec![
-                    "--json".to_string(),
-                    "graph".into(),
-                    "run".into(),
-                    file,
-                    "--font".into(),
-                    source.display().to_string(),
-                    "--proposal-only".into(),
-                ];
-                if !glyphs.is_empty() {
-                    a.push("--glyphs".into());
-                    a.push(glyphs.join(","));
-                }
-                if let Some(t) = tool {
-                    a.push("--tool".into());
-                    a.push(t.display().to_string());
-                }
-                self_json(&a)
-            }
+            // Progress has no reader here; the result holds every node.
+            Some(file) => document(graph_run(
+                &GraphRunArgs {
+                    file: file.into(),
+                    font: source.to_owned(),
+                    master: None,
+                    glyphs,
+                    tool: tool.map(Path::to_path_buf),
+                    models: None,
+                    force: false,
+                    no_cache: false,
+                    proposal_only: true,
+                },
+                &mut |_| {},
+            )),
             None => json!({ "ok": false, "error": "file is required" }),
         },
-        "proposal_list" => self_json(&["--json".into(), "proposal".into(), "list".into(), src]),
+        "proposal_list" => document(proposal_list(&ProposalListArgs {
+            source: source.to_owned(),
+        })),
         "proposal_discard" => match text("task") {
-            Some(task) => self_json(&[
-                "--json".into(),
-                "proposal".into(),
-                "discard".into(),
-                src,
-                "--task".into(),
+            Some(task) => document(proposal_discard(&ProposalDiscardArgs {
+                source: source.to_owned(),
                 task,
-            ]),
+            })),
             None => json!({ "ok": false, "error": "task is required" }),
         },
         other => json!({ "ok": false, "error": format!("no tool named {other}") }),

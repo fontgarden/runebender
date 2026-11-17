@@ -4,25 +4,46 @@
 //! Outline analysis and metaball conversion commands.
 
 use super::*;
+use runebender::outline::embolden;
+
+/// Arguments of `bolden`.
+#[derive(clap::Args)]
+pub(in crate::application::cli) struct BoldenArgs {
+    /// The lighter master.
+    #[arg(long)]
+    from: PathBuf,
+    /// The heavier master, part-drawn.
+    #[arg(long)]
+    to: PathBuf,
+    /// Glyphs to learn from. Defaults to n,o,H,O.
+    #[arg(long, value_delimiter = ',')]
+    references: Option<Vec<String>>,
+    /// Glyphs to report on. Defaults to every one still identical
+    /// in both masters, which is the work not yet done.
+    #[arg(long, value_delimiter = ',')]
+    glyphs: Option<Vec<String>>,
+    /// Stop after this many.
+    #[arg(long, default_value = "40")]
+    limit: usize,
+    /// Score the learned offset against glyphs drawn in both
+    /// masters instead of listing what is undrawn.
+    #[arg(long)]
+    check: bool,
+}
 
 /// What the reference glyphs say the heavier master should do.
 ///
 /// Reports rather than writes. Seeing the offset and the list first is
 /// the difference between a tool you can trust with a font and one you
 /// run once and then undo.
-pub(in crate::application::cli) fn bolden(
-    from: &Path,
-    to: &Path,
-    references: Option<&[String]>,
-    glyphs: Option<&[String]>,
-    limit: usize,
-    check: bool,
-    json: bool,
-) -> i32 {
-    let (light, heavy) = match (open_project(from, json), open_project(to, json)) {
-        (Ok(a), Ok(b)) => (a, b),
-        (Err(code), _) | (_, Err(code)) => return code,
-    };
+pub(in crate::application::cli) fn bolden(args: &BoldenArgs) -> CommandResult {
+    let (references, glyphs, limit) = (
+        args.references.as_deref(),
+        args.glyphs.as_deref(),
+        args.limit,
+    );
+    let light = open_project(&args.from)?;
+    let heavy = open_project(&args.to)?;
     let light_source = light.source_id(0).expect("one source");
     let heavy_source = heavy.source_id(0).expect("one source");
     let light_layer = light.document_source(light_source).unwrap().default_layer();
@@ -44,13 +65,11 @@ pub(in crate::application::cli) fn bolden(
         })
         .collect();
     let Some(offset) = embolden::learn_layer_offset(&pairs) else {
-        return fail(
-            json,
-            exit::USAGE,
+        return Err(CliError::usage(
             "no reference glyph is drawn and compatible in both masters",
-        );
+        ));
     };
-    if check {
+    if args.check {
         return bolden_check(
             &light,
             &heavy,
@@ -59,7 +78,6 @@ pub(in crate::application::cli) fn bolden(
             offset,
             glyphs,
             limit,
-            json,
         );
     }
     // What is left to do: glyphs whose heavier master still matches
@@ -101,36 +119,35 @@ pub(in crate::application::cli) fn bolden(
         let points = original.len();
         rows.push((name.clone(), moved, points));
     }
-    if json {
-        println!(
-            "{}",
-            json!({
-                "ok": true,
-                "offset": { "x": offset.x, "y": offset.y },
-                "references": refs,
-                "pending": todo.len(),
-                "glyphs": rows.iter().map(|(n, m, p)| json!({
-                    "glyph": n, "pointsMoved": m, "points": p,
-                })).collect::<Vec<_>>(),
-            })
-        );
-    } else {
-        println!(
-            "learned from {} reference glyphs: push out {:.1} horizontally, \
-             {:.1} vertically",
-            pairs.len(),
-            offset.x,
-            offset.y
-        );
-        println!("{} glyphs still undrawn in the heavier master", todo.len());
-        for (name, moved, points) in &rows {
-            println!("  {name:<22} {moved}/{points} points would move");
-        }
-        if todo.len() > rows.len() {
-            println!("  ... and {} more", todo.len() - rows.len());
-        }
+    let mut text = String::new();
+    push_line!(
+        text,
+        "learned from {} reference glyphs: push out {:.1} horizontally, {:.1} vertically",
+        pairs.len(),
+        offset.x,
+        offset.y
+    );
+    push_line!(
+        text,
+        "{} glyphs still undrawn in the heavier master",
+        todo.len()
+    );
+    for (name, moved, points) in &rows {
+        push_line!(text, "  {name:<22} {moved}/{points} points would move");
     }
-    exit::OK
+    if todo.len() > rows.len() {
+        push_line!(text, "  ... and {} more", todo.len() - rows.len());
+    }
+    let value = json!({
+        "ok": true,
+        "offset": { "x": offset.x, "y": offset.y },
+        "references": refs,
+        "pending": todo.len(),
+        "glyphs": rows.iter().map(|(n, m, p)| json!({
+            "glyph": n, "pointsMoved": m, "points": p,
+        })).collect::<Vec<_>>(),
+    });
+    Ok(CommandOutput::new(value, text))
 }
 
 /// Score the learned offset where the answer is already known.
@@ -147,8 +164,7 @@ fn bolden_check(
     offset: embolden::Offset,
     glyphs: Option<&[String]>,
     limit: usize,
-    json: bool,
-) -> i32 {
+) -> CommandResult {
     let names: Vec<String> = match glyphs {
         Some(list) => list.to_vec(),
         None => light
@@ -203,7 +219,7 @@ fn bolden_check(
         rows.push((name.clone(), err, a, b));
     }
     if rows.is_empty() || n == 0 {
-        return fail(json, exit::FAILED, "no glyph is drawn in both masters");
+        return Err(CliError::failed("no glyph is drawn in both masters"));
     }
     let (mx, my) = (sum_dx / n as f64, sum_dy / n as f64);
     let mut offset_total = 0.0;
@@ -225,27 +241,21 @@ fn bolden_check(
         per.push(json!({ "glyph": name, "offset": err, "baseline": base }));
     }
     let count = rows.len() as f64;
-    if json {
-        println!(
-            "{}",
-            json!({
-                "ok": true, "glyphs": rows.len(),
-                "offset_mae": offset_total / count,
-                "baseline_mae": base_total / count,
-                "beats_baseline": wins,
-                "per_glyph": per,
-            })
-        );
-    } else {
-        println!(
-            "{} glyphs drawn in both: offset {:.1}, baseline {:.1}, \
-             offset wins on {wins}",
+    Ok(CommandOutput::new(
+        json!({
+            "ok": true, "glyphs": rows.len(),
+            "offset_mae": offset_total / count,
+            "baseline_mae": base_total / count,
+            "beats_baseline": wins,
+            "per_glyph": per,
+        }),
+        format!(
+            "{} glyphs drawn in both: offset {:.1}, baseline {:.1}, offset wins on {wins}\n",
             rows.len(),
             offset_total / count,
             base_total / count
-        );
-    }
-    exit::OK
+        ),
+    ))
 }
 
 fn canonical_outline(
@@ -309,25 +319,34 @@ fn emboldened_layer_points(
         .collect()
 }
 
-pub(in crate::application::cli) fn collapse_metaballs(
-    source: &Path,
-    out: &Path,
+/// Arguments of `collapse-metaballs`.
+#[derive(clap::Args)]
+pub(in crate::application::cli) struct CollapseMetaballsArgs {
+    /// Input UFO; never modified.
+    source: PathBuf,
+    /// New output UFO directory. Must not already exist.
+    #[arg(long)]
+    out: PathBuf,
+    /// Sampling grid spacing in font units; smaller captures finer details.
+    #[arg(long, default_value = "2")]
     resolution: f64,
+    /// Cubic fitting accuracy relative to the sampled boundary, in font units.
+    #[arg(long, default_value = "0.25")]
     accuracy: f64,
-    json: bool,
-) -> i32 {
+}
+
+/// Convert every metaball group in a single source and save the result as a new UFO.
+pub(in crate::application::cli) fn collapse_metaballs(
+    args: &CollapseMetaballsArgs,
+) -> CommandResult {
     use runebender::outline::metaballs::OutlineOptions;
+    let out = &args.out;
     if out.exists() {
-        return fail(
-            json,
-            exit::USAGE,
+        return Err(CliError::usage(
             "output already exists; choose a new UFO path",
-        );
+        ));
     }
-    let mut project = match open_project(source, json) {
-        Ok(project) => project,
-        Err(code) => return code,
-    };
+    let mut project = open_project(&args.source)?;
     let source_id = project.source_id(0).expect("one source");
     let layer = project
         .document_source(source_id)
@@ -343,37 +362,30 @@ pub(in crate::application::cli) fn collapse_metaballs(
         let Ok(mut transaction) = project.begin_document_layer_transaction(&address) else {
             continue;
         };
-        let converted = match transaction.draft_mut().collapse_metaballs(
-            None,
-            OutlineOptions {
-                resolution,
-                accuracy,
-            },
-        ) {
-            Ok(converted) => converted,
-            Err(error) => return fail(json, exit::FAILED, &error),
-        };
+        let converted = transaction
+            .draft_mut()
+            .collapse_metaballs(
+                None,
+                OutlineOptions {
+                    resolution: args.resolution,
+                    accuracy: args.accuracy,
+                },
+            )
+            .map_err(CliError::failed)?;
         if converted == 0 {
             continue;
         }
-        if let Err(error) = project.commit_document_layer_transaction(transaction) {
-            return fail(json, exit::FAILED, &error.to_string());
-        }
+        project
+            .commit_document_layer_transaction(transaction)
+            .map_err(CliError::failed)?;
         count += converted;
     }
-    if let Err(error) = project.save_as(out) {
-        return fail(json, exit::FAILED, &error);
-    }
-    if json {
-        println!(
-            "{}",
-            json!({"ok": true, "groups_converted": count, "output": out})
-        );
-    } else {
-        println!(
-            "Converted {count} metaball groups to cubic outlines in {}",
+    project.save_as(out).map_err(CliError::failed)?;
+    Ok(CommandOutput::new(
+        json!({"ok": true, "groups_converted": count, "output": out}),
+        format!(
+            "Converted {count} metaball groups to cubic outlines in {}\n",
             out.display()
-        );
-    }
-    exit::OK
+        ),
+    ))
 }

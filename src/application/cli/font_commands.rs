@@ -1,7 +1,7 @@
 // Copyright 2026 the Runebender Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Shared project loading for focused headless font commands.
+//! Headless font commands and the project loading they share.
 
 use super::*;
 
@@ -10,57 +10,82 @@ mod inspection;
 mod outlines;
 mod proposals;
 
-pub(super) use features::{compose_cmd, features_cmd};
-pub(super) use inspection::{info, proof, proof_content};
-pub(super) use outlines::{bolden, collapse_metaballs};
+pub(super) use features::{ComposeArgs, FeaturesArgs, compose, features};
+pub(super) use inspection::{InfoArgs, PROOF_COLUMNS, ProofArgs, info, proof, proof_content};
+pub(super) use outlines::{BoldenArgs, CollapseMetaballsArgs, bolden, collapse_metaballs};
 pub(super) use proposals::{
-    find_font_ml, proposal_discard, proposal_install, proposal_list, propose,
+    ProposalAction, ProposalDiscardArgs, ProposalListArgs, ProposeArgs, find_font_ml,
+    proposal_command, proposal_discard, proposal_list, propose,
 };
 
+/// Arguments of `compile`.
+#[derive(clap::Args)]
+pub(in crate::application::cli) struct CompileArgs {
+    /// Editable source to read without modifying it.
+    source: PathBuf,
+    /// New TTF file to write.
+    #[arg(long)]
+    out: PathBuf,
+}
+
 /// Compile a single-source or variable project without overwriting an existing output.
-pub(super) fn compile_cmd(source: &Path, out: &Path, json: bool) -> i32 {
-    let result = (|| -> Result<usize, String> {
-        use std::io::Write as _;
-        let project = Project::load(source)?;
-        let compiled = project.compile()?;
-        let mut file = std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(out)
-            .map_err(|error| error.to_string())?;
-        file.write_all(&compiled.bytes)
-            .map_err(|error| error.to_string())?;
-        Ok(compiled.bytes.len())
-    })();
-    match result {
-        Ok(bytes) => {
-            if json {
-                println!("{}", json!({"ok":true,"output":out,"bytes":bytes}));
-            } else {
-                println!("Compiled {} ({bytes} bytes)", out.display());
-            }
-            exit::OK
-        }
-        Err(error) => fail(json, exit::USAGE, &error),
-    }
+///
+/// A source that does not load and an output that cannot be created are usage errors.
+/// A source that loads and does not compile is a failure.
+pub(in crate::application::cli) fn compile(args: &CompileArgs) -> CommandResult {
+    use std::io::Write as _;
+    let project = Project::load(&args.source).map_err(CliError::usage)?;
+    let compiled = project.compile().map_err(CliError::failed)?;
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&args.out)
+        .map_err(CliError::usage)?;
+    file.write_all(&compiled.bytes).map_err(CliError::failed)?;
+    let bytes = compiled.bytes.len();
+    Ok(CommandOutput::new(
+        json!({"ok":true,"output":args.out,"bytes":bytes}),
+        format!("Compiled {} ({bytes} bytes)\n", args.out.display()),
+    ))
 }
 
 /// Load one canonical source for a headless command.
-fn open_project(path: &Path, json: bool) -> Result<Project, i32> {
+fn open_project(path: &Path) -> Result<Project, CliError> {
     let project = Project::load(path)
-        .map_err(|error| fail(json, exit::USAGE, &format!("{}: {error}", path.display())))?;
+        .map_err(|error| CliError::usage(format!("{}: {error}", path.display())))?;
     if project.document_sources().count() != 1 {
-        return Err(fail(
-            json,
-            exit::USAGE,
+        return Err(CliError::usage(
             "this command requires a single source; open the variable project in the editor",
         ));
     }
     Ok(project)
 }
 
+/// Load a project that must hold exactly one source, and return that source.
+///
+/// `command` names the command in the message for a variable project.
+fn open_single_source(
+    path: &Path,
+    command: &str,
+) -> Result<(Project, runebender::font::variable::SourceId), CliError> {
+    let project = Project::load(path)
+        .map_err(|error| CliError::usage(format!("{}: {error}", path.display())))?;
+    let mut sources = project.document_sources();
+    let selected = sources
+        .next()
+        .ok_or_else(|| CliError::usage("the font has no source"))?
+        .id();
+    if sources.next().is_some() {
+        return Err(CliError::usage(format!(
+            "{command} requires one UFO source, not a variable project"
+        )));
+    }
+    drop(sources);
+    Ok((project, selected))
+}
+
 /// Save a canonical Project, reporting a write failure as such.
-fn save_project(project: &mut Project, json: bool) -> Result<(), i32> {
+fn save_project(project: &mut Project) -> Result<(), CliError> {
     let path = project
         .document_sources()
         .next()
@@ -68,7 +93,7 @@ fn save_project(project: &mut Project, json: bool) -> Result<(), i32> {
         .unwrap_or_default();
     project
         .save()
-        .map_err(|error| fail(json, exit::FAILED, &format!("{}: {error}", path.display())))
+        .map_err(|error| CliError::failed(format!("{}: {error}", path.display())))
 }
 
 fn codepoints(codepoints: impl Iterator<Item = char>) -> Vec<String> {
