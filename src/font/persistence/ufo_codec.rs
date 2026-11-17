@@ -131,10 +131,10 @@ pub(in crate::font) fn decode_sources<'a>(
                             .clone(),
                     );
                 }
-                if data.font.glyphs.get(name).is_none() {
-                    data.font.glyphs.0.push(babelfont::Glyph::new(name));
+                if data.geometry(name).is_none() {
+                    data.push_geometry(babelfont::Glyph::new(name));
                 }
-                let target = data.font.glyphs.get_mut(name).expect("inserted glyph");
+                let target = data.geometry_mut(name).expect("inserted glyph");
                 target.layers.push(geometry);
                 target.codepoints = payload.codepoints.iter().map(u32::from).collect();
             }
@@ -185,9 +185,7 @@ pub(crate) fn encode_source(data: &VariableData, source: SourceId) -> Option<nor
                     .get_mut(&id.name)
                     .expect("every stored layer has persistence metadata")
                     .insert_glyph(font_babelfont::project_layer(
-                        data.font
-                            .glyphs
-                            .get(name)?
+                        data.geometry(name)?
                             .get_layer(&font_babelfont::layer_key(id))?,
                         preserved,
                     ));
@@ -216,9 +214,7 @@ pub(crate) fn encode_source(data: &VariableData, source: SourceId) -> Option<nor
 pub(crate) fn encode_layer(data: &VariableData, name: &str, id: &LayerId) -> Option<norad::Glyph> {
     let preserved = data.glyphs.get(name)?.layers.get(id)?;
     let layer = data
-        .font
-        .glyphs
-        .get(name)?
+        .geometry(name)?
         .get_layer(&font_babelfont::layer_key(id))?;
     Some(font_babelfont::project_layer(layer, preserved))
 }

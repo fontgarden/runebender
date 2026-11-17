@@ -249,9 +249,7 @@ impl VariableData {
     ) -> Result<Option<CanonicalLayerSnapshot>, String> {
         let glyph = self.glyphs.get(&address.glyph).ok_or("missing glyph")?;
         let geometry = self
-            .font
-            .glyphs
-            .get(&address.glyph)
+            .geometry(&address.glyph)
             .ok_or("missing glyph geometry")?;
         let preserved = glyph.layers.contains_key(&address.layer);
         if preserved != geometry.get_layer(&layer_key(&address.layer)).is_some() {
@@ -268,11 +266,7 @@ impl VariableData {
         reads: Vec<CanonicalLayerSnapshot>,
         writes: Vec<BackgroundLayerEdit>,
     ) -> Result<BackgroundEdit, String> {
-        let geometry = self
-            .font
-            .glyphs
-            .get(glyph)
-            .ok_or("missing glyph geometry")?;
+        let geometry = self.geometry(glyph).ok_or("missing glyph geometry")?;
         let before_order: Vec<_> = geometry
             .layers
             .iter()
@@ -318,9 +312,7 @@ impl VariableData {
             return Err("background glyph identity changed".into());
         }
         let geometry = self
-            .font
-            .glyphs
-            .get(&edit.glyph)
+            .geometry(&edit.glyph)
             .ok_or("background glyph geometry disappeared")?;
         let order = if forward {
             &edit.before_order
@@ -394,14 +386,13 @@ impl VariableData {
         } else {
             &edit.before_order
         };
+        let position = self.geometry_position(&edit.glyph);
         let glyph = self
             .glyphs
             .get_mut(&edit.glyph)
             .expect("validated background glyph");
-        let geometry = self
-            .font
-            .glyphs
-            .get_mut(&edit.glyph)
+        let geometry = position
+            .and_then(|index| self.font.glyphs.0.get_mut(index))
             .expect("validated background geometry");
         for write in &edit.writes {
             let replacement = if forward { &write.after } else { &write.before };

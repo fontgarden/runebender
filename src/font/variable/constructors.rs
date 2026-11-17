@@ -70,7 +70,7 @@ impl VariableData {
             geometry.layers.push(layer);
             geometry.codepoints = glyph.codepoint.into_iter().map(u32::from).collect();
             data.glyphs.insert(glyph.name, variable);
-            data.font.glyphs.0.push(geometry);
+            data.push_geometry(geometry);
         }
 
         // Source-format preservation is created only after canonical state.

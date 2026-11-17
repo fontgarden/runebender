@@ -302,12 +302,64 @@ pub(crate) struct VariableData {
     pub(super) revision: u64,
     pub(super) compiled: std::sync::Mutex<super::compiler::CompileCache>,
     pub(super) glyphs: BTreeMap<String, VariableGlyph>,
+    /// Position of each glyph in `font.glyphs`, which is a plain list that finds a name by
+    /// scanning. Kept current by [`Self::push_geometry`] and [`Self::reindex_geometry`].
+    geometry_index: std::collections::HashMap<String, usize>,
     pub(super) source_formats:
         BTreeMap<SourceId, super::persistence::source_format::SourceFormatData>,
     pub(super) source_metadata: BTreeMap<SourceId, SourceMetadata>,
     designspace: Option<super::model::designspace::CanonicalDesignspace>,
     pub(super) source_ids: Vec<SourceId>,
     pub(super) next_source: usize,
+}
+
+impl VariableData {
+    /// Where `name` is in `font.glyphs`.
+    ///
+    /// The index is trusted only when it points at a glyph with that name.
+    /// A list changed without [`Self::reindex_geometry`] is still read correctly, by scanning.
+    pub(super) fn geometry_position(&self, name: &str) -> Option<usize> {
+        let glyphs = &self.font.glyphs.0;
+        match self.geometry_index.get(name) {
+            Some(&index) if glyphs.get(index).is_some_and(|glyph| glyph.name == name) => {
+                Some(index)
+            }
+            None if self.geometry_index.len() == glyphs.len() => None,
+            _ => glyphs.iter().position(|glyph| glyph.name == name),
+        }
+    }
+
+    /// One glyph's Babelfont geometry, found without scanning the glyph list.
+    pub(super) fn geometry(&self, name: &str) -> Option<&babelfont::Glyph> {
+        self.geometry_position(name)
+            .and_then(|index| self.font.glyphs.0.get(index))
+    }
+
+    /// One glyph's Babelfont geometry for editing its layers.
+    /// Do not rename the glyph through this reference.
+    pub(super) fn geometry_mut(&mut self, name: &str) -> Option<&mut babelfont::Glyph> {
+        self.geometry_position(name)
+            .and_then(|index| self.font.glyphs.0.get_mut(index))
+    }
+
+    /// Append a glyph's geometry and index it.
+    pub(super) fn push_geometry(&mut self, glyph: babelfont::Glyph) {
+        self.geometry_index
+            .insert(glyph.name.to_string(), self.font.glyphs.0.len());
+        self.font.glyphs.0.push(glyph);
+    }
+
+    /// Rebuild the name index after glyphs were removed, reordered or replaced.
+    pub(super) fn reindex_geometry(&mut self) {
+        self.geometry_index = self
+            .font
+            .glyphs
+            .0
+            .iter()
+            .enumerate()
+            .map(|(index, glyph)| (glyph.name.to_string(), index))
+            .collect();
+    }
 }
 
 impl Clone for VariableData {
@@ -317,6 +369,7 @@ impl Clone for VariableData {
             revision: self.revision,
             compiled: std::sync::Mutex::default(),
             glyphs: self.glyphs.clone(),
+            geometry_index: self.geometry_index.clone(),
             source_formats: self.source_formats.clone(),
             source_metadata: self.source_metadata.clone(),
             designspace: self.designspace.clone(),
@@ -431,6 +484,7 @@ impl VariableData {
             .max()
             .unwrap_or(0);
         self.font.glyphs = replacement.glyph_geometry;
+        self.reindex_geometry();
         self.glyphs = replacement.glyphs;
         self.source_formats = replacement.source_formats;
         self.source_metadata = replacement.source_metadata;
@@ -482,9 +536,7 @@ impl VariableData {
     ) -> Option<super::babelfont::LayerView<'_>> {
         let preserved = self.glyphs.get(name)?.layers.get(id)?;
         let layer = self
-            .font
-            .glyphs
-            .get(name)?
+            .geometry(name)?
             .get_layer(&super::babelfont::layer_key(id))?;
         Some(super::babelfont::LayerView::new(layer, preserved))
     }
@@ -496,9 +548,7 @@ impl VariableData {
     ) -> Option<super::LayerEditDraft> {
         let preserved = self.glyphs.get(name)?.layers.get(id)?.clone();
         let layer = self
-            .font
-            .glyphs
-            .get(name)?
+            .geometry(name)?
             .get_layer(&super::babelfont::layer_key(id))?
             .clone();
         Some(super::LayerEditDraft::new(layer, preserved))
@@ -515,9 +565,7 @@ impl VariableData {
             .get(&address.layer)?
             .clone();
         let layer = self
-            .font
-            .glyphs
-            .get(&address.glyph)?
+            .geometry(&address.glyph)?
             .get_layer(&super::babelfont::layer_key(&address.layer))?
             .clone();
         Some(super::CanonicalLayerSnapshot::new(
@@ -538,9 +586,7 @@ impl VariableData {
             .layers
             .get(&address.layer)?;
         let layer = self
-            .font
-            .glyphs
-            .get(&address.glyph)?
+            .geometry(&address.glyph)?
             .get_layer(&super::babelfont::layer_key(&address.layer))?;
         Some(expected.matches_layer(layer, preserved))
     }
@@ -655,14 +701,13 @@ impl VariableData {
         draft: super::LayerEditDraft,
     ) -> Option<super::babelfont::LayerDelta> {
         let key = super::babelfont::layer_key(id);
+        let position = self.geometry_position(name);
         let preserved = self
             .glyphs
             .get_mut(name)
             .and_then(|glyph| glyph.layers.get_mut(id))?;
-        let layer = self
-            .font
-            .glyphs
-            .get_mut(name)
+        let layer = position
+            .and_then(|index| self.font.glyphs.0.get_mut(index))
             .and_then(|glyph| glyph.get_layer_mut(&key))?;
         let delta = draft.delta_from(layer, preserved);
         if delta.is_empty() {
@@ -692,9 +737,7 @@ impl VariableData {
                     .layers
                     .get(&address.layer)?;
                 let layer = self
-                    .font
-                    .glyphs
-                    .get(&address.glyph)?
+                    .geometry(&address.glyph)?
                     .get_layer(&super::babelfont::layer_key(&address.layer))?;
                 Some(draft.delta_from(layer, preserved))
             })
@@ -708,9 +751,7 @@ impl VariableData {
                 }
                 let (layer, preserved) = draft.into_parts();
                 *self
-                    .font
-                    .glyphs
-                    .get_mut(&address.glyph)
+                    .geometry_mut(&address.glyph)
                     .expect("validated glyph geometry")
                     .get_layer_mut(&super::babelfont::layer_key(&address.layer))
                     .expect("validated glyph layer geometry") = layer;
@@ -743,9 +784,7 @@ impl VariableData {
             .get(name)
             .and_then(|glyph| glyph.layers.get(from))
             .zip(
-                self.font
-                    .glyphs
-                    .get(name)
+                self.geometry(name)
                     .and_then(|glyph| glyph.get_layer(&super::babelfont::layer_key(from))),
             )
             .map(|(preserved, layer)| super::babelfont::copy_layer(layer, preserved, to))
@@ -757,9 +796,7 @@ impl VariableData {
             .expect("source layer retains its glyph")
             .layers
             .insert(to.clone(), preserved);
-        self.font
-            .glyphs
-            .get_mut(name)
+        self.geometry_mut(name)
             .expect("source layer retains its geometry")
             .layers
             .push(layer);
@@ -773,20 +810,17 @@ impl VariableData {
         };
         if !glyph.layers.contains_key(id)
             || self
-                .font
-                .glyphs
-                .get(name)
+                .geometry(name)
                 .and_then(|glyph| glyph.get_layer(&key))
                 .is_none()
         {
             return false;
         }
+        let position = self.geometry_position(name);
         let glyph = self.glyphs.get_mut(name).expect("validated glyph");
         glyph.layers.remove(id);
-        let geometry = self
-            .font
-            .glyphs
-            .get_mut(name)
+        let geometry = position
+            .and_then(|index| self.font.glyphs.0.get_mut(index))
             .expect("preserved layer retains its geometry");
         geometry
             .layers
@@ -794,6 +828,7 @@ impl VariableData {
         if glyph.layers.is_empty() {
             self.glyphs.remove(name);
             self.font.glyphs.0.retain(|glyph| glyph.name != name);
+            self.reindex_geometry();
         }
         true
     }
