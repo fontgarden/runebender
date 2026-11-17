@@ -106,6 +106,9 @@ unicode-bidi = { version = "0.3.18", default-features = false, features = ["hard
 fea-rs = "=1.0.0"
 harfrust = "0.5"
 write-fonts = "0.52"
+# TODO: open a pull request on linebender/spline that updates it to the current kurbo.
+# kurbo 0.9.5 is here only because spline, which the hyperbezier code uses, depends on it.
+# Remove this line and the conversions in src/outline/path/hyper.rs when that lands.
 kurbo_09 = { package = "kurbo", version = "0.9.5" }
 spline = { git = "https://github.com/linebender/spline", rev = "83f46cbfebb1f5d6042059c867719c0010073d42" }
 copypasta = { version = "0.10.2", optional = true }
