@@ -580,26 +580,23 @@ struct OutlinePoint {
 
 fn append_document_contour(path: &mut BezPath, contour: ContourView<'_>) {
     if contour.is_hyper() {
-        let contour = crate::outline::path::hyper_model::Contour {
+        use crate::outline::path::hyper_model::{Contour, ContourPoint, PointType};
+        let closed = contour.is_closed();
+        let contour = Contour {
             points: contour
                 .points()
-                .map(|point| crate::outline::path::hyper_model::ContourPoint {
+                .enumerate()
+                .map(|(index, point)| ContourPoint {
                     x: point.position().x,
                     y: point.position().y,
                     smooth: point.is_smooth(),
                     point_type: match point.point_type() {
-                        LayerPointType::Move | LayerPointType::Curve => {
-                            crate::outline::path::hyper_model::PointType::Hyper
-                        }
-                        LayerPointType::Line => {
-                            crate::outline::path::hyper_model::PointType::HyperCorner
-                        }
-                        LayerPointType::OffCurve => {
-                            crate::outline::path::hyper_model::PointType::OffCurve
-                        }
-                        LayerPointType::QCurve => {
-                            crate::outline::path::hyper_model::PointType::QCurve
-                        }
+                        // The hyperbezier conversion reads an open contour from a leading move.
+                        _ if index == 0 && !closed => PointType::Move,
+                        LayerPointType::Move | LayerPointType::Curve => PointType::Hyper,
+                        LayerPointType::Line => PointType::HyperCorner,
+                        LayerPointType::OffCurve => PointType::OffCurve,
+                        LayerPointType::QCurve => PointType::QCurve,
                     },
                 })
                 .collect(),
@@ -1083,6 +1080,50 @@ mod canonical_render_tests {
         assert_path_and_bounds(
             &canonical_component_path(&project, "hyper.user", &id, 0),
             &expected,
+        );
+    }
+
+    #[test]
+    fn open_hyperbezier_contour_renders_open() {
+        use kurbo::ParamCurve as _;
+        let mut glyph = Glyph::new("hyper");
+        glyph.contours.push(Contour::new(
+            vec![
+                ContourPoint::new(0.0, 0.0, PointType::Move, false, None, None),
+                ContourPoint::new(100.0, 200.0, PointType::Curve, true, None, None),
+                ContourPoint::new(200.0, 0.0, PointType::Curve, true, None, None),
+                ContourPoint::new(300.0, 150.0, PointType::Line, false, None, None),
+            ],
+            Some(norad::Identifier::new("hyper-open").unwrap()),
+        ));
+        let mut font = Font::default();
+        font.default_layer_mut().insert_glyph(glyph);
+        let project = Project::from_source(SourceInput::from_font(font, "Hyper.ufo".into()))
+            .expect("valid source fixture");
+        let id = project
+            .document_source(SourceId(0))
+            .expect("default source")
+            .default_layer();
+        let canonical = project.document_layer("hyper", &id).expect("hyper layer");
+        let contour = canonical.contours().next().expect("hyper contour");
+        assert!(contour.is_hyper());
+        assert!(!contour.is_closed());
+
+        let path = ordinary_layer_contours_to_bezpath(canonical);
+        assert!(
+            !path
+                .elements()
+                .iter()
+                .any(|element| matches!(element, kurbo::PathEl::ClosePath)),
+            "an open hyperbezier contour must not close: {path:?}"
+        );
+        assert_eq!(
+            path.elements().first(),
+            Some(&kurbo::PathEl::MoveTo((0.0, 0.0).into()))
+        );
+        assert_eq!(
+            path.segments().last().map(|segment| segment.end()),
+            Some((300.0, 150.0).into())
         );
     }
 
