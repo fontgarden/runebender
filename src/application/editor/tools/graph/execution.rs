@@ -25,6 +25,7 @@ use runebender::workflows::graph_session::{
     GraphRunInspection, GraphRunOutcome, GraphRunRequest, GraphRunResponse, GraphRunStatus,
     GraphRunWork, GraphSemanticGuard, GraphSession, GraphVersionLineage,
 };
+use runebender::workflows::receipt_ledger::ReceiptLedger;
 use serde_json::Value;
 #[cfg(test)]
 use sha2::{Digest, Sha256};
@@ -194,11 +195,23 @@ struct LiveGraphRecord {
     phase: LiveGraphPhase,
 }
 
+/// Retained retry identities of submitted runs.
+const MAX_LIVE_GRAPH_REQUESTS: usize = 64;
+
 /// Bounded state connecting `GraphSession` to the shared Python and compiled-proof owners.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct LiveGraphExecution {
     records: BTreeMap<GraphRunHandle, LiveGraphRecord>,
-    requests: BTreeMap<(String, String), GraphRunHandle>,
+    requests: ReceiptLedger<(String, String), GraphRunHandle>,
+}
+
+impl Default for LiveGraphExecution {
+    fn default() -> Self {
+        Self {
+            records: BTreeMap::new(),
+            requests: ReceiptLedger::new(MAX_LIVE_GRAPH_REQUESTS),
+        }
+    }
 }
 
 impl LiveGraphExecution {
@@ -233,6 +246,25 @@ impl LiveGraphExecution {
             return Err(err(
                 LiveGraphExecutionErrorCode::Capacity,
                 "at most eight live graph runs may be retained",
+            ));
+        }
+        // A retry identity of a run in progress is kept, so its retry still replays.
+        let records = &self.records;
+        if self
+            .requests
+            .make_room(|_, handle| {
+                records.get(handle).is_none_or(|record| {
+                    matches!(
+                        record.phase,
+                        LiveGraphPhase::Terminal(_) | LiveGraphPhase::Released
+                    )
+                })
+            })
+            .is_err()
+        {
+            return Err(err(
+                LiveGraphExecutionErrorCode::Capacity,
+                "every retained graph retry belongs to an active run",
             ));
         }
         validate_submit_capture(session, project, &request)?;

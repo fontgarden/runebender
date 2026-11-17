@@ -17,6 +17,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::graph::{Link, Node, NodeGraph, NodeType, Problem, Registry};
+use super::receipt_ledger::ReceiptLedger;
 
 /// Schema version for the live graph session API.
 pub const GRAPH_SESSION_SCHEMA_VERSION: u32 = 1;
@@ -497,7 +498,7 @@ pub enum GraphSessionErrorCode {
     StaleSemantics,
     /// An operation key was reused with another payload.
     PayloadMismatch,
-    /// A bounded non-evicting receipt ledger is full.
+    /// A bounded receipt ledger is full and every retained entry is still active.
     ReceiptLimit,
     /// A patch edit could not be resolved.
     InvalidEdit,
@@ -810,6 +811,16 @@ pub enum GraphRunStatus {
     Released,
 }
 
+impl GraphRunStatus {
+    /// Whether the run is queued or running, including a pending cancellation.
+    pub fn is_active(self) -> bool {
+        matches!(
+            self,
+            Self::Queued | Self::Running | Self::CancellationRequested
+        )
+    }
+}
+
 /// Honest proof lineage while compiled-family overlay integration remains separate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -1049,11 +1060,11 @@ pub struct GraphSession {
     semantic_hash: String,
     undo: Vec<NodeGraph>,
     redo: Vec<NodeGraph>,
-    graph_receipts: BTreeMap<(String, String), StoredGraphReceipt>,
+    graph_receipts: ReceiptLedger<(String, String), StoredGraphReceipt>,
     next_run: u64,
     runs: BTreeMap<GraphRunHandle, GraphRunRecord>,
-    run_receipts: BTreeMap<(String, String), StoredRunReceipt>,
-    cancel_receipts: BTreeMap<(String, String), StoredCancelReceipt>,
+    run_receipts: ReceiptLedger<(String, String), StoredRunReceipt>,
+    cancel_receipts: ReceiptLedger<(String, String), StoredCancelReceipt>,
 }
 
 impl GraphSession {
@@ -1080,11 +1091,11 @@ impl GraphSession {
             semantic_hash,
             undo: Vec::new(),
             redo: Vec::new(),
-            graph_receipts: BTreeMap::new(),
+            graph_receipts: ReceiptLedger::new(MAX_GRAPH_RECEIPTS),
             next_run: 1,
             runs: BTreeMap::new(),
-            run_receipts: BTreeMap::new(),
-            cancel_receipts: BTreeMap::new(),
+            run_receipts: ReceiptLedger::new(MAX_RUN_RECEIPTS),
+            cancel_receipts: ReceiptLedger::new(MAX_RUN_RECEIPTS),
         })
     }
 
@@ -1260,12 +1271,6 @@ impl GraphSession {
                 receipt: stored.receipt.clone(),
             });
         }
-        if self.graph_receipts.len() >= MAX_GRAPH_RECEIPTS {
-            return Err(GraphSessionError::new(
-                GraphSessionErrorCode::ReceiptLimit,
-                "graph mutation receipt limit reached for this document session",
-            ));
-        }
         let result = self.apply_mutation(&request.guard, request.mutation)?;
 
         let receipt = GraphMutationReceipt {
@@ -1276,6 +1281,7 @@ impl GraphSession {
             semantic_changed: result.semantic_changed,
             snapshot: result.snapshot,
         };
+        // A mutation receipt is finished when it is written, so a full ledger evicts its oldest.
         self.graph_receipts.insert(
             ledger_key,
             StoredGraphReceipt {
@@ -1319,10 +1325,19 @@ impl GraphSession {
                 receipt: stored.receipt.clone(),
             });
         }
-        if self.run_receipts.len() >= MAX_RUN_RECEIPTS {
+        // A receipt of a queued or running run is kept, so its retry still replays.
+        let runs = &self.runs;
+        if self
+            .run_receipts
+            .make_room(|_, stored| {
+                runs.get(&stored.receipt.handle)
+                    .is_none_or(|record| !record.status.is_active())
+            })
+            .is_err()
+        {
             return Err(GraphSessionError::new(
                 GraphSessionErrorCode::ReceiptLimit,
-                "run receipt limit reached for this document session",
+                "every retained run receipt belongs to an active run",
             ));
         }
         self.check_semantics(&request.guard)?;
@@ -1421,12 +1436,6 @@ impl GraphSession {
                 receipt: stored.receipt.clone(),
             });
         }
-        if self.cancel_receipts.len() >= MAX_RUN_RECEIPTS {
-            return Err(GraphSessionError::new(
-                GraphSessionErrorCode::ReceiptLimit,
-                "run cancellation receipt limit reached for this document session",
-            ));
-        }
         let record = self.run_mut(request.handle)?;
         let outcome = match record.status {
             GraphRunStatus::Queued => {
@@ -1449,6 +1458,7 @@ impl GraphSession {
             outcome,
             status: record.status,
         };
+        // A cancellation receipt is finished when it is written.
         self.cancel_receipts.insert(
             ledger_key,
             StoredCancelReceipt {
@@ -1662,14 +1672,7 @@ impl GraphSession {
     fn active_run_count(&self) -> usize {
         self.runs
             .values()
-            .filter(|record| {
-                matches!(
-                    record.status,
-                    GraphRunStatus::Queued
-                        | GraphRunStatus::Running
-                        | GraphRunStatus::CancellationRequested
-                )
-            })
+            .filter(|record| record.status.is_active())
             .count()
     }
 
@@ -3383,6 +3386,75 @@ mod tests {
             .unwrap();
         assert_eq!(cancelled.status, GraphRunStatus::Cancelled);
         assert!(cancelled.outputs.is_empty());
+    }
+
+    #[test]
+    fn receipt_ledgers_evict_finished_entries_past_their_capacity() {
+        let mut session = new_session();
+        let runs = MAX_RUN_RECEIPTS + 1;
+        for index in 0..runs {
+            let run = session
+                .start_run(run_request(&session, "agent", &format!("run-{index}")))
+                .unwrap();
+            assert_eq!(run.disposition, GraphReceiptDisposition::Applied);
+            let cancel = session
+                .cancel_run(GraphCancelRequest {
+                    identity: session.snapshot().identity,
+                    handle: run.receipt.handle,
+                    actor: "agent".into(),
+                    operation_key: format!("cancel-{index}"),
+                })
+                .unwrap();
+            assert_eq!(
+                cancel.receipt.outcome,
+                GraphCancelOutcome::CancelledBeforeStart
+            );
+            session
+                .mutate(mutation(
+                    &session,
+                    "agent",
+                    &format!("move-{index}"),
+                    vec![GraphEdit::MoveNode {
+                        node: 2,
+                        pos: [f32::from(u16::try_from(index).unwrap()), 32.0],
+                    }],
+                ))
+                .unwrap();
+        }
+        assert_eq!(session.run_receipts.len(), MAX_RUN_RECEIPTS);
+        assert_eq!(session.cancel_receipts.len(), MAX_RUN_RECEIPTS);
+        assert_eq!(session.graph_receipts.len(), MAX_GRAPH_RECEIPTS);
+        let newest = run_request(&session, "agent", &format!("run-{}", runs - 1));
+        assert_eq!(
+            session.start_run(newest).unwrap().disposition,
+            GraphReceiptDisposition::Replayed
+        );
+    }
+
+    #[test]
+    fn a_full_run_ledger_keeps_receipts_of_active_runs() {
+        let mut session = new_session();
+        let mut ledger = ReceiptLedger::new(MAX_ACTIVE_RUNS);
+        std::mem::swap(&mut session.run_receipts, &mut ledger);
+        for index in 0..MAX_ACTIVE_RUNS {
+            session
+                .start_run(run_request(&session, "agent", &format!("active-{index}")))
+                .unwrap();
+        }
+        assert_eq!(
+            session
+                .start_run(run_request(&session, "agent", "one-more"))
+                .unwrap_err()
+                .code,
+            GraphSessionErrorCode::ReceiptLimit
+        );
+        assert_eq!(
+            session
+                .start_run(run_request(&session, "agent", "active-0"))
+                .unwrap()
+                .disposition,
+            GraphReceiptDisposition::Replayed
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //! One live graph shared by native authoring, Python execution and agent commands.
 //! The existing disk graph workflow remains separate; these commands never save a font.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -20,6 +20,7 @@ use runebender::workflows::graph_session::{
     GraphDocumentState, GraphGuard, GraphInteractiveMutationRequest, GraphMutation, GraphRunHandle,
     GraphSession,
 };
+use runebender::workflows::receipt_ledger::{ReceiptLedger, ReceiptLedgerFull};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
@@ -31,18 +32,23 @@ use crate::application::workspace::Workspace;
 
 static NEXT_GRAPH_SESSION: AtomicU64 = AtomicU64::new(1);
 
+/// Retained transport retry responses for graph runs and delegated Apply calls.
+const MAX_RETAINED_GRAPH_REQUESTS: usize = 64;
+/// Retained retry receipts for image trace requests.
+const MAX_RETAINED_TRACE_REQUESTS: usize = 64;
+
 /// Per-document live graph, retained jobs and bounded transport retry responses.
 pub(crate) struct LiveGraphState {
     pub(crate) session: GraphSession,
     pub(crate) execution: LiveGraphExecution,
     pub(crate) proofs: NodeProofJobs,
     pub(crate) handles: BTreeSet<GraphRunHandle>,
-    pub(crate) requests: BTreeMap<(String, String), (Value, RetainedGraphResponse)>,
+    pub(crate) requests: ReceiptLedger<(String, String), (Value, RetainedGraphResponse)>,
     pub(crate) next_job: u64,
     pub(crate) file: Option<LiveGraphFileMetadata>,
     pub(crate) saved_revision: Option<u64>,
     pub(super) trace: Option<TraceSession>,
-    pub(super) trace_receipts: BTreeMap<(String, String), (String, u64)>,
+    pub(super) trace_receipts: ReceiptLedger<(String, String), (String, u64)>,
     pub(super) next_trace_id: u64,
 }
 
@@ -520,13 +526,24 @@ fn fresh_live_graph(
         execution: LiveGraphExecution::default(),
         proofs: NodeProofJobs::default(),
         handles: BTreeSet::new(),
-        requests: BTreeMap::new(),
+        requests: ReceiptLedger::new(MAX_RETAINED_GRAPH_REQUESTS),
         next_job: 0,
         saved_revision: file.as_ref().map(|_| 0),
         file,
         trace: None,
-        trace_receipts: BTreeMap::new(),
+        trace_receipts: ReceiptLedger::new(MAX_RETAINED_TRACE_REQUESTS),
         next_trace_id: 1,
+    })
+}
+
+/// Make room for one retry response, keeping the responses of queued and running runs.
+fn make_request_room(state: &mut LiveGraphState) -> Result<(), ReceiptLedgerFull> {
+    let session = &state.session;
+    state.requests.make_room(|_, (_, response)| match response {
+        RetainedGraphResponse::Run(response) => session
+            .inspect_run(response.run.receipt.handle)
+            .is_none_or(|inspection| !inspection.status.is_active()),
+        RetainedGraphResponse::Apply(_) => true,
     })
 }
 
@@ -675,8 +692,8 @@ impl Workspace {
                     replay.replayed = true;
                     return Ok(success(replay));
                 }
-                if state.requests.len() >= 64 {
-                    return Err("graph retry retention is full; open a new graph session".into());
+                if make_request_room(state).is_err() {
+                    return Err("every retained graph retry belongs to an active run".into());
                 }
                 let snapshot = state.session.snapshot();
                 if request.glyphs.is_empty()
@@ -854,8 +871,8 @@ impl Workspace {
                     replay["root_changed"] = json!(false);
                     return Ok(replay);
                 }
-                if state.requests.len() >= 64 {
-                    return Err("graph retry retention is full".into());
+                if make_request_room(state).is_err() {
+                    return Err("every retained graph retry belongs to an active run".into());
                 }
                 let inspection = state
                     .session

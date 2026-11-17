@@ -20,5 +20,7 @@ pub mod local_sketch;
 pub mod process;
 /// Runebender's own Python virtual environment, shared with tools outside the editor.
 pub mod python_environment;
+/// Bounded retry receipts that evict the oldest finished entry.
+pub mod receipt_ledger;
 /// A supervised `whisper-server` child turning speech into chat text.
 pub mod whisper_server;

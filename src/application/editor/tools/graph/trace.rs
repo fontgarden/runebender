@@ -514,8 +514,14 @@ impl Workspace {
                 let next_handle = handle
                     .checked_add(1)
                     .ok_or("trace handle space exhausted")?;
-                if state.trace_receipts.len() >= 64 {
-                    return Err("trace retry retention is full; open a new graph session".into());
+                // Only the retained trace can be active; every other receipt is finished.
+                let active = state.trace.as_ref().map(|trace| trace.handle);
+                if state
+                    .trace_receipts
+                    .make_room(|_, (_, handle)| active != Some(*handle))
+                    .is_err()
+                {
+                    return Err("every retained trace retry belongs to an active trace".into());
                 }
                 let worker_backend = match request.local_sketch {
                     Some(settings) => TraceWorkBackend::LocalSketch {
