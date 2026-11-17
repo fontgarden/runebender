@@ -745,11 +745,21 @@ impl FontModel {
             .readouts
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if let Some((at, name, users)) = &readouts.used_by
-            && *at == key
+        if let Some((at, name, users)) = &mut readouts.used_by
             && name == glyph
+            && at.1 == key.1
         {
-            return users.clone();
+            // Which glyphs place this one changes only when some glyph's components change.
+            // Layer edits that left components alone keep the answer.
+            let unchanged = *at == key
+                || self
+                    .project
+                    .layer_changes_since(at.0)
+                    .is_some_and(|changes| changes.iter().all(|change| !change.mark_inputs));
+            if unchanged {
+                *at = key;
+                return users.clone();
+            }
         }
         let users = self
             .active_layer_address(glyph)

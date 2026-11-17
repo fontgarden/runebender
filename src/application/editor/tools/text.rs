@@ -26,7 +26,7 @@ use crate::application::font_model::FontModel;
 /// both. So the view passes this, which is plain data, and the widget
 /// builds the buffer on the other side. The buffer then lives where the
 /// editing happens, which is where it wanted to live anyway.
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub(crate) struct TextInputs {
     /// Document and tab identity. A change means the widget must restore a
     /// different parked buffer instead of refreshing the current one.
@@ -56,6 +56,44 @@ pub(crate) struct TextInputs {
     feature_overrides: Vec<(String, bool)>,
     script: Option<String>,
     language: Option<String>,
+}
+
+/// Whether two shared values are the same allocation, or hold equal contents.
+/// The first check is what makes comparing unchanged inputs cheap.
+fn same<T: PartialEq>(a: &Arc<T>, b: &Arc<T>) -> bool {
+    Arc::ptr_eq(a, b) || a == b
+}
+
+impl PartialEq for TextInputs {
+    /// A widget compares its inputs on every rebuild, so the glyph inventory, kerning model
+    /// and outlines are compared by identity before by content. Unchanged inputs share them.
+    fn eq(&self, other: &Self) -> bool {
+        self.context_id == other.context_id
+            && self.normalized == other.normalized
+            && self.line_height == other.line_height
+            && self.ascender == other.ascender
+            && self.descender == other.descender
+            && self.initial == other.initial
+            && self.active_glyph == other.active_glyph
+            && self.initial_selection == other.initial_selection
+            && self.direction == other.direction
+            && self.feature_overrides == other.feature_overrides
+            && self.script == other.script
+            && self.language == other.language
+            && match (&self.compiled, &other.compiled) {
+                (Some(a), Some(b)) => same(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+            && match (&self.live_outline, &other.live_outline) {
+                (Some((a_name, a)), Some((b_name, b))) => a_name == b_name && same(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+            && same(&self.inventory, &other.inventory)
+            && same(&self.kerning, &other.kerning)
+            && same(&self.outlines, &other.outlines)
+    }
 }
 
 /// What `TextInputs::new` last read, with the document state it read it from.
