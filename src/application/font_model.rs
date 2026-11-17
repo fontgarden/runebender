@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
+use crate::application::launch_options::CompileMode;
+
 use kurbo::{BezPath, Rect};
 use runebender::analysis::category::GlyphCategory;
 use runebender::font::canonical_metadata::{CanonicalFontMetadata, KerningSide};
@@ -73,6 +75,8 @@ pub(crate) struct FontModel {
         std::sync::Mutex<Option<crate::application::editor::tools::text::CachedTextLocation>>,
     /// Inspector readouts that walk the whole font, kept until the document changes.
     readouts: std::sync::Mutex<Readouts>,
+    /// Whether [`Self::preview_font`] compiles on the calling thread or on a worker thread.
+    preview_mode: CompileMode,
 }
 
 /// The document state a readout was taken from: its revision and the active source.
@@ -200,10 +204,9 @@ impl FontModel {
     pub(crate) fn preview_font(
         &self,
     ) -> Result<Option<Arc<runebender::font::compiler::CompiledFont>>, String> {
-        if cfg!(test) || std::env::var_os("RUNEBENDER_SCREENSHOT").is_some() {
-            self.project.compiled_preview().map(Some)
-        } else {
-            self.project.request_preview()
+        match self.preview_mode {
+            CompileMode::Blocking => self.project.compiled_preview().map(Some),
+            CompileMode::Background => self.project.request_preview(),
         }
     }
     pub(crate) fn open(path: &FsPath) -> Result<Self, String> {
@@ -222,6 +225,7 @@ impl FontModel {
             text_inputs: std::sync::Mutex::new(None),
             text_location: std::sync::Mutex::new(None),
             readouts: std::sync::Mutex::new(Readouts::default()),
+            preview_mode: CompileMode::current(),
         };
         model.rebuild_cache();
         model
@@ -988,6 +992,30 @@ mod tests {
         .expect("the designspace saves");
         let model = FontModel::open(&designspace).expect("the designspace opens");
         (dir, model)
+    }
+
+    #[test]
+    fn a_background_preview_arrives_from_a_worker_thread() {
+        let (dir, mut model) = two_master_model();
+        assert_eq!(model.preview_mode, CompileMode::Blocking);
+        model.preview_mode = CompileMode::Background;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        let compiled = loop {
+            if let Some(compiled) = model.preview_font().expect("the preview compiles") {
+                break compiled;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the background preview arrives"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let blocking = model
+            .project
+            .compiled_preview()
+            .expect("the preview compiles");
+        assert!(Arc::ptr_eq(&compiled, &blocking));
+        std::fs::remove_dir_all(dir).expect("the fixture directory is removed");
     }
 
     #[test]

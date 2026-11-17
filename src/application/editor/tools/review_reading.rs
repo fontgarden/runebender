@@ -4,6 +4,7 @@
 //! Captured fonts and presentation-only controls for selectable reading proofs.
 //! Compilation owns immutable engine inputs. Neither sample edits nor proof axes mutate the font.
 
+use crate::application::launch_options::CompileMode;
 use crate::application::platform::reference_fonts::References;
 use crate::application::workspace::Workspace;
 use runebender::font::compiler::{CompiledFont, proof};
@@ -32,7 +33,16 @@ type CompileResult = Result<Arc<CompiledFont>, String>;
 #[derive(Clone, Debug)]
 pub(crate) struct CompileJob(Arc<Mutex<Option<CompileResult>>>);
 impl CompileJob {
+    /// Compile in the compile mode of this process.
     pub(crate) fn new(input: Result<proof::CompileProofInput, String>) -> Self {
+        Self::with_mode(input, CompileMode::current())
+    }
+
+    /// Compile on the calling thread or on a worker thread.
+    pub(crate) fn with_mode(
+        input: Result<proof::CompileProofInput, String>,
+        mode: CompileMode,
+    ) -> Self {
         let job = Self(Arc::new(Mutex::new(None)));
         let result = job.0.clone();
         let work = move || {
@@ -42,10 +52,11 @@ impl CompileJob {
                     .map(|snapshot| snapshot.compiled_font()),
             );
         };
-        if cfg!(test) || std::env::var_os("RUNEBENDER_SCREENSHOT").is_some() {
-            work();
-        } else {
-            std::thread::spawn(work);
+        match mode {
+            CompileMode::Blocking => work(),
+            CompileMode::Background => {
+                std::thread::spawn(work);
+            }
         }
         job
     }
@@ -348,6 +359,27 @@ pub(crate) fn missing_coverage(bytes: &[u8], text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_background_compile_reports_from_a_worker_thread() {
+        let job = CompileJob::with_mode(Err("no proof input".into()), CompileMode::Background);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let result = loop {
+            if let Some(result) = job.result() {
+                break result;
+            }
+            assert!(std::time::Instant::now() < deadline, "the worker reports");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(result.err().as_deref(), Some("no proof input"));
+        assert!(!job.pending());
+    }
+
+    #[test]
+    fn a_blocking_compile_reports_before_it_returns() {
+        let job = CompileJob::with_mode(Err("no proof input".into()), CompileMode::Blocking);
+        assert!(!job.pending());
+    }
 
     #[test]
     fn the_reading_proof_opens_on_the_first_sample_of_the_script_of_the_glyph() {

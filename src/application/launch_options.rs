@@ -332,12 +332,50 @@ pub(crate) enum ChatSample {
     Models,
 }
 
+/// Where the editor compiles a font for the proof strip and the reading proof.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CompileMode {
+    /// On the calling thread, so the next frame shows the result: captures and unit tests.
+    Blocking,
+    /// On a worker thread, so the interface stays responsive: a window.
+    Background,
+}
+
+/// The compile mode of this process, set once by the host.
+static COMPILE_MODE: OnceLock<CompileMode> = OnceLock::new();
+
+impl CompileMode {
+    /// The compile mode of this process.
+    ///
+    /// When the host has not set one, a unit test build compiles on the calling thread, so a test
+    /// sees the result at once, and other builds follow [`LaunchOptions::current`].
+    pub(crate) fn current() -> Self {
+        *COMPILE_MODE.get_or_init(|| {
+            if cfg!(test) {
+                Self::Blocking
+            } else {
+                LaunchOptions::current().compile_mode
+            }
+        })
+    }
+
+    /// Set the compile mode of this process before the first compile.
+    ///
+    /// Returns whether the mode took effect; a mode that is already set stays.
+    pub(crate) fn set_current(mode: Self) -> bool {
+        COMPILE_MODE.set(mode).is_ok()
+    }
+}
+
 /// The values of the `RUNEBENDER_*` variables at launch.
 pub(crate) struct LaunchOptions {
     /// Render one frame to a file and exit, instead of opening a window.
     pub(crate) capture: Option<CaptureOptions>,
     /// Render every frame of the window and report the cadence on stderr.
     pub(crate) frame_stats: bool,
+    /// Compile on the calling thread when `RUNEBENDER_SCREENSHOT` is set, even to a value that
+    /// is not Unicode, and on a worker thread otherwise.
+    pub(crate) compile_mode: CompileMode,
     /// The glyph that the editor opens at launch.
     pub(crate) glyph: Option<String>,
     /// Create a sample proposal for the open glyph, so the proof view has one to compare.
@@ -488,6 +526,11 @@ impl LaunchOptions {
         Self {
             capture,
             frame_stats: variables.is_set(frame_stats::ENV),
+            compile_mode: if variables.is_set("RUNEBENDER_SCREENSHOT") {
+                CompileMode::Blocking
+            } else {
+                CompileMode::Background
+            },
             glyph: variables.text("RUNEBENDER_GLYPH"),
             #[cfg(unix)]
             proof_sample: variables.text("RUNEBENDER_PROOF_SAMPLE").as_deref() == Some("1"),
@@ -1205,6 +1248,18 @@ mod tests {
         );
         // An empty model folder counts as unset.
         assert_eq!(options.model, None);
+    }
+
+    #[test]
+    fn a_capture_compiles_on_the_calling_thread() {
+        assert_eq!(options(&[]).compile_mode, CompileMode::Background);
+        let options = options(&[("RUNEBENDER_SCREENSHOT", "/tmp/frame.png")]);
+        assert_eq!(options.compile_mode, CompileMode::Blocking);
+    }
+
+    #[test]
+    fn unit_tests_compile_on_the_calling_thread() {
+        assert_eq!(CompileMode::current(), CompileMode::Blocking);
     }
 
     #[test]

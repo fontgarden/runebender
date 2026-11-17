@@ -3,7 +3,7 @@
 
 //! The launch path: the event loop, the window, and the first frame.
 
-use crate::application::launch_options::LaunchOptions;
+use crate::application::launch_options::{CompileMode, LaunchOptions};
 use crate::application::platform::screenshot;
 use crate::application::view::render::root_logic;
 use crate::application::view::{UI_FONT, default_property_set};
@@ -26,6 +26,9 @@ pub(crate) fn run(
 ) -> Result<(), EventLoopError> {
     crate::application::platform::config::load().apply();
     let options = LaunchOptions::current();
+    // A capture compiles its previews before it renders its one frame; a window compiles them
+    // on worker threads.
+    CompileMode::set_current(options.compile_mode);
     let mut app = AppState::open(path);
     // RUNEBENDER_GLYPH=<name> starts in the editor on that glyph, so
     // a headless screenshot reaches edit mode without clicks.
