@@ -8,12 +8,17 @@
 //! [`VARIABLES`] names each variable with its help text, and a test compares that table with the
 //! table in `docs/UI-DESIGN.md`.
 
+use crate::application::editor::tools::chat::ChatEntry;
 use crate::application::editor::tools::review::ReviewMode;
 use crate::application::editor::tools::review_reading::Sample;
+use crate::application::editor::tools::{scripts, voice};
 use crate::application::pieces::PreviewView;
+use crate::application::view::canvas::editor::ViewOptions;
+use crate::application::view::panels::tabs::Rail;
 use crate::application::widgets::frame_stats;
-use crate::application::workspace::Workspace;
+use crate::application::workspace::{Tool, Workspace};
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 /// One environment variable that the editor reads at launch.
@@ -60,6 +65,11 @@ pub(crate) const VARIABLES: &[Variable] = &[
         "Open this glyph in the editor.",
     ),
     variable(
+        "RUNEBENDER_OPEN",
+        "<name>",
+        "Create the workspace with the editor already on this glyph, without the steps of opening it.",
+    ),
+    variable(
         "RUNEBENDER_SELECTED",
         "<name>",
         "In a capture, select this glyph in the grid.",
@@ -75,15 +85,112 @@ pub(crate) const VARIABLES: &[Variable] = &[
         "In a capture, expand the panel sections with these collapse keys.",
     ),
     variable(
+        "RUNEBENDER_COLLAPSED",
+        "<key,...>",
+        "Collapse these panel sections.",
+    ),
+    variable(
+        "RUNEBENDER_HIDDEN_DOCKS",
+        "<left,right>",
+        "Fold these docks away, as the footer toggles do.",
+    ),
+    variable(
+        "RUNEBENDER_CAT",
+        "<Number|Symbol|Mark>",
+        "Select this category in the sidebar and expand the Categories section.",
+    ),
+    variable(
+        "RUNEBENDER_SCRIPT",
+        "<label>",
+        "Select this script group in the sidebar and open its coverage rows.",
+    ),
+    variable(
+        "RUNEBENDER_VIEW_MODE",
+        "list",
+        "Show the overview as a list.",
+    ),
+    variable(
+        "RUNEBENDER_RAIL",
+        "<ai|chat|scripts|shapes>",
+        "Open this tool pane.",
+    ),
+    variable(
+        "RUNEBENDER_TOOL",
+        "<interpolation|hand|metaball|measure|label|text|sketch|shapes>",
+        "Start with this tool instead of the selection tool.",
+    ),
+    variable(
+        "RUNEBENDER_VIEW",
+        "<option,...>",
+        "Turn on canvas view options: `comb`, `thickness`, `continuity`, `colorize`, `handles`, `segments`, `bearings`, `popcount`, `components`.",
+    ),
+    variable(
         "RUNEBENDER_COMPONENT",
         "<n>",
         "Open the open glyph's component at index `n` in place, inside its composite.",
+    ),
+    variable(
+        "RUNEBENDER_AXIS",
+        "wght=500,wdth=80",
+        "Set the design-space location.",
+    ),
+    variable(
+        "RUNEBENDER_MASTER",
+        "<name>",
+        "Make this master active, by its style name.",
+    ),
+    variable(
+        "RUNEBENDER_SHOW_LAYERS",
+        "1",
+        "Turn on the eye of every layer of the open glyph.",
+    ),
+    variable(
+        "RUNEBENDER_LAYER",
+        "<name>",
+        "Edit this layer of the open glyph, by its name in the Layers panel.",
+    ),
+    variable("RUNEBENDER_BACKGROUND", "0", "Hide the background layers."),
+    variable(
+        "RUNEBENDER_MARK_CLOUD",
+        "1",
+        "Show the mark cloud and expand the Background section.",
+    ),
+    variable(
+        "RUNEBENDER_REFERENCE",
+        "<name>",
+        "Fill the Reference field with this glyph name.",
+    ),
+    variable(
+        "RUNEBENDER_TEXT",
+        "<text>",
+        "Start a text session in the editor with this text.",
+    ),
+    variable(
+        "RUNEBENDER_TEXT_FEATURES_DISABLED",
+        "<tag,...>",
+        "Turn off these OpenType features in the text session.",
+    ),
+    variable(
+        "RUNEBENDER_TEXT_SCRIPT",
+        "<tag>",
+        "Shape the text session with this OpenType script tag.",
+    ),
+    variable(
+        "RUNEBENDER_TEXT_LANGUAGE",
+        "<tag>",
+        "Shape the text session with this OpenType language tag.",
     ),
     variable(
         "RUNEBENDER_PREVIEW_TEXT",
         "<text>",
         "Set the text of the proof strip.",
     ),
+    variable(
+        "RUNEBENDER_PREVIEW_BLUR",
+        "<radius>",
+        "Blur the proof strip by this radius, from 0 to 8.",
+    ),
+    variable("RUNEBENDER_PREVIEW_INVERT", "1", "Invert the proof strip."),
     variable(
         "RUNEBENDER_PREVIEW",
         "<pieces|model>",
@@ -124,6 +231,38 @@ pub(crate) const VARIABLES: &[Variable] = &[
         "<n>",
         "With `RUNEBENDER_GLYPH`, select this sample of the label tool.",
     ),
+    variable(
+        "RUNEBENDER_SCRIPT_DRAFT",
+        "<code>",
+        "Open a script draft with this content in the Scripts pane.",
+    ),
+    variable(
+        "RUNEBENDER_SCRIPT_NAME",
+        "<name>",
+        "Name the script draft; the default is `headless-recipe.py`.",
+    ),
+    variable(
+        "RUNEBENDER_SCRIPT_PARAMETERS",
+        "<json>",
+        "Set the parameters of the script draft.",
+    ),
+    variable(
+        "RUNEBENDER_CHAT_SAMPLE",
+        "<1|listening|detail|busy|models>",
+        "Fill the Chat pane with a sample exchange; the named values show the open microphone, an open detail, a running tool or the model list.",
+    ),
+    variable(
+        "RUNEBENDER_MODEL",
+        "<dir>",
+        "Load the outline model in this folder.",
+    ),
+    variable(
+        "RUNEBENDER_PROPOSAL_PREVIEW",
+        "<task>",
+        "Show the review overlay of the proposal with this task name.",
+    ),
+    variable("RUNEBENDER_NODES", "<file>", "Open this graph file."),
+    variable("RUNEBENDER_MODE", "graph", "Start in the Graph view."),
     variable(
         "RUNEBENDER_GRAPH_SCRIPT",
         "<index>",
@@ -167,6 +306,32 @@ pub(crate) enum ProofView {
     Text,
 }
 
+/// A script draft that the Scripts pane opens.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ScriptDraft {
+    /// The file name of the draft.
+    pub(crate) name: String,
+    /// The code of the draft.
+    pub(crate) content: String,
+    /// The parameters of the draft, as JSON text.
+    pub(crate) parameters: Option<String>,
+}
+
+/// The sample exchange that `RUNEBENDER_CHAT_SAMPLE` puts in the Chat pane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ChatSample {
+    /// Any other value: the exchange with a prompt in the composer.
+    Exchange,
+    /// `listening`: the exchange, with the microphone shown open.
+    Listening,
+    /// `detail`: the exchange, with its detail open.
+    Detail,
+    /// `busy`: the exchange, with a tool running.
+    Busy,
+    /// `models`: the exchange, with the model list open.
+    Models,
+}
+
 /// The values of the `RUNEBENDER_*` variables at launch.
 pub(crate) struct LaunchOptions {
     /// Render one frame to a file and exit, instead of opening a window.
@@ -208,6 +373,62 @@ pub(crate) struct LaunchOptions {
     /// In a capture of the Graph view, show the first proof image expanded.
     #[cfg(unix)]
     pub(crate) graph_expanded: bool,
+    /// The glyph that the workspace starts on in the editor, without the steps of opening it.
+    pub(crate) open: Option<String>,
+    /// The collapse keys of the panel sections to fold.
+    pub(crate) collapsed: Vec<String>,
+    /// The docks to fold away: `left`, `right` or both.
+    pub(crate) hidden_docks: Vec<String>,
+    /// The sidebar category to select.
+    pub(crate) category: Option<String>,
+    /// The index of the sidebar script group to select.
+    pub(crate) script_group: Option<usize>,
+    /// Show the overview as a list.
+    pub(crate) list: bool,
+    /// The tool pane to open.
+    pub(crate) rail: Option<Rail>,
+    /// The tool to start with.
+    pub(crate) tool: Tool,
+    /// The canvas view options to turn on.
+    pub(crate) view: ViewOptions,
+    /// The design-space location, as pairs of axis tag or name and value.
+    pub(crate) axis: Vec<(String, f64)>,
+    /// The style name of the master to make active.
+    pub(crate) master: Option<String>,
+    /// Turn on the eye of every layer of the open glyph.
+    pub(crate) show_layers: bool,
+    /// The name of the layer of the open glyph to edit.
+    pub(crate) layer: Option<String>,
+    /// Show the background layers.
+    pub(crate) show_background: bool,
+    /// Show the mark cloud.
+    pub(crate) mark_cloud: bool,
+    /// The text of the Reference field.
+    pub(crate) reference: String,
+    /// The text of the text session.
+    pub(crate) text: String,
+    /// The OpenType features to turn off in the text session.
+    pub(crate) text_features_disabled: Vec<String>,
+    /// The OpenType script tag of the text session.
+    pub(crate) text_script: Option<String>,
+    /// The OpenType language tag of the text session.
+    pub(crate) text_language: Option<String>,
+    /// The blur radius of the proof strip, from 0 to 8.
+    pub(crate) preview_blur: f64,
+    /// Invert the proof strip.
+    pub(crate) preview_invert: bool,
+    /// The script draft to open in the Scripts pane.
+    pub(crate) script_draft: Option<ScriptDraft>,
+    /// The sample exchange of the Chat pane.
+    pub(crate) chat_sample: Option<ChatSample>,
+    /// The folder of the outline model to load.
+    pub(crate) model: Option<PathBuf>,
+    /// The task name of the proposal whose review overlay to show.
+    pub(crate) proposal_preview: Option<String>,
+    /// The graph file to open.
+    pub(crate) nodes: Option<PathBuf>,
+    /// Start in the Graph view.
+    pub(crate) graph_mode: bool,
 }
 
 /// A source of variable values: the process environment, or a table in a test.
@@ -308,6 +529,196 @@ impl LaunchOptions {
                 .and_then(|value| value.parse().ok()),
             #[cfg(unix)]
             graph_expanded: variables.is_set("RUNEBENDER_GRAPH_EXPANDED"),
+            open: variables.text("RUNEBENDER_OPEN"),
+            collapsed: variables
+                .text("RUNEBENDER_COLLAPSED")
+                .map(|keys| {
+                    keys.split(',')
+                        .filter(|key| !key.is_empty())
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            hidden_docks: variables
+                .text("RUNEBENDER_HIDDEN_DOCKS")
+                .map(|docks| {
+                    docks
+                        .split(',')
+                        .map(|dock| dock.trim().to_owned())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            category: variables.text("RUNEBENDER_CAT"),
+            script_group: variables.text("RUNEBENDER_SCRIPT").and_then(|label| {
+                runebender::ui::sidebar::language_groups()
+                    .iter()
+                    .position(|group| group.label == label)
+            }),
+            list: variables.text("RUNEBENDER_VIEW_MODE").as_deref() == Some("list"),
+            rail: match variables.text("RUNEBENDER_RAIL").as_deref() {
+                Some("ai") => Some(Rail::LocalAi),
+                Some("chat") => Some(Rail::Chat),
+                Some("scripts") => Some(Rail::Scripts),
+                Some("shapes") => Some(Rail::Shapes),
+                _ => None,
+            },
+            tool: match variables.text("RUNEBENDER_TOOL").as_deref() {
+                Some("interpolation") => Tool::Interpolation,
+                Some("hand") => Tool::Hand,
+                Some("metaball") => Tool::Metaball,
+                Some("measure") => Tool::Measure,
+                Some("label") => Tool::Label,
+                Some("text") => Tool::Text,
+                Some("sketch") => Tool::Sketch,
+                Some("shapes") => Tool::AiShape,
+                _ => Tool::Select,
+            },
+            view: view_options(variables.text("RUNEBENDER_VIEW").as_deref()),
+            axis: variables
+                .text("RUNEBENDER_AXIS")
+                .map(|spec| {
+                    spec.split(',')
+                        .filter_map(|pair| {
+                            let (tag, value) = pair.split_once('=')?;
+                            Some((tag.trim().to_owned(), value.trim().parse().ok()?))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            master: variables.text("RUNEBENDER_MASTER"),
+            show_layers: variables.is_set("RUNEBENDER_SHOW_LAYERS"),
+            layer: variables.text("RUNEBENDER_LAYER"),
+            show_background: variables.text("RUNEBENDER_BACKGROUND").as_deref() != Some("0"),
+            mark_cloud: variables.text("RUNEBENDER_MARK_CLOUD").as_deref() == Some("1"),
+            reference: variables.text("RUNEBENDER_REFERENCE").unwrap_or_default(),
+            text: variables.text("RUNEBENDER_TEXT").unwrap_or_default(),
+            text_features_disabled: variables
+                .text("RUNEBENDER_TEXT_FEATURES_DISABLED")
+                .map(|tags| {
+                    tags.split(',')
+                        .map(str::trim)
+                        .filter(|tag| !tag.is_empty())
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            text_script: variables
+                .text("RUNEBENDER_TEXT_SCRIPT")
+                .filter(|value| !value.is_empty()),
+            text_language: variables
+                .text("RUNEBENDER_TEXT_LANGUAGE")
+                .filter(|value| !value.is_empty()),
+            preview_blur: variables
+                .text("RUNEBENDER_PREVIEW_BLUR")
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|value| value.is_finite())
+                .unwrap_or(0.0)
+                .clamp(0.0, 8.0),
+            preview_invert: variables.text("RUNEBENDER_PREVIEW_INVERT").as_deref() == Some("1"),
+            script_draft: variables
+                .text("RUNEBENDER_SCRIPT_DRAFT")
+                .map(|content| ScriptDraft {
+                    name: variables
+                        .text("RUNEBENDER_SCRIPT_NAME")
+                        .unwrap_or_else(|| "headless-recipe.py".into()),
+                    content,
+                    parameters: variables.text("RUNEBENDER_SCRIPT_PARAMETERS"),
+                }),
+            chat_sample: variables
+                .os("RUNEBENDER_CHAT_SAMPLE")
+                .map(|value| match value.to_str() {
+                    Some("listening") => ChatSample::Listening,
+                    Some("detail") => ChatSample::Detail,
+                    Some("busy") => ChatSample::Busy,
+                    Some("models") => ChatSample::Models,
+                    _ => ChatSample::Exchange,
+                }),
+            model: variables
+                .os("RUNEBENDER_MODEL")
+                .filter(|dir| !dir.is_empty())
+                .map(PathBuf::from),
+            proposal_preview: variables.text("RUNEBENDER_PROPOSAL_PREVIEW"),
+            nodes: variables
+                .os("RUNEBENDER_NODES")
+                .filter(|file| !file.is_empty())
+                .map(PathBuf::from),
+            graph_mode: variables.text("RUNEBENDER_MODE").as_deref() == Some("graph"),
+        }
+    }
+
+    /// Set up a new workspace after its fields are filled: panes, samples, the master and layers.
+    ///
+    /// `Workspace::new` calls this for every document it creates, so a reload applies it again.
+    pub(crate) fn apply_to_document(&self, app: &mut Workspace) {
+        if let Some(draft) = &self.script_draft {
+            app.open_script_artifact(scripts::ScriptArtifact {
+                name: draft.name.clone(),
+                content: draft.content.clone(),
+            });
+            if let Some(parameters) = &draft.parameters {
+                app.script_parameters_changed(parameters.clone());
+            }
+        }
+        if let Some(name) = &self.master
+            && let Some(index) = app
+                .font
+                .master_names()
+                .iter()
+                .position(|master| master == name)
+        {
+            app.set_master(index);
+        }
+        if let Some(rail) = self.rail {
+            app.rail = rail;
+        }
+        if let Some(sample) = self.chat_sample {
+            chat_sample(app, sample);
+        }
+        if app.tool == Tool::AiShape {
+            // The tool was set directly, not picked, so scan for its models here.
+            app.shapes_rescan();
+        }
+        if let Some(index) = self.component {
+            Arc::make_mut(&mut app.session).select_component(index);
+        }
+        if app.show_mark_cloud {
+            app.collapsed.remove("Background");
+        }
+        if let Some(dir) = &self.model {
+            app.load_model(dir);
+        }
+        if let Some(task) = &self.proposal_preview
+            && app
+                .ai
+                .proposals
+                .iter()
+                .any(|proposal| proposal.task == *task)
+        {
+            app.ai.preview_task = Some(task.clone());
+        }
+        if let Some(file) = &self.nodes {
+            app.open_graph_file(file);
+        }
+        if self.show_layers {
+            for row in app.glyph_layer_rows() {
+                if !row.visible {
+                    app.toggle_glyph_layer_visible(&row.layer);
+                }
+            }
+        }
+        if let Some(name) = &self.layer
+            && let Some(row) = app
+                .glyph_layer_rows()
+                .into_iter()
+                .find(|row| row.name == *name)
+        {
+            app.edit_glyph_layer(&row.layer);
+        }
+        if self.graph_mode {
+            app.enter_graph_mode();
+        }
+        if self.tool == Tool::Metaball {
+            Arc::make_mut(&mut app.session).select_all_metaballs();
         }
     }
 
@@ -430,6 +841,87 @@ impl LaunchOptions {
                 });
             }
         }
+    }
+}
+
+/// The canvas view options that a comma-separated list of names turns on.
+fn view_options(spec: Option<&str>) -> ViewOptions {
+    let mut view = ViewOptions::default();
+    for name in spec
+        .into_iter()
+        .flat_map(|spec| spec.split(','))
+        .map(str::trim)
+    {
+        match name {
+            "comb" => view.comb = true,
+            "thickness" => view.thickness = true,
+            "continuity" => view.continuity = true,
+            "colorize" => view.colorize = true,
+            "handles" => view.handles = true,
+            "segments" => view.segments = true,
+            "bearings" => view.bearings = true,
+            "popcount" => view.popcount = true,
+            "components" => view.components = true,
+            _ => {}
+        }
+    }
+    view
+}
+
+/// Fill the Chat pane with one exchange, so a capture shows the transcript and not only the
+/// empty state.
+fn chat_sample(app: &mut Workspace, sample: ChatSample) {
+    if sample == ChatSample::Listening {
+        app.voice.capture = Some(voice::Capture::sample());
+    }
+    app.chat.entries = vec![
+        ChatEntry::User("what is the upm?".into()),
+        ChatEntry::Tool {
+            name: "font_info".into(),
+            ok: true,
+            note: "done".into(),
+        },
+        ChatEntry::Assistant("The units per em of the font is 1024.".into()),
+        ChatEntry::User("How does the stem of H compare with the other capitals?".into()),
+        ChatEntry::Tool {
+            name: "analyze_glyph".into(),
+            ok: true,
+            note: "done".into(),
+        },
+        ChatEntry::Tool {
+            name: "analyze_font".into(),
+            ok: true,
+            note: "done".into(),
+        },
+        ChatEntry::Assistant(
+            "The H stem is 92 units. The median uppercase stem is 90, so H sits \
+             within 2 units of the others. The farthest is M at 84."
+                .into(),
+        ),
+        ChatEntry::Detail {
+            text: "Measured with analyze_font on the Regular source. Stems: H 92, \
+                   I 92, N 90, M 84. The outlier M is 6 units lighter."
+                .into(),
+            open: sample == ChatSample::Detail,
+        },
+    ];
+    app.chat.entries.push(ChatEntry::User(
+        "How many off-curve points does U+0035 have?".into(),
+    ));
+    app.chat.entries.push(ChatEntry::Error(
+        "chat response was cut off at the model's context limit".into(),
+    ));
+    app.chat.prompt = "And which of the figures have the most points, and is \
+                       that a problem for interpolation?"
+        .into();
+    match sample {
+        ChatSample::Busy => {
+            app.chat.entries.pop();
+            app.chat.prompt.clear();
+            app.chat.busy = Some("Running analyze_glyph…".into());
+        }
+        ChatSample::Models => app.chat.picking = true,
+        ChatSample::Exchange | ChatSample::Listening | ChatSample::Detail => {}
     }
 }
 
@@ -657,6 +1149,62 @@ mod tests {
     fn expanded_sections_are_trimmed_keys() {
         let options = options(&[("RUNEBENDER_EXPAND", "Kerning, Groups")]);
         assert_eq!(options.expand, ["Kerning", "Groups"]);
+    }
+
+    #[test]
+    fn list_variables_keep_their_own_trimming() {
+        let options = options(&[
+            ("RUNEBENDER_COLLAPSED", "Kerning,,Groups "),
+            ("RUNEBENDER_HIDDEN_DOCKS", " left,right"),
+            ("RUNEBENDER_TEXT_FEATURES_DISABLED", "liga, ,kern"),
+            ("RUNEBENDER_AXIS", "wght=500, wdth = 80,opsz,ital=x"),
+        ]);
+        assert_eq!(options.collapsed, ["Kerning", "Groups "]);
+        assert_eq!(options.hidden_docks, ["left", "right"]);
+        assert_eq!(options.text_features_disabled, ["liga", "kern"]);
+        assert_eq!(
+            options.axis,
+            [("wght".to_owned(), 500.0), ("wdth".to_owned(), 80.0)]
+        );
+    }
+
+    #[test]
+    fn a_window_starts_with_the_default_tool_and_background() {
+        let options = options(&[]);
+        assert_eq!(options.tool, Tool::Select);
+        assert!(options.show_background);
+        assert_eq!(options.preview_blur, 0.0);
+        assert!(options.view == ViewOptions::default());
+        assert_eq!(options.chat_sample, None);
+        assert_eq!(options.script_draft, None);
+    }
+
+    #[test]
+    fn values_parse_into_their_types() {
+        let options = options(&[
+            ("RUNEBENDER_TOOL", "metaball"),
+            ("RUNEBENDER_BACKGROUND", "0"),
+            ("RUNEBENDER_PREVIEW_BLUR", "12"),
+            ("RUNEBENDER_VIEW", "comb, handles,unknown"),
+            ("RUNEBENDER_CHAT_SAMPLE", "yes"),
+            ("RUNEBENDER_SCRIPT_DRAFT", "print()"),
+            ("RUNEBENDER_MODEL", ""),
+        ]);
+        assert_eq!(options.tool, Tool::Metaball);
+        assert!(!options.show_background);
+        assert_eq!(options.preview_blur, 8.0);
+        assert!(options.view.comb && options.view.handles && !options.view.thickness);
+        assert_eq!(options.chat_sample, Some(ChatSample::Exchange));
+        assert_eq!(
+            options.script_draft,
+            Some(ScriptDraft {
+                name: "headless-recipe.py".into(),
+                content: "print()".into(),
+                parameters: None,
+            })
+        );
+        // An empty model folder counts as unset.
+        assert_eq!(options.model, None);
     }
 
     #[test]

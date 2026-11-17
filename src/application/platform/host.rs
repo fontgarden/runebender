@@ -85,7 +85,13 @@ impl Workspace {
         Self::from_model(FontModel::open(path)?)
     }
 
+    /// Create the workspace of a font with the launch options of this process.
     pub(crate) fn from_model(font: FontModel) -> Result<Self, String> {
+        Self::new(font, LaunchOptions::current())
+    }
+
+    /// Create the workspace of a font with these launch options.
+    pub(crate) fn new(font: FontModel, options: &LaunchOptions) -> Result<Self, String> {
         let modified = font.project.is_modified();
         let source_roots = source_roots(&font);
         let source_fingerprint = source_fingerprint(&source_roots);
@@ -105,9 +111,6 @@ impl Workspace {
                 )
             }
         };
-        let hidden_docks: Vec<String> = std::env::var("RUNEBENDER_HIDDEN_DOCKS")
-            .map(|s| s.split(',').map(str::trim).map(str::to_string).collect())
-            .unwrap_or_default();
         let theme_id = crate::application::platform::themes::catalog().initial_id();
         let palette = Arc::new(Palette::load(theme_id));
         let cells = Arc::new(cells_of(&font, &palette));
@@ -132,16 +135,9 @@ impl Workspace {
         // For headless screenshots: optionally select all points.
         // (set later, after session is final)
 
-        let start_cat = std::env::var("RUNEBENDER_CAT").ok();
-        let start_script = std::env::var("RUNEBENDER_SCRIPT").ok().and_then(|label| {
-            runebender::ui::sidebar::language_groups()
-                .iter()
-                .position(|group| group.label == label)
-        });
-        let (mode, open) = match std::env::var("RUNEBENDER_OPEN")
-            .ok()
-            .and_then(|n| font.index_of(&n))
-        {
+        let start_cat = options.category.as_deref();
+        let start_script = options.script_group;
+        let (mode, open) = match options.open.as_deref().and_then(|n| font.index_of(n)) {
             Some(i) => (Mode::Editor(i), Some(i)),
             None => (Mode::Overview, None),
         };
@@ -161,40 +157,18 @@ impl Workspace {
         };
         // Headless overrides let a render show a state that normally takes
         // clicks to reach.
-        let reference_buf = std::env::var("RUNEBENDER_REFERENCE").unwrap_or_default();
+        let reference_buf = options.reference.clone();
         // GPUI exposes background layers by default. Keep a headless override
         // for captures that need to exercise the disabled toggle.
-        let show_background = std::env::var("RUNEBENDER_BACKGROUND").as_deref() != Ok("0");
-        // RUNEBENDER_VIEW=comb,thickness,continuity,colorize,handles,segments,bearings
-        let mut view = canvas::editor::ViewOptions::default();
-        if let Ok(spec) = std::env::var("RUNEBENDER_VIEW") {
-            for name in spec.split(',').map(str::trim) {
-                match name {
-                    "comb" => view.comb = true,
-                    "thickness" => view.thickness = true,
-                    "continuity" => view.continuity = true,
-                    "colorize" => view.colorize = true,
-                    "handles" => view.handles = true,
-                    "segments" => view.segments = true,
-                    "bearings" => view.bearings = true,
-                    "popcount" => view.popcount = true,
-                    "components" => view.components = true,
-                    _ => {}
-                }
-            }
-        }
-        // Headless override: RUNEBENDER_AXIS="wght=500,wdth=80".
-        if let Ok(spec) = std::env::var("RUNEBENDER_AXIS") {
-            for pair in spec.split(',') {
-                if let Some((tag, val)) = pair.split_once('=')
-                    && let Ok(v) = val.trim().parse::<f64>()
-                    && let Some(i) = font
-                        .axes
-                        .iter()
-                        .position(|a| a.tag == tag.trim() || a.name == tag.trim())
-                {
-                    axis_values[i] = v.clamp(font.axes[i].min, font.axes[i].max);
-                }
+        let show_background = options.show_background;
+        let view = options.view;
+        for (tag, value) in &options.axis {
+            if let Some(i) = font
+                .axes
+                .iter()
+                .position(|a| a.tag == *tag || a.name == *tag)
+            {
+                axis_values[i] = value.clamp(font.axes[i].min, font.axes[i].max);
             }
         }
         // Seed the Name/Unicode fields from the glyph actually shown
@@ -213,18 +187,8 @@ impl Workspace {
             .and_then(|glyph| glyph.codepoint)
             .map(|c| format!("{:04X}", c as u32))
             .unwrap_or_default();
-        let initial_text = std::env::var("RUNEBENDER_TEXT").unwrap_or_default();
-        let tool = match std::env::var("RUNEBENDER_TOOL").as_deref() {
-            Ok("interpolation") => Tool::Interpolation,
-            Ok("hand") => Tool::Hand,
-            Ok("metaball") => Tool::Metaball,
-            Ok("measure") => Tool::Measure,
-            Ok("label") => Tool::Label,
-            Ok("text") => Tool::Text,
-            Ok("sketch") => Tool::Sketch,
-            Ok("shapes") => Tool::AiShape,
-            _ => Tool::Select,
-        };
+        let initial_text = options.text.clone();
+        let tool = options.tool;
         let has_text_session = tool == Tool::Text || !initial_text.is_empty();
         let sketch = Arc::new(std::sync::Mutex::new(sketch::SketchLayer::new(
             first_name.clone(),
@@ -246,43 +210,26 @@ impl Workspace {
             metadata_redo: Vec::new(),
             filter: String::new(),
             detail: false,
-            list: std::env::var("RUNEBENDER_VIEW_MODE").as_deref() == Ok("list"),
+            list: options.list,
             rail: Rail::Glyphs,
             text_dir: None,
-            text_features_disabled: std::env::var("RUNEBENDER_TEXT_FEATURES_DISABLED")
-                .map(|value| {
-                    value
-                        .split(',')
-                        .map(str::trim)
-                        .filter(|tag| !tag.is_empty())
-                        .map(str::to_string)
-                        .collect()
-                })
-                .unwrap_or_default(),
-            text_script: std::env::var("RUNEBENDER_TEXT_SCRIPT")
-                .ok()
-                .filter(|value| !value.is_empty()),
-            text_language: std::env::var("RUNEBENDER_TEXT_LANGUAGE")
-                .ok()
-                .filter(|value| !value.is_empty()),
+            text_features_disabled: options.text_features_disabled.iter().cloned().collect(),
+            text_script: options.text_script.clone(),
+            text_language: options.text_language.clone(),
             source_name_buf,
             layer_name_buf: "sketch".into(),
             // Headless frames can start with a dock folded away:
             // `RUNEBENDER_HIDDEN_DOCKS=left,right`.
-            left_collapsed: hidden_docks.iter().any(|d| d == "left"),
-            right_collapsed: hidden_docks.iter().any(|d| d == "right"),
+            left_collapsed: options.hidden_docks.iter().any(|d| d == "left"),
+            right_collapsed: options.hidden_docks.iter().any(|d| d == "right"),
             // Headless frames can start with sections folded:
             // `RUNEBENDER_COLLAPSED=Kerning,Groups`.
             collapsed: {
-                let mut set: std::collections::HashSet<&'static str> =
-                    std::env::var("RUNEBENDER_COLLAPSED")
-                        .map(|s| {
-                            s.split(',')
-                                .filter(|t| !t.is_empty())
-                                .map(|t| &*Box::leak(t.to_string().into_boxed_str()))
-                                .collect()
-                        })
-                        .unwrap_or_default();
+                let mut set: std::collections::HashSet<&'static str> = options
+                    .collapsed
+                    .iter()
+                    .map(|t| &*Box::leak(t.clone().into_boxed_str()))
+                    .collect();
                 // Every sidebar and inspector section starts folded, so the panel opens clean
                 // and each one is a click away. This is state only;
                 // every header still toggles its existing accessible panel.
@@ -327,7 +274,7 @@ impl Workspace {
             },
             sel: match start_script {
                 Some(index) => Sel::Language(index),
-                None => Sel::Category(match start_cat.as_deref() {
+                None => Sel::Category(match start_cat {
                     Some("Number") => GlyphCategory::Number,
                     Some("Symbol") => GlyphCategory::Symbol,
                     Some("Mark") => GlyphCategory::Mark,
@@ -348,7 +295,7 @@ impl Workspace {
             kern2_buf: kern2,
             clipboard: Vec::new(),
             show_background,
-            show_mark_cloud: std::env::var("RUNEBENDER_MARK_CLOUD").as_deref() == Ok("1"),
+            show_mark_cloud: options.mark_cloud,
             reference_buf,
             sketch_trace: None,
             component_base_buf: String::new(),
@@ -413,19 +360,11 @@ impl Workspace {
             // An empty override previews the active glyph itself, which is
             // GPUI's resting edit state. Shaping text remains opt-in through
             // the inspector, sample commands, or the headless environment.
-            preview_text: LaunchOptions::current()
-                .preview_text
-                .clone()
-                .unwrap_or_default(),
-            preview_blur: std::env::var("RUNEBENDER_PREVIEW_BLUR")
-                .ok()
-                .and_then(|v| v.parse::<f64>().ok())
-                .filter(|v| v.is_finite())
-                .unwrap_or(0.0)
-                .clamp(0.0, 8.0),
+            preview_text: options.preview_text.clone().unwrap_or_default(),
+            preview_blur: options.preview_blur,
             preview_visible: true,
-            preview_invert: std::env::var("RUNEBENDER_PREVIEW_INVERT").as_deref() == Ok("1"),
-            proof_view: LaunchOptions::current().proof_view.is_some(),
+            preview_invert: options.preview_invert,
+            proof_view: options.proof_view.is_some(),
             review: crate::application::editor::tools::review::ReviewState::default(),
             proof_samples: crate::application::platform::proof_samples::ProofSamples::default(),
             panel_sample: None,
@@ -479,147 +418,7 @@ impl Workspace {
         app.rescan_models();
         app.scan_chat_models();
         app.refresh_proposals();
-        if let Ok(content) = std::env::var("RUNEBENDER_SCRIPT_DRAFT") {
-            app.open_script_artifact(scripts::ScriptArtifact {
-                name: std::env::var("RUNEBENDER_SCRIPT_NAME")
-                    .unwrap_or_else(|_| "headless-recipe.py".into()),
-                content,
-            });
-            if let Ok(parameters) = std::env::var("RUNEBENDER_SCRIPT_PARAMETERS") {
-                app.script_parameters_changed(parameters);
-            }
-        }
-        // Headless: RUNEBENDER_MASTER=<style name> makes that master active.
-        if let Ok(name) = std::env::var("RUNEBENDER_MASTER")
-            && let Some(index) = app
-                .font
-                .master_names()
-                .iter()
-                .position(|master| *master == name)
-        {
-            app.set_master(index);
-        }
-        // Headless: RUNEBENDER_RAIL=ai, chat or scripts starts the corresponding
-        // local-model panel, RUNEBENDER_MODEL=<dir> chooses an outline model, and
-        // RUNEBENDER_PROPOSAL_PREVIEW=<task> shows its review overlay.
-        match std::env::var("RUNEBENDER_RAIL").as_deref() {
-            Ok("ai") => app.rail = Rail::LocalAi,
-            Ok("chat") => app.rail = Rail::Chat,
-            Ok("scripts") => app.rail = Rail::Scripts,
-            Ok("shapes") => app.rail = Rail::Shapes,
-            _ => {}
-        }
-        // RUNEBENDER_CHAT_SAMPLE=1 seeds the Chat panel with one exchange, so a
-        // headless screenshot shows the transcript and not only the empty state.
-        // RUNEBENDER_CHAT_SAMPLE=listening shows the composer with the
-        // microphone open, without opening one.
-        if std::env::var("RUNEBENDER_CHAT_SAMPLE").as_deref() == Ok("listening") {
-            app.voice.capture = Some(voice::Capture::sample());
-        }
-        if std::env::var_os("RUNEBENDER_CHAT_SAMPLE").is_some() {
-            use crate::application::editor::tools::chat::ChatEntry;
-            app.chat.entries = vec![
-                ChatEntry::User("what is the upm?".into()),
-                ChatEntry::Tool {
-                    name: "font_info".into(),
-                    ok: true,
-                    note: "done".into(),
-                },
-                ChatEntry::Assistant("The units per em of the font is 1024.".into()),
-                ChatEntry::User("How does the stem of H compare with the other capitals?".into()),
-                ChatEntry::Tool {
-                    name: "analyze_glyph".into(),
-                    ok: true,
-                    note: "done".into(),
-                },
-                ChatEntry::Tool {
-                    name: "analyze_font".into(),
-                    ok: true,
-                    note: "done".into(),
-                },
-                ChatEntry::Assistant(
-                    "The H stem is 92 units. The median uppercase stem is 90, so H sits \
-                     within 2 units of the others. The farthest is M at 84."
-                        .into(),
-                ),
-                ChatEntry::Detail {
-                    text: "Measured with analyze_font on the Regular source. Stems: H 92, \
-                           I 92, N 90, M 84. The outlier M is 6 units lighter."
-                        .into(),
-                    // The detail sample opens with RUNEBENDER_CHAT_SAMPLE=detail.
-                    open: std::env::var("RUNEBENDER_CHAT_SAMPLE").as_deref() == Ok("detail"),
-                },
-            ];
-            app.chat.entries.push(ChatEntry::User(
-                "How many off-curve points does U+0035 have?".into(),
-            ));
-            app.chat.entries.push(ChatEntry::Error(
-                "chat response was cut off at the model's context limit".into(),
-            ));
-            app.chat.prompt = "And which of the figures have the most points, and is \
-                               that a problem for interpolation?"
-                .into();
-            // RUNEBENDER_CHAT_SAMPLE=busy shows the model at work instead.
-            if std::env::var("RUNEBENDER_CHAT_SAMPLE").as_deref() == Ok("busy") {
-                app.chat.entries.pop();
-                app.chat.prompt.clear();
-                app.chat.busy = Some("Running analyze_glyph…".into());
-            }
-            // RUNEBENDER_CHAT_SAMPLE=models shows the model list open.
-            if std::env::var("RUNEBENDER_CHAT_SAMPLE").as_deref() == Ok("models") {
-                app.chat.picking = true;
-            }
-        }
-        if app.tool == Tool::AiShape {
-            // The tool was set directly, not picked, so scan for its models here.
-            app.shapes_rescan();
-        }
-        if let Some(index) = LaunchOptions::current().component {
-            Arc::make_mut(&mut app.session).select_component(index);
-        }
-        if app.show_mark_cloud {
-            app.collapsed.remove("Background");
-        }
-        if let Some(dir) = std::env::var_os("RUNEBENDER_MODEL").filter(|d| !d.is_empty()) {
-            app.load_model(FsPath::new(&dir));
-        }
-        if let Ok(task) = std::env::var("RUNEBENDER_PROPOSAL_PREVIEW")
-            && app
-                .ai
-                .proposals
-                .iter()
-                .any(|proposal| proposal.task == task)
-        {
-            app.ai.preview_task = Some(task);
-        }
-        // Headless overrides: RUNEBENDER_NODES=<file> opens a nodes
-        // file, and RUNEBENDER_MODE=nodes starts on the canvas.
-        if let Some(file) = std::env::var_os("RUNEBENDER_NODES").filter(|f| !f.is_empty()) {
-            app.open_graph_file(FsPath::new(&file));
-        }
-        // RUNEBENDER_SHOW_LAYERS=1 turns on the eye of every layer of the open glyph, and
-        // RUNEBENDER_LAYER=<name> edits that layer of it.
-        if std::env::var_os("RUNEBENDER_SHOW_LAYERS").is_some() {
-            for row in app.glyph_layer_rows() {
-                if !row.visible {
-                    app.toggle_glyph_layer_visible(&row.layer);
-                }
-            }
-        }
-        if let Ok(name) = std::env::var("RUNEBENDER_LAYER")
-            && let Some(row) = app
-                .glyph_layer_rows()
-                .into_iter()
-                .find(|row| row.name == name)
-        {
-            app.edit_glyph_layer(&row.layer);
-        }
-        if std::env::var("RUNEBENDER_MODE").as_deref() == Ok("graph") {
-            app.enter_graph_mode();
-        }
-        if tool == Tool::Metaball {
-            Arc::make_mut(&mut app.session).select_all_metaballs();
-        }
+        options.apply_to_document(&mut app);
         Ok(app)
     }
 
