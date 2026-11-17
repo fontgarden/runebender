@@ -16,7 +16,19 @@ const FILE_NAME: &str = "proof-samples.toml";
 /// A larger file is reported instead of read.
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 
-type Signature = Option<(PathBuf, u64, Option<SystemTime>)>;
+/// The sample file's path, length and modification time; `None` without a file.
+pub(crate) type Signature = Option<(PathBuf, u64, Option<SystemTime>)>;
+
+/// What is on disk for a document's sample file now.
+/// A background task compares this once a second, so the interface is woken only on a change.
+pub(crate) fn disk_signature(document: &Path) -> Signature {
+    file(document).map(|path| {
+        let metadata = std::fs::metadata(&path).ok();
+        let len = metadata.as_ref().map_or(0, std::fs::Metadata::len);
+        let modified = metadata.and_then(|m| m.modified().ok());
+        (path, len, modified)
+    })
+}
 
 /// The samples of the open project: the defaults merged with the project file.
 #[derive(Debug)]
@@ -68,12 +80,7 @@ impl ProofSamples {
             return false;
         }
         self.checked = Some(Instant::now());
-        let signature: Signature = document.as_deref().and_then(file).map(|path| {
-            let metadata = std::fs::metadata(&path).ok();
-            let len = metadata.as_ref().map_or(0, std::fs::Metadata::len);
-            let modified = metadata.and_then(|m| m.modified().ok());
-            (path, len, modified)
-        });
+        let signature: Signature = document.as_deref().and_then(disk_signature);
         if self.document == document && self.signature == signature {
             return false;
         }

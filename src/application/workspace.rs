@@ -359,6 +359,9 @@ pub(crate) struct Workspace {
     pub(crate) panel_sample: Option<String>,
     /// The em size of the Proof section's sample, in pixels.
     pub(crate) panel_proof_size: f64,
+    /// The document whose proof files a background task watches, and whether the proof view,
+    /// which also reads reference fonts, is open. Updated on each interface rebuild.
+    pub(crate) proof_watch: Arc<std::sync::Mutex<(std::path::PathBuf, bool)>>,
     /// What the proof strip shows for a neural source: the outline, or the labeled pieces.
     pub(crate) preview_view: crate::application::pieces::PreviewView,
     /// The labeled pieces of every sample, for the piece view.

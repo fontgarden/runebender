@@ -58,6 +58,17 @@ fn scan(folder: &Path, paths: &mut Vec<(PathBuf, u64, Option<SystemTime>)>) -> R
     }
     Ok(())
 }
+/// The reference font files of a document's project now: path, length and modification time.
+/// `None` when the folder cannot be read.
+pub(crate) fn disk_signature(document: &Path) -> Option<Vec<(PathBuf, u64, Option<SystemTime>)>> {
+    let mut signature = Vec::new();
+    if let Some(folder) = directory(document) {
+        scan(&folder, &mut signature).ok()?;
+    }
+    signature.sort();
+    Some(signature)
+}
+
 impl References {
     pub(crate) fn refresh(&mut self, document: &Path) {
         let folder = directory(document);

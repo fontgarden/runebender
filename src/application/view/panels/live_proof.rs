@@ -19,7 +19,9 @@ pub(crate) fn section(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     let samples = app.glyph_proof_samples();
     let shown = app.glyph_proof_sample(app.panel_sample.as_deref());
     let mut rows = Vec::new();
-    if let Some(sample) = shown {
+    // A folded section shows nothing, so it does not shape the sample or read the font for it.
+    let open = !app.collapsed.contains(KEY);
+    if let Some(sample) = shown.filter(|_| open) {
         let text = app.proof_sample_text(sample);
         match specimen::live_block(app, &text, app.panel_proof_size) {
             Some((block, ascender, descender)) => rows.push(Row::Specimen {

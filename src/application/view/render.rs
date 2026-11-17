@@ -330,6 +330,13 @@ where
 
 pub(crate) fn app_logic(app: &mut Workspace) -> impl WidgetView<Workspace> + use<> {
     use xilem::core::one_of::{Either, OneOf3};
+    // Tell the proof-file watcher which document and view are open.
+    if let Ok(mut watch) = app.proof_watch.lock() {
+        let document = app.font.document_source();
+        if watch.0 != document || watch.1 != app.proof_view {
+            *watch = (document.to_path_buf(), app.proof_view);
+        }
+    }
     // The piece view cuts its pieces, and the model view asks its worker, before any view
     // borrows the workspace.
     if matches!(app.mode, Mode::Editor(_)) && app.preview_visible && app.font.project.is_neural() {
@@ -872,11 +879,29 @@ fn preview_pump<V: WidgetView<Workspace>>(
         view,
         proof_files.then(|| {
             task(
-                |proxy: MessageProxy<()>, _: &mut Workspace| async move {
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                        if proxy.message(()).is_err() {
-                            return;
+                |proxy: MessageProxy<()>, app: &mut Workspace| {
+                    let watch = app.proof_watch.clone();
+                    async move {
+                        use crate::application::platform::{proof_samples, reference_fonts};
+                        // The files are checked here, off the interface thread, and the
+                        // interface is woken only when one was added, changed or removed.
+                        // An idle editor is otherwise rebuilt once a second for nothing.
+                        let mut seen = None;
+                        loop {
+                            let (document, references) =
+                                watch.lock().map(|watch| watch.clone()).unwrap_or_default();
+                            let now = (
+                                document.clone(),
+                                proof_samples::disk_signature(&document),
+                                references.then(|| reference_fonts::disk_signature(&document)),
+                            );
+                            if seen.as_ref() != Some(&now) {
+                                seen = Some(now);
+                                if proxy.message(()).is_err() {
+                                    return;
+                                }
+                            }
+                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                         }
                     }
                 },

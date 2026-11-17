@@ -420,6 +420,7 @@ impl Workspace {
             proof_samples: crate::application::platform::proof_samples::ProofSamples::default(),
             panel_sample: None,
             panel_proof_size: canvas::specimen::LIVE_EM_DEFAULT,
+            proof_watch: Arc::default(),
             search_mode: 0,
             search_case: false,
             reference_layers: std::collections::HashSet::new(),
