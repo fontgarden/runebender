@@ -83,8 +83,13 @@ pub(crate) fn with_live<V: xilem::WidgetView<Workspace>>(
                     app.live_graph_pump();
                     app.sync_live_graph_presentation();
                 }
-                let request = app.live.as_ref().and_then(|server| server.try_recv());
-                if let Some(request) = request {
+                // Drain the mailbox, up to its capacity per wake so a stream of new calls
+                // cannot hold the interface thread; the pending signal stays set for the rest.
+                for _ in 0..runebender::automation::live_socket::MAX_PENDING_REQUESTS {
+                    let Some(request) = app.live.as_ref().and_then(|server| server.try_recv())
+                    else {
+                        break;
+                    };
                     request.respond(|call| app.call_live(call));
                 }
                 app.live_graph_pending

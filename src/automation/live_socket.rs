@@ -32,6 +32,7 @@ pub const MAX_FRAME_BYTES: u64 = 8 * 1024 * 1024;
 const OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(30);
 const STOP_POLL: Duration = Duration::from_millis(25);
+const ACCEPT_RETRY: Duration = Duration::from_millis(20);
 /// Maximum number of calls waiting for serialized application dispatch.
 pub const MAX_PENDING_REQUESTS: usize = 16;
 /// Maximum number of simultaneous socket connection handlers.
@@ -246,10 +247,7 @@ impl Server {
                         let stop = stopping.clone();
                         let active = worker_connections.clone();
                         std::thread::spawn(move || {
-                            // `serve` writes at most one response frame.
-                            // A write error may occur after partial bytes, so never append a second
-                            // JSON error frame here.
-                            let _ = serve(
+                            answer(
                                 &mut stream,
                                 &sender,
                                 &epoch,
@@ -260,10 +258,10 @@ impl Server {
                             active.fetch_sub(1, Ordering::AcqRel);
                         });
                     }
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(20));
-                    }
-                    Err(_) => break,
+                    // A failed accept, such as a connection reset before acceptance or a
+                    // temporary descriptor shortage, does not close the endpoint.
+                    // The short pause keeps a persistent failure from spinning.
+                    Err(_) => std::thread::sleep(ACCEPT_RETRY),
                 }
             }
         });
@@ -347,6 +345,46 @@ fn read_frame(stream: &mut UnixStream, limit: u64) -> io::Result<String> {
     Ok(line)
 }
 
+/// A socket request that ends without an editor result.
+/// The connection handler sends it to the client as one structured error frame.
+#[derive(Debug)]
+struct LiveError {
+    code: &'static str,
+    message: String,
+}
+
+impl LiveError {
+    fn new(code: &'static str, message: impl ToString) -> Self {
+        Self {
+            code,
+            message: message.to_string(),
+        }
+    }
+
+    fn into_value(self) -> Value {
+        serde_json::json!({"ok":false,"error_code":self.code,"error":self.message})
+    }
+}
+
+/// Serve one connection and write exactly one response frame, success or error.
+/// A write error may occur after partial bytes, so it is not retried.
+fn answer(
+    stream: &mut UnixStream,
+    sender: &mpsc::SyncSender<Pending>,
+    epoch: &str,
+    cancellations: &AgentCancellationRegistry,
+    pending: &AtomicBool,
+    stop: &AtomicBool,
+) {
+    let result = serve(stream, sender, epoch, cancellations, pending, stop)
+        .unwrap_or_else(LiveError::into_value);
+    let _ = write_envelope(stream, result, epoch);
+}
+
+fn invalid_arguments(error: impl ToString) -> Value {
+    LiveError::new("invalid_arguments", error).into_value()
+}
+
 fn serve(
     stream: &mut UnixStream,
     sender: &mpsc::SyncSender<Pending>,
@@ -354,20 +392,16 @@ fn serve(
     cancellations: &AgentCancellationRegistry,
     pending: &AtomicBool,
     stop: &AtomicBool,
-) -> io::Result<()> {
-    let call: ToolCall = serde_json::from_str(&read_frame(stream, MAX_FRAME_BYTES)?)?;
+) -> Result<Value, LiveError> {
+    let frame = read_frame(stream, MAX_FRAME_BYTES)
+        .map_err(|error| LiveError::new("invalid_request", error))?;
+    let call: ToolCall =
+        serde_json::from_str(&frame).map_err(|error| LiveError::new("invalid_request", error))?;
     if matches!(call.name.as_str(), "agent_reserve" | "agent_release") {
         let reserve = call.name == "agent_reserve";
         let request: AgentEditRequest = match serde_json::from_value(call.arguments) {
             Ok(request) => request,
-            Err(error) => {
-                return write_envelope(
-                    stream,
-                    serde_json::json!({"ok":false,"error_code":"invalid_arguments",
-                        "error":error.to_string()}),
-                    epoch,
-                );
-            }
+            Err(error) => return Ok(invalid_arguments(error)),
         };
         let payload_digest = request.payload_digest();
         let identity = match AgentCancellationIdentity::new(
@@ -376,14 +410,7 @@ fn serve(
             request.operation_key,
         ) {
             Ok(identity) => identity,
-            Err(error) => {
-                return write_envelope(
-                    stream,
-                    serde_json::json!({"ok":false,"error_code":"invalid_arguments",
-                        "error":error.to_string()}),
-                    epoch,
-                );
-            }
+            Err(error) => return Ok(invalid_arguments(error)),
         };
         let result = if identity.document_epoch() != epoch {
             serde_json::json!({"ok":false,"error_code":"stale_document",
@@ -404,19 +431,12 @@ fn serve(
                 Err(error) => cancellation_admission_error(error),
             }
         };
-        return write_envelope(stream, result, epoch);
+        return Ok(result);
     }
     if call.name == "agent_cancel" {
         let request: CancellationRequest = match serde_json::from_value(call.arguments) {
             Ok(request) => request,
-            Err(error) => {
-                return write_envelope(
-                    stream,
-                    serde_json::json!({"ok":false,"error_code":"invalid_arguments",
-                        "error":error.to_string()}),
-                    epoch,
-                );
-            }
+            Err(error) => return Ok(invalid_arguments(error)),
         };
         let identity = match AgentCancellationIdentity::new(
             request.expected_document_epoch,
@@ -424,40 +444,36 @@ fn serve(
             request.operation_key,
         ) {
             Ok(identity) => identity,
-            Err(error) => {
-                return write_envelope(
-                    stream,
-                    serde_json::json!({"ok":false,"error_code":"invalid_arguments",
-                        "error":error.to_string()}),
-                    epoch,
-                );
-            }
+            Err(error) => return Ok(invalid_arguments(error)),
         };
         let result = if identity.document_epoch() != epoch {
             serde_json::json!({"ok":false,"error_code":"stale_document",
                 "error":"document epoch mismatch; reconnect explicitly"})
         } else {
-            cancellation_result(cancellations.cancel(&identity).map_err(io::Error::other)?)
+            match cancellations.cancel(&identity) {
+                Ok(outcome) => cancellation_result(outcome),
+                Err(error) => cancellation_admission_error(error),
+            }
         };
-        return write_envelope(stream, result, epoch);
+        return Ok(result);
     }
 
     let cancellation = if call.name == "agent_apply"
         && let Ok(request) = serde_json::from_value::<AgentEditRequest>(call.arguments.clone())
     {
         let payload_digest = request.payload_digest();
-        let identity = AgentCancellationIdentity::new(
+        let identity = match AgentCancellationIdentity::new(
             request.expected_document_epoch,
             request.actor,
             request.operation_key,
-        )
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        ) {
+            Ok(identity) => identity,
+            Err(error) => return Ok(invalid_arguments(error)),
+        };
         if identity.document_epoch() == epoch {
             let admission = match cancellations.admit(&identity, payload_digest) {
                 Ok(admission) => admission,
-                Err(error) => {
-                    return write_envelope(stream, cancellation_admission_error(error), epoch);
-                }
+                Err(error) => return Ok(cancellation_admission_error(error)),
             };
             Some((identity, payload_digest, admission))
         } else {
@@ -477,35 +493,44 @@ fn serve(
         if let Some((identity, payload_digest, AgentCancellationAdmission::New)) = &cancellation {
             let _ = cancellations.release_unqueued(identity, *payload_digest);
         }
-        return Err(io::Error::other(error.to_string()));
+        return Err(match error {
+            mpsc::TrySendError::Full(_) => LiveError::new(
+                "mailbox_full",
+                format!(
+                    "the editor already holds {MAX_PENDING_REQUESTS} waiting requests; retry later"
+                ),
+            ),
+            mpsc::TrySendError::Disconnected(_) => {
+                LiveError::new("editor_closed", "the editor stopped accepting requests")
+            }
+        });
     }
     pending.store(true, Ordering::Release);
     let deadline = Instant::now() + TIMEOUT;
-    let result = loop {
+    loop {
         match receive.recv_timeout(STOP_POLL) {
-            Ok(result) => break result,
+            Ok(result) => return Ok(result),
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
+                return Err(LiveError::new(
+                    "editor_closed",
                     "editor stopped before responding",
                 ));
             }
             Err(mpsc::RecvTimeoutError::Timeout) if stop.load(Ordering::Relaxed) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Interrupted,
+                return Err(LiveError::new(
+                    "editor_closing",
                     "editor endpoint is shutting down",
                 ));
             }
             Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() >= deadline => {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
+                return Err(LiveError::new(
+                    "editor_timeout",
                     "editor did not respond; inspect receipts before retrying",
                 ));
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
-    };
-    write_frame(stream, &result)
+    }
 }
 
 fn cancellation_admission_error(error: AgentCancellationError) -> Value {
@@ -542,14 +567,29 @@ fn cancellation_result(outcome: AgentCancellationOutcome) -> Value {
         .expect("typed cancellation response serializes")
 }
 
-fn write_envelope(stream: &mut UnixStream, mut result: Value, epoch: &str) -> io::Result<()> {
-    result["document_epoch"] = serde_json::json!(epoch);
-    result["live_schema_version"] = serde_json::json!(1);
-    result["server_version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
-    write_frame(stream, &result)
+fn write_envelope(stream: &mut UnixStream, result: Value, epoch: &str) -> io::Result<()> {
+    let envelope = |mut result: Value| {
+        result["document_epoch"] = serde_json::json!(epoch);
+        result["live_schema_version"] = serde_json::json!(1);
+        result["server_version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
+        result
+    };
+    // A response at or above the frame limit is replaced by an error frame before any byte
+    // is written, so the client still receives one complete frame.
+    let frame = match encode_frame(&envelope(result)) {
+        Ok(frame) => frame,
+        Err(error) => encode_frame(&envelope(
+            LiveError::new("response_too_large", error).into_value(),
+        ))?,
+    };
+    stream.write_all(&frame)
 }
 
 fn write_frame(stream: &mut UnixStream, value: &Value) -> io::Result<()> {
+    stream.write_all(&encode_frame(value)?)
+}
+
+fn encode_frame(value: &Value) -> io::Result<Vec<u8>> {
     let mut frame = serde_json::to_vec(value)?;
     if frame.len() >= OUTPUT_LIMIT {
         return Err(io::Error::new(
@@ -558,7 +598,7 @@ fn write_frame(stream: &mut UnixStream, value: &Value) -> io::Result<()> {
         ));
     }
     frame.push(b'\n');
-    stream.write_all(&frame)
+    Ok(frame)
 }
 
 /// Sends one bounded call to an explicit editor endpoint. Never falls back to disk.
@@ -907,8 +947,69 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         };
         drop(server);
-        assert!(client.join().unwrap().is_err());
+        let result = client.join().unwrap().unwrap();
+        assert_eq!(result["ok"], false);
+        assert!(
+            matches!(
+                result["error_code"].as_str(),
+                Some("editor_closing" | "editor_closed")
+            ),
+            "{result}"
+        );
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn malformed_request_receives_one_error_frame() {
+        let server = Server::start().unwrap();
+        let mut client = UnixStream::connect(server.path()).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        client.write_all(b"{not json\n").unwrap();
+        let result: Value =
+            serde_json::from_str(&read_frame(&mut client, MAX_FRAME_BYTES).unwrap()).unwrap();
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error_code"], "invalid_request");
+        assert_eq!(result["document_epoch"], server.document_epoch());
+        assert!(server.try_recv().is_none());
+    }
+
+    #[test]
+    fn full_mailbox_receives_one_error_frame() {
+        let (sender, _receiver) = mpsc::sync_channel(1);
+        let (reply, _) = mpsc::channel();
+        sender
+            .try_send(Pending {
+                call: ToolCall {
+                    name: "font_info".into(),
+                    arguments: serde_json::json!({}),
+                },
+                epoch: "current".into(),
+                deadline: Instant::now() + TIMEOUT,
+                reply,
+            })
+            .unwrap();
+        let cancellations = AgentCancellationRegistry::new("current", 4).unwrap();
+        let (mut client, mut handler) = UnixStream::pair().unwrap();
+        client
+            .write_all(b"{\"name\":\"font_info\",\"arguments\":{}}\n")
+            .unwrap();
+        let pending = AtomicBool::new(false);
+        answer(
+            &mut handler,
+            &sender,
+            "current",
+            &cancellations,
+            &pending,
+            &AtomicBool::new(false),
+        );
+        let result: Value =
+            serde_json::from_str(&read_frame(&mut client, MAX_FRAME_BYTES).unwrap()).unwrap();
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error_code"], "mailbox_full");
+        assert_eq!(result["document_epoch"], "current");
+        assert!(!pending.load(Ordering::Acquire));
     }
 }
 
