@@ -8,6 +8,7 @@
 //! An operation whose time per glyph rises with the glyph count does more than linear work.
 //!
 //! Set `RUNEBENDER_BENCH_GLYPHS` to a comma-separated list of glyph counts to change the sizes.
+//! Set `RUNEBENDER_BENCH_KEEP` to a folder to also keep each size's fixture there.
 
 use std::fs;
 use std::hint::black_box;
@@ -222,6 +223,19 @@ fn main() {
             .collect(),
         Err(_) => DEFAULT_SIZES.to_vec(),
     };
+    // RUNEBENDER_BENCH_KEEP names a folder that receives each size's fixture before it is
+    // edited, for probes that need a large font on disk. Nothing else is written there.
+    let keep = std::env::var_os("RUNEBENDER_BENCH_KEEP").map(PathBuf::from);
+    if let Some(keep) = &keep {
+        fs::create_dir_all(keep).expect("create the folder for kept fixtures");
+        for &glyph_count in &sizes {
+            let directory = keep.join(format!("size-{glyph_count}"));
+            if !directory.exists() {
+                write_fixture(&directory, glyph_count);
+            }
+            println!("kept {}", directory.join("Scaling.designspace").display());
+        }
+    }
     println!("Font engine scaling: one run per operation and size, single-threaded.");
     println!("Time per glyph that rises with the glyph count marks more than linear work.");
     let scratch = Scratch::new();

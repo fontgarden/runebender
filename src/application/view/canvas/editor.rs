@@ -7703,8 +7703,18 @@ mod tests {
             .unwrap_or_else(|| {
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../virtua-grotesk/sources")
             });
-        let mut app = Workspace::open(&sources.join("VirtuaGrotesk.designspace"))
-            .expect("the designspace opens");
+        // RUNEBENDER_BENCH_FONT names any designspace or UFO to probe in place of Virtua
+        // Grotesk, such as a large font kept by the `large_font` benchmark.
+        let path = std::env::var_os("RUNEBENDER_BENCH_FONT")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| sources.join("VirtuaGrotesk.designspace"));
+        let start = Instant::now();
+        let mut app = Workspace::open(&path).expect("the font opens");
+        println!(
+            "open {} glyphs              {:.2} ms",
+            app.font.glyphs.len(),
+            start.elapsed().as_secs_f64() * 1e3
+        );
         let index = app.font.index_of(&glyph).expect("the glyph exists");
         let logic = |app: &mut Workspace| sized_box(app_logic(app));
         let ms = |d: Duration| d.as_secs_f64() * 1e3;
@@ -7940,6 +7950,23 @@ mod tests {
         let start = Instant::now();
         headless.rebuild(logic);
         let undo_rebuild = start.elapsed();
+        // RUNEBENDER_BENCH_REPEAT=<count> repeats redo and undo with their rebuilds, so a
+        // sampling profiler attached to this process sees mostly the work after an edit.
+        if let Some(count) = std::env::var("RUNEBENDER_BENCH_REPEAT")
+            .ok()
+            .and_then(|count| count.parse::<usize>().ok())
+        {
+            let start = Instant::now();
+            for step in 0..count {
+                headless.app.undo_open_glyph(step % 2 == 0);
+                assert!(headless.app.font.project.compiled_preview().is_ok());
+                headless.rebuild(logic);
+            }
+            println!(
+                "repeated rebuild after edit  {:.2} ms each, compile included",
+                ms(start.elapsed()) / count as f64
+            );
+        }
         let start = Instant::now();
         let snapshot = headless.app.font.project.babelfont_snapshot();
         let snapshot_time = start.elapsed();
