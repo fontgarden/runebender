@@ -7918,6 +7918,12 @@ mod tests {
         let start = Instant::now();
         headless.app.finish_open_glyph_refresh();
         let refresh = start.elapsed();
+        // Tests compile the preview on the calling thread when a rebuild asks for it; the
+        // window compiles it on a worker. Compile it here, outside the timed rebuild, so the
+        // rebuild figure is the work the window's interface thread does after an edit.
+        let start = Instant::now();
+        assert!(headless.app.font.project.compiled_preview().is_ok());
+        let compile = start.elapsed();
         let start = Instant::now();
         headless.rebuild(logic);
         let rebuild = start.elapsed();
@@ -7930,6 +7936,7 @@ mod tests {
         let start = Instant::now();
         headless.app.undo_open_glyph(false);
         let undo = start.elapsed();
+        assert!(headless.app.font.project.compiled_preview().is_ok());
         let start = Instant::now();
         headless.rebuild(logic);
         let undo_rebuild = start.elapsed();
@@ -7937,11 +7944,6 @@ mod tests {
         let snapshot = headless.app.font.project.babelfont_snapshot();
         let snapshot_time = start.elapsed();
         assert!(snapshot.is_ok());
-        // Tests compile the preview synchronously inside the rebuild; the window does it on
-        // a thread. Its cost is reported so the rebuild figure above can be read without it.
-        let start = Instant::now();
-        assert!(headless.app.font.project.compile().is_ok());
-        let compile = start.elapsed();
 
         section_costs(&headless.app, true);
         if !headless.app.preview_text.is_empty() {
@@ -7989,7 +7991,7 @@ mod tests {
         println!("undo                         {:.2} ms", ms(undo));
         println!("undo rebuild                 {:.2} ms", ms(undo_rebuild));
         println!("font snapshot for preview    {:.2} ms", ms(snapshot_time));
-        println!("preview compile (threaded)   {:.2} ms", ms(compile));
+        println!("preview compile (worker)     {:.2} ms", ms(compile));
     }
     #[test]
     fn hoi_pointer_drag_control_cancel_and_undo_preserve_the_master() {
