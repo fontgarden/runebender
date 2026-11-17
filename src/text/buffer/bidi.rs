@@ -42,7 +42,7 @@ impl TextBuffer {
         line_start: usize,
         line_end: usize,
     ) -> Rc<Vec<VisualRun>> {
-        let line_number = self.line_number_for_index(line_start);
+        let line_number = self.line_number_for_sort(line_start);
         let base_rtl = self.resolved_line_direction(line_number) == TextDirection::RightToLeft;
         self.visual_runs_in(line_start, line_end, base_rtl)
     }
