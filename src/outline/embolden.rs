@@ -22,6 +22,7 @@
 //! its verticals by 96 units and its bars by 72.
 
 use crate::font::LayerView;
+use crate::outline::point_ops::snap_to_spacing;
 
 /// How far to push, per axis, in font units.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -121,16 +122,6 @@ pub fn learn_layer_advance_delta(pairs: &[(LayerView<'_>, LayerView<'_>)]) -> Op
     Some(deltas.iter().sum::<f64>() / deltas.len() as f64)
 }
 
-/// Snap a value to the nearest multiple of `grid`; a grid of zero or
-/// less leaves it alone.
-pub fn snap_to_grid(value: f64, grid: f64) -> f64 {
-    if grid > 0.0 {
-        (value / grid).round() * grid
-    } else {
-        value
-    }
-}
-
 /// Where every point of a layer lands after pushing it outward, in
 /// contour order, one entry per point.
 ///
@@ -149,8 +140,8 @@ pub fn layer_point_moves(layer: LayerView<'_>, offset: Offset, grid: f64) -> Vec
                 .zip(normals)
                 .map(move |(point, (nx, ny))| {
                     kurbo::Point::new(
-                        point.x + snap_to_grid(nx * offset.x, grid),
-                        point.y + snap_to_grid(ny * offset.y, grid),
+                        point.x + snap_to_spacing(nx * offset.x, grid),
+                        point.y + snap_to_spacing(ny * offset.y, grid),
                     )
                 })
                 .collect::<Vec<_>>()

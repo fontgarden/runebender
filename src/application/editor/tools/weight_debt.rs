@@ -184,7 +184,7 @@ impl Workspace {
                 Some(PointMoves {
                     glyph: name.clone(),
                     positions: embolden::layer_point_moves(view, fit.offset, MACHINE_GRID),
-                    width: Some(embolden::snap_to_grid(
+                    width: Some(runebender::outline::point_ops::snap_to_spacing(
                         view.width() + fit.advance_delta,
                         MACHINE_GRID,
                     )),

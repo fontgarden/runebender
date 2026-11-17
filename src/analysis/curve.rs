@@ -16,6 +16,7 @@
 //! unit-tests on native `cargo test`. Formulas verified against Simon Cozens'
 //! `SuperTool` and Linus Romer's Curvatura.
 
+use crate::analysis::measure::popcount;
 use crate::font::LayerView;
 use crate::outline::glyph_paths::round_units;
 use kurbo::{Point, Vec2};
@@ -473,12 +474,6 @@ pub fn balance(p0: Point, p1: Point, p2: Point, p3: Point) -> Option<(Point, Poi
     }
     let avg = (x + y) / 2.0;
     Some((p0.lerp(s, avg), p3.lerp(s, avg)))
-}
-
-/// Popcount (Hamming weight): the number of powers of two a length is the
-/// sum of.
-pub fn popcount(v: i64) -> u32 {
-    (v.max(0) as u64).count_ones()
 }
 
 /// Round a point to the nearest even integer on both axes: the 2-unit
