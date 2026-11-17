@@ -20,6 +20,7 @@ use std::sync::Arc;
 use xilem::core::{MessageCtx, MessageResult, Mut, View, ViewMarker};
 use xilem::{Color, Pod, ViewCtx};
 
+use crate::application::design::areas;
 use crate::application::widgets::text_label::{self, Anchor};
 
 /// One letter of the sample.
@@ -187,7 +188,7 @@ impl Widget for LetterChipsWidget {
                 painter,
                 Point::new(center.x, center.y - 1.0),
                 &chip.character.to_string(),
-                11.0,
+                areas::letter_chips::TEXT_SIZE,
                 ink,
                 Anchor::Middle,
             );

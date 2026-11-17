@@ -369,7 +369,7 @@ where
         .corner_radius(Length::px(pal.control_radius))
 }
 
-/// The three kinds of entry in a conversation. Each is a card with the
+/// The four kinds of entry in a conversation. Each is a card with the
 /// field's keyline, so the transcript and the field it grows from read as
 /// one family; only the surface tells them apart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

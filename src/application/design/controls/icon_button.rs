@@ -40,7 +40,6 @@ pub(crate) struct IconWidget {
     icon_size: Option<f64>,
     tile_size: f64,
     focus_target: Option<Arc<Mutex<Option<WidgetId>>>>,
-    size: Size,
     hovered: bool,
     pressed: bool,
 }
@@ -61,8 +60,7 @@ impl Widget for IconWidget {
         Length::px(self.tile_size)
     }
 
-    fn layout(&mut self, ctx: &mut LayoutCtx<'_>, _props: &PropertiesRef<'_>, size: Size) {
-        self.size = size;
+    fn layout(&mut self, ctx: &mut LayoutCtx<'_>, _props: &PropertiesRef<'_>, _size: Size) {
         ctx.set_paint_insets(Insets::ZERO);
     }
 
@@ -294,7 +292,6 @@ impl<State: 'static> View<State, (), ViewCtx> for IconView<State> {
             icon_size: self.icon_size,
             tile_size: self.tile_size,
             focus_target: self.focus_target.clone(),
-            size: Size::ZERO,
             hovered: false,
             pressed: false,
         };
@@ -365,7 +362,6 @@ mod tests {
             icon_size: None,
             tile_size: TILE,
             focus_target,
-            size: Size::ZERO,
             hovered: false,
             pressed: false,
         }

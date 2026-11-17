@@ -612,7 +612,6 @@ pub(crate) fn coordinates_section(app: &Workspace) -> impl WidgetView<Workspace>
     use crate::application::design::{
         COORD_LABEL_WIDTH, COORD_PICKER_EDGE, COORD_PICKER_GAP, COORD_PICKER_INSET,
     };
-    use crate::application::widgets::quadrant_picker::quadrant_grid;
     use runebender::outline::path::Quadrant;
     const QUADRANTS: [Quadrant; 9] = [
         Quadrant::TopLeft,
@@ -677,7 +676,12 @@ pub(crate) fn coordinates_section(app: &Workspace) -> impl WidgetView<Workspace>
     )
     .padding(Length::px(COORD_PICKER_INSET));
     let picker = sized_box(xilem::view::zstack((
-        quadrant_grid(pal.outline),
+        icon_paint::view(
+            "coordinate-grid",
+            "Reference grid",
+            pal.outline,
+            COORD_PICKER_EDGE,
+        ),
         picker_buttons,
     )))
     .dims(Dimensions::fixed(

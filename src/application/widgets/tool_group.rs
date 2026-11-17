@@ -19,7 +19,7 @@ use xilem::core::{MessageCtx, MessageResult, Mut, View, ViewMarker};
 use xilem::{Pod, ViewCtx};
 
 use crate::application::design::theme::Palette;
-use crate::application::design::{ControlSize, Space, TITLEBAR_HEIGHT};
+use crate::application::design::{ControlSize, Space, TITLEBAR_HEIGHT, TextSize};
 use crate::application::widgets::icon_paint;
 use crate::application::widgets::text_label::{self, Anchor};
 use crate::application::workspace::{Tool, Workspace};
@@ -481,7 +481,7 @@ impl Widget for ToolMenu {
                     top + ROW_HEIGHT / 2.0 - MENU_CONTENT_RISE,
                 ),
                 choice.label,
-                13.0,
+                TextSize::Body.px(),
                 ink,
                 Anchor::Start,
             );

@@ -78,8 +78,6 @@ pub struct LanguageGroup {
     pub id: String,
     /// Label shown on the group row.
     pub label: String,
-    /// Icon text for the group; the shells no longer draw it.
-    pub icon: String,
     /// What the group row itself selects: the script's own Unicode
     /// blocks. The glyphsets carry Latin punctuation, so OR-ing the
     /// sub-filters would drag half the Latin alphabet in.
@@ -354,7 +352,6 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             LanguageGroup {
                 id: "Arab".into(),
                 label: "Arabic".into(),
-                icon: "ض".into(),
                 // Arabic, Supplement, Extended-A/B, presentation forms.
                 script_ranges: vec![
                     (0x0600, 0x06ff),
@@ -391,7 +388,6 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             LanguageGroup {
                 id: "Hans".into(),
                 label: "Chinese".into(),
-                icon: "字".into(),
                 script_ranges: Vec::new(),
                 name_suffix: None,
                 filters: vec![CharacterFilter {
@@ -406,7 +402,6 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             LanguageGroup {
                 id: "Cyrl".into(),
                 label: "Cyrillic".into(),
-                icon: "Я".into(),
                 script_ranges: vec![(0x0400, 0x052f), (0x2de0, 0x2dff), (0xa640, 0xa69f)],
                 name_suffix: None,
                 filters: glyphset_filters_for_script("Cyrillic"),
@@ -414,7 +409,6 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             LanguageGroup {
                 id: "Deva".into(),
                 label: "Devanagari".into(),
-                icon: "दे".into(),
                 script_ranges: Vec::new(),
                 name_suffix: None,
                 filters: vec![CharacterFilter {
@@ -429,7 +423,6 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             LanguageGroup {
                 id: "Grek".into(),
                 label: "Greek".into(),
-                icon: "Ω".into(),
                 script_ranges: vec![(0x0370, 0x03ff), (0x1f00, 0x1fff)],
                 name_suffix: None,
                 filters: glyphset_filters_for_script("Greek"),
@@ -437,7 +430,6 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             LanguageGroup {
                 id: "Hebr".into(),
                 label: "Hebrew".into(),
-                icon: "א".into(),
                 script_ranges: vec![(0x0590, 0x05ff), (0xfb1d, 0xfb4f)],
                 name_suffix: Some("-hb".into()),
                 filters: vec![
@@ -478,7 +470,6 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             LanguageGroup {
                 id: "Jpan".into(),
                 label: "Japanese".into(),
-                icon: "あ".into(),
                 script_ranges: Vec::new(),
                 name_suffix: None,
                 filters: vec![CharacterFilter {
@@ -493,7 +484,6 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             LanguageGroup {
                 id: "Kore".into(),
                 label: "Korean".into(),
-                icon: "한".into(),
                 script_ranges: Vec::new(),
                 name_suffix: None,
                 filters: vec![CharacterFilter {
@@ -508,7 +498,6 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             LanguageGroup {
                 id: "Latn".into(),
                 label: "Latin".into(),
-                icon: "G".into(),
                 script_ranges: vec![
                     (0x0041, 0x024f),
                     (0x1e00, 0x1eff),
@@ -521,7 +510,6 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             LanguageGroup {
                 id: "Thai".into(),
                 label: "Thai".into(),
-                icon: "ก".into(),
                 script_ranges: Vec::new(),
                 name_suffix: None,
                 filters: vec![CharacterFilter {
@@ -535,16 +523,15 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             },
         ];
         // Remaining scripts that only exist as glyphsets.
-        for (id, label, icon, script) in [
-            ("Phon", "Phonetics", "ə", "Phonetics"),
-            ("Tran", "TransLatin", "Ǧ", "TransLatin"),
+        for (id, label, script) in [
+            ("Phon", "Phonetics", "Phonetics"),
+            ("Tran", "TransLatin", "TransLatin"),
         ] {
             let filters = glyphset_filters_for_script(script);
             if !filters.is_empty() {
                 groups.push(LanguageGroup {
                     id: id.into(),
                     label: label.into(),
-                    icon: icon.into(),
                     script_ranges: Vec::new(),
                     name_suffix: None,
                     filters,

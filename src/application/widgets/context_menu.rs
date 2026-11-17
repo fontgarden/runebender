@@ -18,7 +18,7 @@
 //! file exists because the editor is a hand-written Masonry widget and can
 //! therefore reach `create_layer` directly.
 
-use crate::application::design::{ControlKind, ControlStyle};
+use crate::application::design::{ControlKind, ControlStyle, TextSize};
 use std::sync::Arc;
 
 use masonry::accesskit::{Node, Role};
@@ -189,7 +189,7 @@ impl Widget for ContextMenu {
                 painter,
                 Point::new(10.0, top + ROW / 2.0 + 4.0),
                 &row.label,
-                13.0,
+                TextSize::Body.px(),
                 pal.text,
                 Anchor::Start,
             );

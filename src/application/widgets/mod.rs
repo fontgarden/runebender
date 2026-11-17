@@ -16,7 +16,6 @@ pub(crate) mod letter_chips;
 pub(crate) mod menu_shell;
 pub(crate) mod model_strip;
 pub(crate) mod panel_frame;
-pub(crate) mod quadrant_picker;
 pub(crate) mod rounded_clip;
 pub(crate) mod shortcuts;
 pub(crate) mod source_text_area;

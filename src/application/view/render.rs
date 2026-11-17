@@ -214,7 +214,6 @@ where
         // the visible gutter comes from padding, not its hard-coded bar.
         .bar_thickness(Length::ZERO)
         .min_bar_area(Length::px(SIDEBAR_SPLITTER_HIT_WIDTH))
-        .solid_bar(false)
         .draggable(!left_collapsed);
     let columns = crate::application::widgets::quiet_split::split(columns, right)
         .split_point_from_end(Length::px(right_width))
@@ -224,7 +223,6 @@ where
         )
         .bar_thickness(Length::ZERO)
         .min_bar_area(Length::px(SPLITTER_HIT_WIDTH))
-        .solid_bar(false)
         .draggable(!right_collapsed);
     clip_split(columns)
 }
@@ -301,8 +299,7 @@ where
                 Length::px(design::PROOF_MIN_HEIGHT),
             )
             .bar_thickness(Length::ZERO)
-            .min_bar_area(Length::px(design::SPLITTER_HIT_WIDTH))
-            .solid_bar(false);
+            .min_bar_area(Length::px(design::SPLITTER_HIT_WIDTH));
     clip_split(split)
 }
 

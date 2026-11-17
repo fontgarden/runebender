@@ -79,8 +79,7 @@ pub(crate) fn band<V: WidgetView<Workspace>>(child: V) -> impl WidgetView<Worksp
         .padding(Padding::vertical(Length::px(design::UNIT)))
 }
 
-/// The header already contains `HEADER_DESCENT` beneath its visible content.
-/// Include that allowance in the same UNIT-to-rule gap used by every other band.
+/// A header band: one UNIT of space below the header and none above it.
 pub(crate) fn header_band<V: WidgetView<Workspace>>(
     child: V,
 ) -> impl WidgetView<Workspace> + use<V> {

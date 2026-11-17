@@ -320,7 +320,7 @@ impl Space {
 pub(crate) enum ControlSize {
     /// 10 px. A dot in a picker, a status light.
     Dot,
-    /// 16 px. A color swatch or a chip.
+    /// 24 px. A color swatch or a chip.
     Swatch,
     /// 20 px. An icon, a small thumbnail.
     Icon,
@@ -530,12 +530,12 @@ impl ButtonShape {
     reason = "the scale is a closed vocabulary: a size nothing uses yet is still part of it"
 )]
 pub(crate) enum TextSize {
-    /// 11 px. Section headers, counts, hints.
+    /// 13 px. Section headers, counts, hints.
     Caption,
-    /// 12 px. Rows, labels, fields. The default.
+    /// 13 px. Rows, labels, fields. The default.
     #[default]
     Body,
-    /// 14 px. A window or panel title.
+    /// 13 px. A window or panel title.
     Title,
     /// 18 px. The one heading on a screen.
     Heading,

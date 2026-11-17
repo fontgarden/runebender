@@ -95,6 +95,14 @@ pub(crate) mod graph {
     }
 }
 
+/// The letter chips: one letter in each small circle.
+pub(crate) mod letter_chips {
+    /// The letter size.
+    ///
+    /// Why: a chip's circle is 20 px across, and a letter at the 13 px body size crowds it.
+    pub(crate) const TEXT_SIZE: f32 = 11.0;
+}
+
 /// The neural model strip: a diagram of strands and nodes over the ink.
 pub(crate) mod model_strip {
     /// The selected strand's line, and the keyline around it.
