@@ -68,12 +68,8 @@ pub(crate) fn editor_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<>
         app.has_text_session.then(|| {
             // Headless evidence can start with one logical range
             // selected; live selection remains widget-owned.
-            let selection = std::env::var("RUNEBENDER_TEXT_SELECTION")
-                .ok()
-                .and_then(|value| {
-                    let (start, end) = value.split_once(':')?;
-                    Some((start.parse().ok()?, end.parse().ok()?))
-                });
+            let selection =
+                crate::application::launch_options::LaunchOptions::current().text_selection;
             text_tool::TextInputs::for_glyph(&app.font, app.session.root_glyph())
                 .with_location(&app.font, &app.axis_values)
                 .with_context(app.text_context_id())

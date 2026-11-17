@@ -44,7 +44,8 @@ const BAR_HEIGHT: f64 = crate::application::design::TITLEBAR_HEIGHT;
 
 /// Platforms without an OS menu share one application header row.
 pub(crate) fn in_window() -> bool {
-    !cfg!(target_os = "macos") || std::env::var("RUNEBENDER_IN_WINDOW_MENU").is_ok()
+    !cfg!(target_os = "macos")
+        || crate::application::launch_options::LaunchOptions::current().in_window_menu
 }
 const TITLE_SIZE: f32 = 13.0;
 const TITLE_PAD: f64 = Space::Md.px();
@@ -189,8 +190,9 @@ impl MenuShell {
             active_submenu: None,
             selected: 0,
             focus_before: None,
-            initial_menu: std::env::var("RUNEBENDER_MENU_OPEN")
-                .ok()
+            initial_menu: crate::application::launch_options::LaunchOptions::current()
+                .menu_open
+                .as_deref()
                 .and_then(|title| MENUS.iter().position(|menu| *menu == title)),
             size: Size::ZERO,
         }

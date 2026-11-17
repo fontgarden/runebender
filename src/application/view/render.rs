@@ -789,7 +789,7 @@ pub(crate) fn root_logic(app: &mut AppState) -> impl WidgetView<AppState> + use<
     // application boundary so they remain present without an open document.
     actions::install(app);
     #[cfg(target_os = "macos")]
-    let root = if std::env::var("RUNEBENDER_IN_WINDOW_MENU").is_ok() {
+    let root = if crate::application::launch_options::LaunchOptions::current().in_window_menu {
         OneOf2::A(menu_shell::menu_shell(content, app.palette.clone(), app))
     } else {
         OneOf2::B(shortcuts::shortcut_host(content))

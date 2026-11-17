@@ -255,7 +255,7 @@ impl Workspace {
             }
         }
         self.scan_graph_files();
-        if std::env::var_os("RUNEBENDER_NODES_CONTENT_FIXTURE").is_some() {
+        if crate::application::launch_options::LaunchOptions::current().nodes_content_fixture {
             self.open_graph_content_fixture();
         }
     }

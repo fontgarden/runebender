@@ -267,6 +267,7 @@ Most of them exist for captures, but each one also applies to a window unless it
 | `RUNEBENDER_TEXT_FEATURES_DISABLED=<tag,...>` | Turn off these OpenType features in the text session. |
 | `RUNEBENDER_TEXT_SCRIPT=<tag>` | Shape the text session with this OpenType script tag. |
 | `RUNEBENDER_TEXT_LANGUAGE=<tag>` | Shape the text session with this OpenType language tag. |
+| `RUNEBENDER_TEXT_SELECTION=<start>:<end>` | Select this range of the text session. |
 | `RUNEBENDER_PREVIEW_TEXT=<text>` | Set the text of the proof strip. |
 | `RUNEBENDER_PREVIEW_BLUR=<radius>` | Blur the proof strip by this radius, from 0 to 8. |
 | `RUNEBENDER_PREVIEW_INVERT=1` | Invert the proof strip. |
@@ -285,9 +286,12 @@ Most of them exist for captures, but each one also applies to a window unless it
 | `RUNEBENDER_MODEL=<dir>` | Load the outline model in this folder. |
 | `RUNEBENDER_PROPOSAL_PREVIEW=<task>` | Show the review overlay of the proposal with this task name. |
 | `RUNEBENDER_NODES=<file>` | Open this graph file. |
+| `RUNEBENDER_NODES_CONTENT_FIXTURE=1` | Open the fixed code-and-image graph layout that interface reviews use. |
 | `RUNEBENDER_MODE=graph` | Start in the Graph view. |
 | `RUNEBENDER_GRAPH_SCRIPT=<index>` | In a capture of the Graph view, add a code node with this example script. |
 | `RUNEBENDER_GRAPH_EXPANDED=1` | In a capture of the Graph view, show the first proof image expanded. |
+| `RUNEBENDER_IN_WINDOW_MENU=1` | On macOS, show the in-window menu that the other platforms use. |
+| `RUNEBENDER_MENU_OPEN=<title>` | Open the in-window menu with this title. |
 | `RUNEBENDER_FRAME_STATS=1` | In a window, render every frame and report the frame cadence on stderr. |
 
 ### Variables that other code reads
@@ -297,10 +301,6 @@ A test checks that this section and the previous one name every `RUNEBENDER_*` v
 
 | Variable | Effect |
 | --- | --- |
-| `RUNEBENDER_TEXT_SELECTION=<start>:<end>` | Select this range of the text session. |
-| `RUNEBENDER_NODES_CONTENT_FIXTURE=1` | Open the fixed code-and-image graph layout that interface reviews use. |
-| `RUNEBENDER_IN_WINDOW_MENU=1` | On macOS, show the in-window menu that the other platforms use. |
-| `RUNEBENDER_MENU_OPEN=<title>` | Open the in-window menu with this title. |
 | `RUNEBENDER_PYTHON=<path>` | The Python executable that runs recipes and graph code nodes. |
 | `RUNEBENDER_FONT_ML=<path>` | The `font-ml` executable. |
 | `RUNEBENDER_AI_DEVICE=<device>` | The device that graph model nodes request; the default is `auto`. |

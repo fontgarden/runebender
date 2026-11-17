@@ -112,7 +112,8 @@ fn fixture_png() -> ImmutablePng {
 fn legacy_projection(app: &Workspace) -> Option<CanvasProjection> {
     let state = app.graph.open.as_ref()?;
     let mut content = NodeContentMap::default();
-    let fixture = std::env::var_os("RUNEBENDER_NODES_CONTENT_FIXTURE").is_some();
+    let fixture =
+        crate::application::launch_options::LaunchOptions::current().nodes_content_fixture;
     for node in &state.graph.nodes {
         match node.type_name.as_str() {
             "live.python" => {

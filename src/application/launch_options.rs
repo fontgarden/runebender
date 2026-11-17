@@ -181,6 +181,11 @@ pub(crate) const VARIABLES: &[Variable] = &[
         "Shape the text session with this OpenType language tag.",
     ),
     variable(
+        "RUNEBENDER_TEXT_SELECTION",
+        "<start>:<end>",
+        "Select this range of the text session.",
+    ),
+    variable(
         "RUNEBENDER_PREVIEW_TEXT",
         "<text>",
         "Set the text of the proof strip.",
@@ -262,6 +267,11 @@ pub(crate) const VARIABLES: &[Variable] = &[
         "Show the review overlay of the proposal with this task name.",
     ),
     variable("RUNEBENDER_NODES", "<file>", "Open this graph file."),
+    variable(
+        "RUNEBENDER_NODES_CONTENT_FIXTURE",
+        "1",
+        "Open the fixed code-and-image graph layout that interface reviews use.",
+    ),
     variable("RUNEBENDER_MODE", "graph", "Start in the Graph view."),
     variable(
         "RUNEBENDER_GRAPH_SCRIPT",
@@ -272,6 +282,16 @@ pub(crate) const VARIABLES: &[Variable] = &[
         "RUNEBENDER_GRAPH_EXPANDED",
         "1",
         "In a capture of the Graph view, show the first proof image expanded.",
+    ),
+    variable(
+        "RUNEBENDER_IN_WINDOW_MENU",
+        "1",
+        "On macOS, show the in-window menu that the other platforms use.",
+    ),
+    variable(
+        "RUNEBENDER_MENU_OPEN",
+        "<title>",
+        "Open the in-window menu with this title.",
     ),
     variable(
         "RUNEBENDER_FRAME_STATS",
@@ -467,6 +487,14 @@ pub(crate) struct LaunchOptions {
     pub(crate) nodes: Option<PathBuf>,
     /// Start in the Graph view.
     pub(crate) graph_mode: bool,
+    /// The range of the text session to select, as start and end offsets.
+    pub(crate) text_selection: Option<(usize, usize)>,
+    /// Open the fixed code-and-image graph layout that interface reviews use.
+    pub(crate) nodes_content_fixture: bool,
+    /// On macOS, show the in-window menu instead of the menu bar.
+    pub(crate) in_window_menu: bool,
+    /// The title of the in-window menu to open.
+    pub(crate) menu_open: Option<String>,
 }
 
 /// A source of variable values: the process environment, or a table in a test.
@@ -686,6 +714,15 @@ impl LaunchOptions {
                 .filter(|file| !file.is_empty())
                 .map(PathBuf::from),
             graph_mode: variables.text("RUNEBENDER_MODE").as_deref() == Some("graph"),
+            text_selection: variables
+                .text("RUNEBENDER_TEXT_SELECTION")
+                .and_then(|value| {
+                    let (start, end) = value.split_once(':')?;
+                    Some((start.parse().ok()?, end.parse().ok()?))
+                }),
+            nodes_content_fixture: variables.is_set("RUNEBENDER_NODES_CONTENT_FIXTURE"),
+            in_window_menu: variables.text("RUNEBENDER_IN_WINDOW_MENU").is_some(),
+            menu_open: variables.text("RUNEBENDER_MENU_OPEN"),
         }
     }
 
@@ -1260,6 +1297,14 @@ mod tests {
     #[test]
     fn unit_tests_compile_on_the_calling_thread() {
         assert_eq!(CompileMode::current(), CompileMode::Blocking);
+    }
+
+    #[test]
+    fn a_text_selection_needs_two_offsets() {
+        let selection = |value| options(&[("RUNEBENDER_TEXT_SELECTION", value)]).text_selection;
+        assert_eq!(selection("1:4"), Some((1, 4)));
+        assert_eq!(selection("1"), None);
+        assert_eq!(selection("1:x"), None);
     }
 
     #[test]
