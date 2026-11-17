@@ -143,12 +143,14 @@ Measured on 2026-11-16 with Rust 1.96, macOS arm64, Apple M4 Pro, at 16,000 glyp
 
 | Operation | Before | After |
 | --- | ---: | ---: |
-| Open designspace | 3,330 ms | 1,566 ms |
+| Open designspace | 3,330 ms | 1,087 ms |
 | Snapshot for preview compile | 318 ms | 61 ms |
 | Save after editing one master | 6,965 ms | 2,228 ms |
 
 Before, open and the snapshot looked up each glyph by scanning the glyph list, so their time per glyph rose with the glyph count; a name index removed that.
 Save now skips masters without edits, writes an unchanged glyph file once, and stages masters in parallel.
+Open also reads the masters of a designspace in parallel.
+Reading the glyph files of one master on several threads was measured twice and was slower on this machine, so each master is still read on one thread.
 
 ## Editor responsiveness
 
@@ -161,6 +163,8 @@ cargo test --release --locked --features integration-fonts --bin runebender \
 ```
 
 The probe records input handling and scene construction separately over 240 point moves.
+It compiles the preview font before the timed rebuilds, because the window compiles it on a worker thread, so the rebuild figures are the interface thread's own work.
+Measured on 2026-11-16 on Virtua Grotesk (about 900 glyphs): an idle rebuild takes 0.29 ms, the rebuild after an edit 3.4 ms, a pointer move during a drag 41 microseconds, and building one frame of the edit canvas 139 microseconds.
 It does not rasterize or present those scenes, so its paint measurements cannot establish native frame rate.
 Its test-only preview compilation is synchronous; the native window compiles that preview on a worker.
 Use `RUNEBENDER_FRAME_STATS=1` in an agreed native interactive session to observe display cadence, and use the browser checks in [web/README.md](../web/README.md) for browser input and rendering.
