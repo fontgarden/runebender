@@ -59,7 +59,8 @@ pub(crate) struct FontModel {
     /// The active source's canonical glyph entries in display order.
     pub glyphs: Vec<GlyphEntry>,
     /// Constant-time lookup into the display-ordered canonical entries.
-    name_map: HashMap<String, usize>,
+    /// Each glyph's position in `glyphs`. Shared, so text outlines can use it without a copy.
+    name_map: Arc<HashMap<String, usize>>,
     /// The layer being edited for a glyph, when it is not the active master's own layer.
     /// An entry for another source, or for a layer the glyph no longer has, is ignored.
     pub(crate) edit_layers: HashMap<String, runebender::font::variable::LayerId>,
@@ -215,7 +216,7 @@ impl FontModel {
         let mut model = Self {
             project,
             glyphs: Vec::new(),
-            name_map: HashMap::new(),
+            name_map: Arc::default(),
             axes,
             edit_layers: HashMap::new(),
             text_inputs: std::sync::Mutex::new(None),
@@ -240,12 +241,13 @@ impl FontModel {
             .iter()
             .map(|entry| GlyphEntry::from_core(entry, mark_theme))
             .collect();
-        self.name_map = self
-            .glyphs
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| (entry.name.clone(), index))
-            .collect();
+        self.name_map = Arc::new(
+            self.glyphs
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| (entry.name.clone(), index))
+                .collect(),
+        );
     }
 
     /// Refresh one shell entry from its canonical default layer after an edit.
@@ -357,6 +359,11 @@ impl FontModel {
 
     pub(crate) fn index_of(&self, name: &str) -> Option<usize> {
         self.name_map.get(name).copied()
+    }
+
+    /// Each glyph's position in `glyphs`, shared without copying.
+    pub(crate) fn name_index(&self) -> Arc<HashMap<String, usize>> {
+        self.name_map.clone()
     }
 
     /// Add an empty glyph to every master.

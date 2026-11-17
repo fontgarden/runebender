@@ -92,7 +92,7 @@ impl PartialEq for TextInputs {
             }
             && same(&self.inventory, &other.inventory)
             && same(&self.kerning, &other.kerning)
-            && same(&self.outlines, &other.outlines)
+            && self.outlines == other.outlines
     }
 }
 
@@ -107,7 +107,87 @@ pub(crate) struct CachedTextInputs {
 }
 
 /// Glyph outlines by name, shared between the text inputs and every buffer made from them.
-pub(crate) type GlyphOutlines = Arc<std::collections::HashMap<String, Arc<BezPath>>>;
+///
+/// Two values are equal when they are the same shared source, which is how unchanged inputs
+/// compare; sources built separately are treated as different.
+#[derive(Clone)]
+pub(crate) struct GlyphOutlines(Arc<OutlineSource>);
+
+enum OutlineSource {
+    /// Outlines listed by name.
+    Listed(std::collections::HashMap<String, Arc<BezPath>>),
+    /// The glyph list's outlines, in its order, with its name index.
+    /// Sharing the index means an edit copies no names, only one pointer per glyph.
+    Model {
+        index: Arc<std::collections::HashMap<String, usize>>,
+        outlines: Vec<Arc<BezPath>>,
+    },
+    /// A compiled font at one location. A glyph is drawn the first time text shows it;
+    /// drawing all of them after every compile took longer than the rest of a rebuild.
+    Compiled {
+        font: Arc<runebender::font::compiler::CompiledFont>,
+        normalized: Vec<f64>,
+        drawn: std::sync::Mutex<std::collections::HashMap<String, Option<Arc<BezPath>>>>,
+    },
+}
+
+impl Default for GlyphOutlines {
+    fn default() -> Self {
+        Self(Arc::new(OutlineSource::Listed(
+            std::collections::HashMap::new(),
+        )))
+    }
+}
+
+impl PartialEq for GlyphOutlines {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl GlyphOutlines {
+    fn compiled(font: Arc<runebender::font::compiler::CompiledFont>, normalized: Vec<f64>) -> Self {
+        Self(Arc::new(OutlineSource::Compiled {
+            font,
+            normalized,
+            drawn: std::sync::Mutex::default(),
+        }))
+    }
+
+    fn contains(&self, name: &str) -> bool {
+        match &*self.0 {
+            OutlineSource::Listed(outlines) => outlines.contains_key(name),
+            OutlineSource::Model { index, .. } => index.contains_key(name),
+            OutlineSource::Compiled { font, .. } => font.glyph_ids.contains_key(name),
+        }
+    }
+
+    fn get(&self, name: &str) -> Option<Arc<BezPath>> {
+        match &*self.0 {
+            OutlineSource::Listed(outlines) => outlines.get(name).cloned(),
+            OutlineSource::Model { index, outlines } => outlines.get(*index.get(name)?).cloned(),
+            OutlineSource::Compiled {
+                font,
+                normalized,
+                drawn,
+            } => {
+                let mut drawn = drawn.lock().unwrap_or_else(|error| error.into_inner());
+                if let Some(found) = drawn.get(name) {
+                    return found.clone();
+                }
+                let outline = match font.outline(name, normalized) {
+                    Ok(outline) => outline.map(Arc::new),
+                    Err(error) => {
+                        runebender::text::shape::log_shaping_failure(&error);
+                        None
+                    }
+                };
+                drawn.insert(name.to_owned(), outline.clone());
+                outline
+            }
+        }
+    }
+}
 
 /// The compiled preview font read at one normalized location: every glyph's outline and
 /// advance, which take a pass over the whole binary to extract.
@@ -195,12 +275,14 @@ impl TextInputs {
 
     /// Every glyph's outline as the glyph list holds it.
     fn model_outlines(font: &FontModel) -> GlyphOutlines {
-        Arc::new(
-            font.glyphs
+        GlyphOutlines(Arc::new(OutlineSource::Model {
+            index: font.name_index(),
+            outlines: font
+                .glyphs
                 .iter()
-                .map(|glyph| (glyph.name.clone(), glyph.outline.clone()))
+                .map(|glyph| glyph.outline.clone())
                 .collect(),
-        )
+        }))
     }
 
     fn read(font: &FontModel) -> Self {
@@ -284,13 +366,7 @@ impl TextInputs {
                     && Arc::ptr_eq(&c.base_inventory, &self.inventory)
             });
             if !fresh {
-                let outlines = match compiled.outlines(&self.normalized) {
-                    Ok(outlines) => Arc::new(outlines.into_iter().collect()),
-                    Err(error) => {
-                        runebender::text::shape::log_shaping_failure(&error);
-                        return self;
-                    }
-                };
+                let outlines = GlyphOutlines::compiled(compiled.clone(), self.normalized.clone());
                 let advances: std::collections::HashMap<String, f64> = compiled
                     .advances(&self.normalized)
                     .unwrap_or_default()
@@ -325,7 +401,7 @@ impl TextInputs {
     /// Substitute the editor's live draft without recompiling the shaping font.
     pub(crate) fn with_live_outline(mut self, name: &str, outline: Arc<BezPath>) -> Self {
         // Kept beside the shared outlines; replacing one entry in them would copy them all.
-        if self.outlines.contains_key(name) {
+        if self.outlines.contains(name) {
             self.live_outline = Some((name.to_owned(), outline));
         }
         self
@@ -524,9 +600,9 @@ impl TextState {
         self.descender = inputs.descender;
     }
 
-    fn outline(&self, name: &str) -> Option<&Arc<BezPath>> {
+    fn outline(&self, name: &str) -> Option<Arc<BezPath>> {
         match &self.live_outline {
-            Some((live, path)) if live == name => Some(path),
+            Some((live, path)) if live == name => Some(path.clone()),
             _ => self.outlines.get(name),
         }
     }
@@ -709,6 +785,19 @@ mod tests {
         FontModel::from_project(project)
     }
 
+    /// Whether two inputs hold the same glyph data, whatever they share.
+    /// `==` treats outline sources built separately as different.
+    fn same_contents(a: &TextInputs, b: &TextInputs) -> bool {
+        let outlines = |inputs: &TextInputs| {
+            ["A", "B", "missing"].map(|name| inputs.outlines.get(name).map(|path| (*path).clone()))
+        };
+        a.inventory == b.inventory
+            && a.kerning == b.kerning
+            && outlines(a) == outlines(b)
+            && a.line_height == b.line_height
+            && a.active_glyph == b.active_glyph
+    }
+
     #[test]
     fn inputs_follow_a_width_edit_without_a_full_read() {
         let mut font = two_glyph_model();
@@ -736,7 +825,7 @@ mod tests {
         let followed = TextInputs::new(&font);
         assert!(followed != before, "the new width is in the inputs");
         assert!(
-            followed == TextInputs::read(&font),
+            same_contents(&followed, &TextInputs::read(&font)),
             "following equals reading in full"
         );
         // The kerning model and the feature text were not rebuilt.
@@ -773,7 +862,7 @@ mod tests {
         let changes = font.project.layer_changes_since(revision).unwrap();
         assert!(changes[0].codepoints);
         let after = TextInputs::new(&font);
-        assert!(after == TextInputs::read(&font));
+        assert!(same_contents(&after, &TextInputs::read(&font)));
         assert!(
             !Arc::ptr_eq(&after.kerning, &before.kerning),
             "a full read rebuilds it"
