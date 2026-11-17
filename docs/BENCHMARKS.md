@@ -126,6 +126,30 @@ Changed Swap followed a foreground width edit; the timing harness instead swaps 
 The negative Redo Clear delta releases the live layer restored by Undo; it is not a negative allocation request or a reduction in the retained history group.
 These measurements establish the fixed-payload scaling result, not a permanent CI memory threshold or a claim about total application RSS.
 
+## Scaling with glyph count
+
+Run the scaling harness to see whether an operation does more than linear work:
+
+```sh
+cargo bench --locked --no-default-features --bench large_font
+```
+
+It writes a two-master designspace at 1,000, 4,000 and 16,000 glyphs and times each operation once: open, one width edit on the first and on the last glyph, one interpolation, the snapshot for the preview compiler, and a save after editing one master.
+Set `RUNEBENDER_BENCH_GLYPHS` to a comma-separated list of glyph counts to change the sizes.
+Read the time per glyph across sizes: a figure that rises with the glyph count marks more than linear work.
+Each operation runs once, so compare sizes within one run and do not treat a single figure as precise.
+
+Measured on 2026-11-16 with Rust 1.96, macOS arm64, Apple M4 Pro, at 16,000 glyphs:
+
+| Operation | Before | After |
+| --- | ---: | ---: |
+| Open designspace | 3,330 ms | 1,566 ms |
+| Snapshot for preview compile | 318 ms | 61 ms |
+| Save after editing one master | 6,965 ms | 2,228 ms |
+
+Before, open and the snapshot looked up each glyph by scanning the glyph list, so their time per glyph rose with the glyph count; a name index removed that.
+Save now skips masters without edits, writes an unchanged glyph file once, and stages masters in parallel.
+
 ## Editor responsiveness
 
 Run the optimized native point-drag probe without opening a window:
