@@ -15,6 +15,8 @@ pub(crate) mod proof_samples;
 pub(crate) mod reference_fonts;
 pub(crate) mod train;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod guarded_file;
 pub(crate) mod host;
 pub(crate) mod screenshot;
 #[allow(

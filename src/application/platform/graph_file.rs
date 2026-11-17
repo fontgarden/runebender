@@ -8,17 +8,14 @@
 //! against an arbitrary writer racing the final same-directory rename.
 
 use std::fmt;
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
-use runebender::workflows::digest::hex_digest;
 use runebender::workflows::graph::{EXTENSION, FILE_VERSION, NodeGraph};
-use sha2::{Digest, Sha256};
+
+use super::guarded_file::{self, GuardedFileError};
 
 const MAX_GRAPH_BYTES: usize = 2 * 1024 * 1024;
-static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Exact disk identity for one live graph file.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,6 +85,18 @@ impl From<io::Error> for LiveGraphFileError {
     }
 }
 
+impl From<GuardedFileError> for LiveGraphFileError {
+    fn from(error: GuardedFileError) -> Self {
+        match error {
+            GuardedFileError::NotFound => Self::NotFound,
+            GuardedFileError::TooLarge => Self::TooLarge,
+            GuardedFileError::AlreadyExists => Self::AlreadyExists,
+            GuardedFileError::Conflict { actual_revision } => Self::Conflict { actual_revision },
+            GuardedFileError::Io(error) => Self::Io(error),
+        }
+    }
+}
+
 /// Load one bounded live graph and remove any stale session binding embedded by older writers.
 pub(crate) fn load(path: &Path) -> Result<LiveGraphDocument, LiveGraphFileError> {
     validate_path(path)?;
@@ -99,7 +108,7 @@ fn document_from_bytes(
     path: &Path,
     bytes: Vec<u8>,
 ) -> Result<LiveGraphDocument, LiveGraphFileError> {
-    let revision = hex_digest(Sha256::digest(&bytes));
+    let revision = guarded_file::revision(&bytes);
     reject_unknown_fields(&bytes)?;
     let mut graph: NodeGraph = serde_json::from_slice(&bytes)
         .map_err(|error| LiveGraphFileError::InvalidGraph(error.to_string()))?;
@@ -124,7 +133,7 @@ pub(crate) fn save(
     expected_revision: Option<&str>,
 ) -> Result<LiveGraphDocument, LiveGraphFileError> {
     let parent = validate_path(path)?;
-    check_expected(path, expected_revision)?;
+    guarded_file::check_expected(path, expected_revision, MAX_GRAPH_BYTES)?;
     let mut graph = graph.clone();
     strip_session_values(&mut graph);
     let bytes = serde_json::to_vec_pretty(&graph)
@@ -132,24 +141,17 @@ pub(crate) fn save(
     if bytes.len() > MAX_GRAPH_BYTES {
         return Err(LiveGraphFileError::TooLarge);
     }
-
-    let (temporary, mut file) = create_temporary(&parent)?;
-    let staged = (|| -> Result<(), LiveGraphFileError> {
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        drop(file);
-        check_expected(path, expected_revision)?;
-        fs::rename(&temporary, path)?;
-        sync_directory(&parent)?;
-        Ok(())
-    })();
-    if staged.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    staged?;
-    let written_revision = hex_digest(Sha256::digest(&bytes));
+    guarded_file::write_guarded(
+        &parent,
+        path,
+        &bytes,
+        expected_revision,
+        MAX_GRAPH_BYTES,
+        ".runebender-graph",
+    )?;
+    let written_revision = guarded_file::revision(&bytes);
     let actual_bytes = read_path(path)?;
-    let actual_revision = hex_digest(Sha256::digest(&actual_bytes));
+    let actual_revision = guarded_file::revision(&actual_bytes);
     if actual_revision != written_revision {
         return Err(LiveGraphFileError::Conflict { actual_revision });
     }
@@ -249,82 +251,18 @@ fn validate_path(path: &Path) -> Result<PathBuf, LiveGraphFileError> {
     Ok(parent)
 }
 
-fn check_expected(path: &Path, expected_revision: Option<&str>) -> Result<(), LiveGraphFileError> {
-    match (expected_revision, fs::symlink_metadata(path)) {
-        (None, Err(error)) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        (None, Ok(_)) => Err(LiveGraphFileError::AlreadyExists),
-        (None, Err(error)) => Err(error.into()),
-        (Some(_), Err(error)) if error.kind() == io::ErrorKind::NotFound => {
-            Err(LiveGraphFileError::NotFound)
-        }
-        (Some(expected), Ok(_)) => {
-            let actual = hex_digest(Sha256::digest(read_path(path)?));
-            if actual == expected {
-                Ok(())
-            } else {
-                Err(LiveGraphFileError::Conflict {
-                    actual_revision: actual,
-                })
-            }
-        }
-        (Some(_), Err(error)) => Err(error.into()),
-    }
-}
-
 fn read_path(path: &Path) -> Result<Vec<u8>, LiveGraphFileError> {
-    let path_metadata = fs::symlink_metadata(path).map_err(|error| {
-        if error.kind() == io::ErrorKind::NotFound {
-            LiveGraphFileError::NotFound
-        } else {
-            LiveGraphFileError::Io(error)
-        }
-    })?;
-    if path_metadata.file_type().is_symlink() || !path_metadata.is_file() {
-        return Err(LiveGraphFileError::NotFound);
-    }
-    let file = File::open(path)?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file() {
-        return Err(LiveGraphFileError::NotFound);
-    }
-    if metadata.len() > MAX_GRAPH_BYTES as u64 {
-        return Err(LiveGraphFileError::TooLarge);
-    }
-    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(MAX_GRAPH_BYTES));
-    file.take(MAX_GRAPH_BYTES.saturating_add(1) as u64)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > MAX_GRAPH_BYTES {
-        return Err(LiveGraphFileError::TooLarge);
-    }
-    Ok(bytes)
-}
-
-fn create_temporary(parent: &Path) -> Result<(PathBuf, File), LiveGraphFileError> {
-    for _ in 0..32 {
-        let sequence = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
-        let name = format!(".runebender-graph-{}-{sequence}.tmp", std::process::id());
-        let path = parent.join(name);
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(file) => return Ok((path, file)),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error.into()),
-        }
-    }
-    Err(LiveGraphFileError::Io(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "could not allocate a unique temporary live graph file",
-    )))
-}
-
-fn sync_directory(path: &Path) -> Result<(), LiveGraphFileError> {
-    #[cfg(unix)]
-    File::open(path)?.sync_all()?;
-    Ok(())
+    Ok(guarded_file::read_regular(path, MAX_GRAPH_BYTES)?.0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
     use runebender::font::variable::SourceId;
     use runebender::workflows::graph_live;
     use serde_json::json;
@@ -333,7 +271,7 @@ mod tests {
 
     impl TestDirectory {
         fn new(label: &str) -> Self {
-            let sequence = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+            let sequence = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
                 "runebender-live-graph-{label}-{}-{sequence}",
                 std::process::id()
