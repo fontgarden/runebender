@@ -627,7 +627,6 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::actions;
     use masonry::kurbo::Point;
 
     fn projected_glyph(session: &Session) -> norad::Glyph {
