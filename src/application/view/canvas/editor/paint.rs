@@ -8,13 +8,11 @@ use super::tools::label::LabelDrag;
 use super::*;
 use crate::application::design::point_marker::{self, PointKind};
 
-/// Cells along the longer side of the thickness field's grid.
-const THICKNESS_CELLS: usize = 256;
-
 /// Cache key for the thickness image: the outline's geometry and the ramp's colors.
-fn thickness_key(outline: &kurbo::BezPath, pal: &Palette) -> u64 {
+fn thickness_key(outline: &kurbo::BezPath, pal: &Palette, upm: f64) -> u64 {
     use std::hash::{Hash as _, Hasher as _};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    upm.to_bits().hash(&mut hasher);
     for element in outline.elements() {
         std::mem::discriminant(element).hash(&mut hasher);
         let points: &[Point] = match element {
@@ -38,20 +36,18 @@ fn thickness_key(outline: &kurbo::BezPath, pal: &Palette) -> u64 {
 
 /// Rasterize the thickness field of `outline` as a straight-alpha RGBA image,
 /// with the affine that places its pixels in design space.
-fn thickness_image(outline: &kurbo::BezPath, pal: &Palette) -> Option<(ImageData, Affine)> {
-    let field = runebender::analysis::thickness::thickness_field(outline, THICKNESS_CELLS)?;
-    let mut rgba = vec![0_u8; field.width * field.height * 4];
-    for (k, pixel) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-        let coverage = field.coverage[k];
-        if coverage <= 0.0 {
-            continue;
-        }
-        let color = pal
-            .thickness_fill(field.ramp(f64::from(field.thickness[k])))
-            .multiply_alpha(coverage)
-            .to_rgba8();
-        pixel.copy_from_slice(&[color.r, color.g, color.b, color.a]);
+fn thickness_image(
+    outline: &kurbo::BezPath,
+    pal: &Palette,
+    upm: f64,
+) -> Option<(ImageData, Affine)> {
+    let mut field = runebender::analysis::thickness::glyph_thickness_field(outline, upm)?;
+    if let Some(reference) =
+        crate::application::launch_options::LaunchOptions::current().thickness_reference
+    {
+        field.reference = reference;
     }
+    let rgba = pal.thickness_rgba(&field);
     let image = ImageData {
         data: Blob::new(Arc::new(rgba)),
         format: ImageFormat::Rgba8,
@@ -215,6 +211,13 @@ impl EditorWidget {
         let metric_ys = text_sort_metric_ys(m);
         let placed = text.placed();
         let rule = Stroke::new(DesignStroke::Hairline.px());
+        let fixed_scale = self.view.thickness
+            && self.interp.is_none()
+            && crate::application::launch_options::LaunchOptions::current()
+                .thickness_reference
+                .is_some();
+        let mut fields = self.text_thickness.borrow_mut();
+        let mut visible = std::collections::HashSet::new();
         for sort in &placed {
             let box_ = Rect::from_points(
                 view_affine * Point::new(sort.origin.x, sort_bottom + sort.origin.y),
@@ -240,12 +243,20 @@ impl EditorWidget {
                 }
             }
             if !sort.active || self.tool == Tool::Text {
-                painter
-                    .fill(&*sort.outline, ink)
-                    .transform(view_affine * Affine::translate(sort.origin.to_vec2()))
-                    .draw();
+                let affine = view_affine * Affine::translate(sort.origin.to_vec2());
+                painter.fill(&*sort.outline, ink).transform(affine).draw();
+                if fixed_scale {
+                    let key = thickness_key(&sort.outline, pal, self.session.metrics.upm);
+                    visible.insert(key);
+                    if let Some((image, placement)) = fields.entry(key).or_insert_with(|| {
+                        thickness_image(&sort.outline, pal, self.session.metrics.upm)
+                    }) {
+                        painter.draw_image(&*image, affine * *placement);
+                    }
+                }
             }
         }
+        fields.retain(|key, _| visible.contains(key));
         // Draw crosses over every sort's quiet rules, including shared
         // boundaries. The active sort's marks go last when Text owns it;
         // outline tools draw them with the active glyph frame below.
@@ -648,13 +659,13 @@ impl EditorWidget {
         // crisp. The field is cached by outline, so only an edit recomputes it.
         if self.view.thickness && self.interp.is_none() {
             let design_outline = self.session.outline();
-            let key = thickness_key(&design_outline, pal);
+            let key = thickness_key(&design_outline, pal, self.session.metrics.upm);
             let image = match &self.thickness_image {
                 Some((cached, image, placement)) if *cached == key => {
                     Some((image.clone(), *placement))
                 }
                 _ => {
-                    let image = thickness_image(&design_outline, pal);
+                    let image = thickness_image(&design_outline, pal, self.session.metrics.upm);
                     self.thickness_image = image
                         .clone()
                         .map(|(image, placement)| (key, image, placement));

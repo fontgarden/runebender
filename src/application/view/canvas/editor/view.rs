@@ -217,6 +217,7 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
             sketch_source: self.sketch_source,
             sketch_image: None,
             thickness_image: None,
+            text_thickness: Default::default(),
             grid_dots: std::cell::RefCell::default(),
             preview_mode: self.preview_mode,
             ghosts: self.ghosts.clone(),

@@ -129,7 +129,23 @@ pub fn thickness_field(outline: &BezPath, cells: usize) -> Option<ThicknessField
         return None;
     }
     let cells = cells.clamp(8, 2048) as f64;
-    let cell = bounds.size().max_side() / cells;
+    field_at_density(outline, bounds, bounds.size().max_side() / cells)
+}
+
+/// Sample in glyph-local coordinates at 512 cells per em in both the editor and proofs.
+pub fn glyph_thickness_field(outline: &BezPath, units_per_em: f64) -> Option<ThicknessField> {
+    let bounds = outline.bounding_box();
+    if !units_per_em.is_finite()
+        || units_per_em <= 0.0
+        || bounds.is_zero_area()
+        || !bounds.is_finite()
+    {
+        return None;
+    }
+    field_at_density(outline, bounds, units_per_em / 512.0)
+}
+
+fn field_at_density(outline: &BezPath, bounds: Rect, cell: f64) -> Option<ThicknessField> {
     // Cell centers sit off integer coordinates, so a scanline never passes
     // exactly through a node, where a crossing count is ambiguous.
     let pad = cell * 1.5 + cell * 0.207;
@@ -144,6 +160,10 @@ pub fn thickness_field(outline: &BezPath, cells: usize) -> Option<ThicknessField
         reason = "positive and bounded by the clamped cell count plus padding"
     )]
     let height = ((bounds.height() + 2.0 * pad) / cell).ceil() as usize;
+    // Bound allocations for malformed or very large input without silently changing density.
+    if width.checked_mul(height)? > 8 * 1024 * 1024 || width == 0 || height == 0 {
+        return None;
+    }
     let grid = Grid {
         origin,
         cell,
@@ -340,8 +360,7 @@ fn transform_1d(f: &[f64], out: &mut [f64], v: &mut [usize], z: &mut [f64]) {
 
 /// A disc center on the distance ridge, with its radius in design units.
 struct Disc {
-    i: usize,
-    j: usize,
+    center: Point,
     radius: f64,
 }
 
@@ -384,12 +403,12 @@ fn ridge(
             if contained {
                 continue;
             }
-            let (radius, separation) =
+            let (disc, separation) =
                 maximal_disc(grid.center(i, j), r * grid.cell, grid.cell, segments);
             if separation < MIN_SEPARATION_RADIANS {
                 continue;
             }
-            discs.push(Disc { i, j, radius });
+            discs.push(disc);
         }
     }
     discs
@@ -410,7 +429,7 @@ const MIN_SEPARATION_RADIANS: f64 = 100.0_f64.to_radians();
 /// The distance to the outline is locally maximal on the medial axis, so a
 /// pattern search climbing that function from the cell center lands on the
 /// axis to within a fraction of a cell, and the distance there is the radius.
-fn maximal_disc(start: Point, estimate: f64, cell: f64, segments: &[PathSeg]) -> (f64, f64) {
+fn maximal_disc(start: Point, estimate: f64, cell: f64, segments: &[PathSeg]) -> (Disc, f64) {
     const LEVELS: u32 = 4;
     const MOVES_PER_LEVEL: usize = 8;
     const DIRECTIONS: [(f64, f64); 4] = [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)];
@@ -443,7 +462,13 @@ fn maximal_disc(start: Point, estimate: f64, cell: f64, segments: &[PathSeg]) ->
         }
         step *= 0.5;
     }
-    (best, separation_angle(center, best, reach, cell, segments))
+    (
+        Disc {
+            center,
+            radius: best,
+        },
+        separation_angle(center, best, reach, cell, segments),
+    )
 }
 
 /// Largest angle, seen from `center`, between two outline points at the
@@ -492,6 +517,18 @@ fn boundary_distance(point: Point, reach: f64, segments: &[PathSeg]) -> Option<f
         .min_by(f64::total_cmp)
 }
 
+/// Integer centers in a closed interval, clipped to the raster.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "endpoints are integral and clipped to the grid"
+)]
+fn cells_in_interval(center: f64, radius: f64, limit: usize) -> std::ops::Range<usize> {
+    let first = (center - radius).ceil().clamp(0.0, limit as f64) as usize;
+    let end = ((center + radius).floor() + 1.0).clamp(0.0, limit as f64) as usize;
+    first..end
+}
+
 /// Cover the ink with the ridge discs, largest first, writing each diameter
 /// into every cell it covers that has no larger value yet.
 fn cover(discs: &[Disc], inside: &[bool], grid: &Grid) -> Vec<f32> {
@@ -502,22 +539,14 @@ fn cover(discs: &[Disc], inside: &[bool], grid: &Grid) -> Vec<f32> {
         let diameter = narrow(2.0 * disc.radius);
         // Cover half a cell beyond the radius, so neighboring discs meet.
         let r_cells = disc.radius / grid.cell + 0.5;
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "a disc radius in cells is positive and bounded by the grid size"
-        )]
-        let span = r_cells.ceil() as usize;
-        for j in grid.rows_near(disc.j, span) {
-            let dj = j as f64 - disc.j as f64;
-            #[expect(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                reason = "a chord half-width in cells is non-negative and bounded by the radius"
-            )]
-            let half = (r_cells * r_cells - dj * dj).max(0.0).sqrt().floor() as usize;
+        // Coordinates in cell-center space. Keep the fractional part from refinement.
+        let cx = (disc.center.x - grid.origin.x) / grid.cell - 0.5;
+        let cy = (grid.origin.y - disc.center.y) / grid.cell - 0.5;
+        for j in cells_in_interval(cy, r_cells, grid.height) {
+            let dy = j as f64 - cy;
+            let half = (r_cells * r_cells - dy * dy).max(0.0).sqrt();
             let row = j * grid.width;
-            for i in grid.columns_near(disc.i, half) {
+            for i in cells_in_interval(cx, half, grid.width) {
                 let k = row + i;
                 if inside[k] && thickness[k] < diameter {
                     thickness[k] = diameter;
@@ -686,6 +715,38 @@ mod tests {
         assert!((stem - 20.0).abs() < 0.75, "{stem}");
         let middle = field.at(Point::new(50.0, 50.0)).expect("inside");
         assert!((middle - 20.0 * 2.0_f64.sqrt()).abs() < 1.0, "{middle}");
+    }
+
+    #[test]
+    fn glyphs_share_em_density_across_different_bounds_and_upms() {
+        for upm in [1000.0, 1024.0, 2048.0] {
+            for width in [upm / 4.0, upm] {
+                let field = glyph_thickness_field(&rect(0.0, 0.0, width, upm / 16.0), upm)
+                    .expect("bar has ink");
+                assert_eq!(field.cell, upm / 512.0);
+            }
+        }
+    }
+
+    #[test]
+    fn cover_uses_the_refined_subcell_center() {
+        let grid = Grid {
+            origin: Point::new(0.0, 8.0),
+            cell: 1.0,
+            width: 8,
+            height: 8,
+        };
+        let disc = Disc {
+            center: Point::new(3.9, 4.2),
+            radius: 1.25,
+        };
+        let values = cover(std::slice::from_ref(&disc), &[true; 64], &grid);
+        for j in 0..8 {
+            for i in 0..8 {
+                let covered = grid.center(i, j).distance(disc.center) <= disc.radius + 0.5;
+                assert_eq!(values[j * 8 + i] > 0.0, covered);
+            }
+        }
     }
 
     #[test]

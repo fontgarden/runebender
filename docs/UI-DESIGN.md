@@ -255,6 +255,7 @@ Most of them exist for captures, but each one also applies to a window unless it
 | `RUNEBENDER_RAIL=<ai\|chat\|scripts\|shapes>` | Open this tool pane. |
 | `RUNEBENDER_TOOL=<interpolation\|hand\|metaball\|measure\|label\|text\|sketch\|shapes>` | Start with this tool instead of the selection tool. |
 | `RUNEBENDER_VIEW=<option,...>` | Turn on canvas view options: `comb`, `thickness`, `continuity`, `colorize`, `handles`, `segments`, `bearings`, `popcount`, `components`. |
+| `RUNEBENDER_THICKNESS_REFERENCE=<units>` | Center the thickness heatmap on this stroke width in font units across all glyphs. |
 | `RUNEBENDER_COMPONENT=<n>` | Open the open glyph's component at index `n` in place, inside its composite. |
 | `RUNEBENDER_AXIS=wght=500,wdth=80` | Set the design-space location. |
 | `RUNEBENDER_MASTER=<name>` | Make this master active, by its style name. |

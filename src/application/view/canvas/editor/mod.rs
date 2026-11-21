@@ -233,6 +233,8 @@ pub(crate) struct EditorWidget {
     /// The thickness field last rasterized for the canvas, by outline and ramp
     /// colors, so a zoom or hover repaint does not recompute the field.
     thickness_image: Option<(u64, ImageData, Affine)>,
+    /// Fields for the visible text sorts when a common reference width is set.
+    text_thickness: std::cell::RefCell<std::collections::HashMap<u64, Option<(ImageData, Affine)>>>,
     /// The design grid's dots for the coarse and fine levels, kept between frames.
     /// Each holds the dots for one zoom and canvas size; panning only moves them.
     grid_dots: std::cell::RefCell<[Option<(GridDotsKey, kurbo::BezPath)>; 2]>,

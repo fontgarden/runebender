@@ -125,6 +125,11 @@ pub(crate) const VARIABLES: &[Variable] = &[
         "Turn on canvas view options: `comb`, `thickness`, `continuity`, `colorize`, `handles`, `segments`, `bearings`, `popcount`, `components`.",
     ),
     variable(
+        "RUNEBENDER_THICKNESS_REFERENCE",
+        "<units>",
+        "Center the thickness heatmap on this stroke width in font units across all glyphs.",
+    ),
+    variable(
         "RUNEBENDER_COMPONENT",
         "<n>",
         "Open the open glyph's component at index `n` in place, inside its composite.",
@@ -449,6 +454,8 @@ pub(crate) struct LaunchOptions {
     pub(crate) tool: Tool,
     /// The canvas view options to turn on.
     pub(crate) view: ViewOptions,
+    /// Fixed stroke width for comparisons across glyphs.
+    pub(crate) thickness_reference: Option<f64>,
     /// The design-space location, as pairs of axis tag or name and value.
     pub(crate) axis: Vec<(String, f64)>,
     /// The style name of the master to make active.
@@ -644,6 +651,10 @@ impl LaunchOptions {
                 Some("shapes") => Tool::AiShape,
                 _ => Tool::Select,
             },
+            thickness_reference: variables
+                .text("RUNEBENDER_THICKNESS_REFERENCE")
+                .and_then(|s| s.parse::<f64>().ok())
+                .filter(|x| x.is_finite() && *x > 0.0),
             view: view_options(variables.text("RUNEBENDER_VIEW").as_deref()),
             axis: variables
                 .text("RUNEBENDER_AXIS")

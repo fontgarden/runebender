@@ -83,6 +83,20 @@ enum Command {
     Info(InfoArgs),
     /// Draw a proof sheet as SVG, with metrics per glyph.
     Proof(ProofArgs),
+    /// Render SVG path data in font units (y up) with the editor’s Gray thickness palette.
+    Thickness {
+        /// File containing the shaped outline as SVG path data.
+        outline: PathBuf,
+        /// Stroke width at the center of the color scale, in font units.
+        #[arg(long)]
+        reference: f64,
+        /// Units per em of the SVG path coordinates.
+        #[arg(long, default_value_t = 1024)]
+        units_per_em: u32,
+        /// Transparent PNG to write.
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Proposals: edits offered by a tool, waiting in the UFO as
     /// `com.runebender.proposal.<task>` layers.
     Proposal {
@@ -119,6 +133,34 @@ enum Command {
     /// Learn how much weight a heavier master adds, from glyphs drawn
     /// in both, and report what it would do to the rest.
     Bolden(BoldenArgs),
+}
+
+fn thickness(outline: &Path, reference: f64, units_per_em: u32, out: &Path) -> CommandResult {
+    use crate::application::design::theme::Palette;
+    if !reference.is_finite() || reference <= 0.0 {
+        return Err(CliError::usage("Reference must be positive and finite"));
+    }
+    let data = std::fs::read_to_string(outline).map_err(CliError::failed)?;
+    let path = kurbo::BezPath::from_svg(&data).map_err(CliError::usage)?;
+    let mut field =
+        runebender::analysis::thickness::glyph_thickness_field(&path, f64::from(units_per_em))
+            .ok_or_else(|| {
+                CliError::usage("Empty or oversized thickness field, or invalid units per em")
+            })?;
+    field.reference = reference;
+    let rgba = Palette::load("gray").thickness_rgba(&field);
+    image::save_buffer_with_format(
+        out,
+        &rgba,
+        u32::try_from(field.width).map_err(CliError::failed)?,
+        u32::try_from(field.height).map_err(CliError::failed)?,
+        image::ColorType::Rgba8,
+        image::ImageFormat::Png,
+    )
+    .map_err(CliError::failed)?;
+    Ok(CommandOutput::json(
+        json!({"origin": [field.origin.x, field.origin.y], "cell": field.cell, "reference": reference}),
+    ))
 }
 
 /// Startup either opens the editor or completes a headless command.
@@ -180,6 +222,12 @@ pub(crate) fn run() -> Startup {
         Command::Sessions => emit(true, sessions()),
         Command::Info(args) => emit(json, info(args)),
         Command::Proof(args) => emit(json, proof(args)),
+        Command::Thickness {
+            outline,
+            reference,
+            units_per_em,
+            out,
+        } => emit(json, thickness(outline, *reference, *units_per_em, out)),
         Command::Proposal { action } => emit(json, proposal_command(action)),
         Command::Agent { action } => agent_command(action),
         Command::Mcp(args) => mcp_command(args, json),

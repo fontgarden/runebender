@@ -675,6 +675,26 @@ impl Palette {
         self.thickness_gradient(t)
     }
 
+    /// Color the measured ink for both the canvas and headless proofs.
+    pub(crate) fn thickness_rgba(
+        &self,
+        field: &runebender::analysis::thickness::ThicknessField,
+    ) -> Vec<u8> {
+        let mut rgba = vec![0_u8; field.width * field.height * 4];
+        for (k, pixel) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let coverage = field.coverage[k];
+            if coverage <= 0.0 {
+                continue;
+            }
+            let color = self
+                .thickness_fill(field.ramp(f64::from(field.thickness[k])))
+                .multiply_alpha(coverage)
+                .to_rgba8();
+            pixel.copy_from_slice(&[color.r, color.g, color.b, color.a]);
+        }
+        rgba
+    }
+
     /// The keyline between curvature comb teeth, as see-through as the teeth.
     pub(crate) fn comb_keyline(&self) -> Color {
         let color = self.point_outline.unwrap_or(self.text);
