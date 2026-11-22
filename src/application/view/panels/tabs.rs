@@ -226,7 +226,7 @@ fn rail_tabs(app: &Workspace, editing: bool) -> impl WidgetView<Workspace> + use
     let specs: Vec<(&'static str, Rail, f64)> = [
         Some(("hyperpen", Rail::Glyphs, RAIL_TAB_ICON)),
         editing.then_some(("shapes", Rail::Shapes, RAIL_TAB_ICON_FULL_FRAME)),
-        (!app.font.axes.is_empty()).then_some(("measure", Rail::Axes, RAIL_TAB_ICON_FULL_FRAME)),
+        (!app.font.axes.is_empty()).then_some(("glyph-grid", Rail::Axes, RAIL_TAB_ICON)),
         Some(("invert", Rail::LocalAi, RAIL_TAB_ICON)),
         Some(("text", Rail::Chat, RAIL_TAB_ICON_FULL_FRAME)),
         Some(("save", Rail::Scripts, RAIL_TAB_ICON_FULL_FRAME)),
@@ -369,15 +369,21 @@ where
         .gap(Space::None)
 }
 
+fn axes_rail(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
+    portal(recipes::panel_stack((
+        axes_section(app).map(|body| recipes::panel_group(&app.palette, body)),
+        crate::application::view::panels::sections::masters_section(app)
+            .map(|body| recipes::panel_group(&app.palette, body)),
+    )))
+    .constrain_horizontal(true)
+}
+
 pub(crate) fn editor_nav(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     // Each pane owns its inset: the grid fills the rail, Axes uses the section
     // recipe, and standalone tool panes retain their own Region::Panel inset.
     let content = match app.rail {
         Rail::Glyphs => editor_glyph_rail(app).boxed(),
-        Rail::Axes => recipes::panel_stack((
-            axes_section(app).map(|body| recipes::panel_group(&app.palette, body)),
-        ))
-        .boxed(),
+        Rail::Axes => axes_rail(app).boxed(),
         Rail::LocalAi => local_ai_panel(app).boxed(),
         Rail::Shapes => shapes_panel(app).boxed(),
         Rail::Chat => chat_panel(app).boxed(),
@@ -438,7 +444,8 @@ where
 {
     let style = ControlStyle::new(pal, ControlKind::Toggle)
         .on(pal, Ground::Header)
-        .selected(pal, active);
+        .selected(pal, active)
+        .with_radius(design::HEADER_TAB_HEIGHT * 0.5);
     sized_box(
         button(
             style,
@@ -467,7 +474,9 @@ fn header_icon_chip<F>(
 where
     F: Fn(&mut Workspace) + Send + Sync + 'static,
 {
-    let style = ControlStyle::new(pal, ControlKind::Secondary).on(pal, Ground::Header);
+    let style = ControlStyle::new(pal, ControlKind::Secondary)
+        .on(pal, Ground::Header)
+        .with_radius(design::HEADER_TAB_HEIGHT * 0.5);
     sized_box(
         button(
             style,
@@ -565,10 +574,7 @@ where
 
 pub(crate) fn sidebar(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     let content = match app.rail {
-        Rail::Axes if !app.font.axes.is_empty() => recipes::panel_stack((
-            axes_section(app).map(|body| recipes::panel_group(&app.palette, body)),
-        ))
-        .boxed(),
+        Rail::Axes if !app.font.axes.is_empty() => axes_rail(app).boxed(),
         Rail::LocalAi => local_ai_panel(app).boxed(),
         Rail::Chat => chat_panel(app).boxed(),
         Rail::Scripts => scripts_panel(app).boxed(),

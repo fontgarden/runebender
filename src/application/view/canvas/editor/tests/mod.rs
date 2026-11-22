@@ -72,6 +72,7 @@ fn widget() -> EditorWidget {
         sketch_source: 0,
         sketch_image: None,
         thickness_image: None,
+        text_thickness: Default::default(),
         grid_dots: std::cell::RefCell::default(),
         preview_mode: false,
         ghosts: Arc::new(Vec::new()),

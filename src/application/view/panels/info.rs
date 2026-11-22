@@ -12,8 +12,8 @@ use crate::application::view::panels::editor_info::{
 };
 use crate::application::view::panels::sections::{
     axes_section, background_section, coordinates_section, curves_section, font_advanced_section,
-    font_info_section, layers_section, mark_section, masters_section, measure_section,
-    path_operations_section, shaping_section, transformations_section,
+    font_info_section, layers_section, mark_section, measure_section, path_operations_section,
+    shaping_section, transformations_section,
 };
 use crate::application::workspace::{Mode, Tool, Workspace};
 use runebender::outline::glyph_paths::round_units;
@@ -261,13 +261,10 @@ pub(crate) fn info_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
         (!editing).then(|| recipes::panel_group(pal, compare_section(app))),
         (!editing).then(|| recipes::panel_group(pal, features_section(app))),
         layers_section(app).map(|body| recipes::panel_group(pal, body)),
-        recipes::panel_stack((
-            masters_section(app).map(|body| recipes::panel_group(pal, body)),
-            editing
-                .then(|| axes_section(app))
-                .flatten()
-                .map(|body| recipes::panel_group(pal, body)),
-        )),
+        editing
+            .then(|| axes_section(app))
+            .flatten()
+            .map(|body| recipes::panel_group(pal, body)),
         editing.then(|| recipes::panel_group(pal, measure_section(app))),
     )))
 }

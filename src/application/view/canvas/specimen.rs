@@ -146,6 +146,42 @@ fn specimen(app: &Workspace) -> Arc<Specimen> {
     })
 }
 
+/// Shape each pair as continuous text, then fill its visual right edge.
+fn spacing_rows(c: char, em: f64, shape: impl Fn(&str) -> Option<Run>) -> Vec<Run> {
+    let samples = spacing_strings(c);
+    let mut rows = samples
+        .chunks(2)
+        .filter_map(|pair| {
+            let text = pair.concat();
+            shape(&text).map(|run| (text, run))
+        })
+        .collect::<Vec<_>>();
+    let measure = design::DOCK_WIDTH - 2.0 * design::PANEL_SECTION_INSET.px();
+    let limit = rows
+        .iter()
+        .map(|(_, run)| run.width)
+        .fold(measure * em / 36.0, f64::max);
+    for (text, run) in &mut rows {
+        while run.width < limit {
+            if run.rtl {
+                text.insert(0, c);
+            } else {
+                text.push(c);
+            }
+            let Some(next) = shape(text) else {
+                break;
+            };
+            if next.width <= run.width || next.width > limit {
+                break;
+            }
+            *run = next;
+        }
+        // The shaped paths already encode writing direction. Align the row to the left inset.
+        run.rtl = false;
+    }
+    rows.into_iter().map(|(_, run)| run).collect()
+}
+
 /// Which script's proof strings a character takes.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Script {
@@ -286,24 +322,13 @@ fn build(app: &Workspace) -> Specimen {
         })
     });
     let selected_script = character.map(script_of);
-    if let (Some(glyph), Some(c)) = (selected, character) {
-        let lines: Vec<Run> = spacing_strings(c).iter().filter_map(|s| shape(s)).collect();
-        if !lines.is_empty() {
-            blocks.push(Block {
-                key: "Sidebar Spacing",
-                caption: format!("Spacing · {}", glyph.name),
-                lines,
-                setting: Setting::Even { max_em: 36.0 },
-            });
-        }
-        if let Some(run) = shape(&waterfall_string(c)) {
-            blocks.push(Block {
-                key: "Sidebar Waterfall",
-                caption: "Waterfall".into(),
-                lines: vec![run; 6],
-                setting: Setting::Waterfall { max_em: 72.0 },
-            });
-        }
+    if let Some(run) = character.and_then(|c| shape(&waterfall_string(c))) {
+        blocks.push(Block {
+            key: "Sidebar Waterfall",
+            caption: "Waterfall".into(),
+            lines: vec![run; 6],
+            setting: Setting::Waterfall { max_em: 72.0 },
+        });
     }
     // The selected glyph's script first, then the others the font covers.
     let mut sets = basic_sets();
@@ -316,6 +341,21 @@ fn build(app: &Workspace) -> Specimen {
                 caption: caption.into(),
                 lines,
                 setting: Setting::Even { max_em: 24.0 },
+            });
+        }
+    }
+    if let (Some(glyph), Some(c)) = (selected, character) {
+        let lines = spacing_rows(
+            c,
+            (app.font.ascender() - app.font.descender()).max(1.0),
+            shape,
+        );
+        if !lines.is_empty() {
+            blocks.push(Block {
+                key: "Sidebar Spacing",
+                caption: format!("Spacing · {}", glyph.name),
+                lines,
+                setting: Setting::Even { max_em: 36.0 },
             });
         }
     }
@@ -519,8 +559,11 @@ mod tests {
         let mut app = Workspace::untitled().expect("blank font");
         app.selected = app.font.index_of("A");
         app.set_theme("gray");
+        assert!(!app.collapsed.contains("Sidebar Spacing"));
+        app.collapsed.insert("Sidebar Spacing");
         let blocks = specimen(&app);
         assert!(blocks.blocks.len() >= 3);
+        assert_eq!(blocks.blocks.last().unwrap().key, "Sidebar Spacing");
         assert!(
             blocks
                 .blocks

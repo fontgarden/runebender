@@ -297,7 +297,7 @@ The live server publishes 50 tools.
 
 | Group | Tools |
 | --- | --- |
-| Connection and state | `editor_sessions`, `editor_connect`, `project_info`, `editor_context`, `editor_open_glyph`, `editor_review`, `editor_select_points`, `editor_set_text` |
+| Connection and state | `editor_sessions`, `editor_connect`, `project_info`, `editor_context`, `editor_set_source`, `editor_open_glyph`, `editor_review`, `editor_select_points`, `editor_set_text` |
 | Read and analysis | `font_info`, `read_glyph`, `glyph_inventory`, `design_context`, `analyze_glyph`, `analyze_font`, `read_kerning`, `proof`, `specimen`, `review_proof`, `export_proof` |
 | Proposals and marks | `propose_edits`, `proposal_list`, `proposal_discard`, `proposal_install`, `flag_glyph` |
 | Experiments | `experiment_fork`, `experiment_list`, `experiment_kern`, `experiment_apply`, `experiment_undo_apply` |

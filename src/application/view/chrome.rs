@@ -35,21 +35,46 @@ use xilem::view::{canvas, flex_col, portal, sized_box};
 pub(crate) fn titlebar(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     let pal = &app.palette;
     let editing = matches!(app.mode, Mode::Editor(_));
+    let master = app
+        .font
+        .short_master_names()
+        .get(app.font.active())
+        .cloned()
+        .unwrap_or_default();
     sized_box(
         flex_row((
-            // Room for the traffic lights, which sit where AppKit puts
-            // them: winit has no way to move them, so the header pads
-            // for the default place. In full screen AppKit moves them out
-            // of the content area, so the document uses the normal inset.
-            (cfg!(target_os = "macos") && !app.fullscreen).then(|| {
-                sized_box(label("")).dims(Dimensions::new(Dim::Fixed(Length::px(66.0)), Dim::Auto))
+            flex_row((
+                // Room for the traffic lights, which sit where AppKit puts
+                // them: winit has no way to move them, so the header pads
+                // for the default place. In full screen AppKit moves them out
+                // of the content area, so the document uses the normal inset.
+                (cfg!(target_os = "macos") && !app.fullscreen).then(|| {
+                    sized_box(label(""))
+                        .dims(Dimensions::new(Dim::Fixed(Length::px(66.0)), Dim::Auto))
+                }),
+                recipes::save_indicator(pal, app.modified || app.untitled),
+                // The empty middle of the bar moves the window and zooms
+                // it on a double click, as the system title bar would.
+                drag_region().flex(1.0),
+            ))
+            .gap(Space::Md)
+            .flex(1.0),
+            (!editing).then(|| {
+                label(if app.on_active_master() {
+                    master.clone()
+                } else {
+                    format!("{master} · Preview")
+                })
+                .text_size(TextSize::Body.px())
+                .color(pal.tool_active_ink())
             }),
-            recipes::save_indicator(pal, app.modified || app.untitled),
-            // The empty middle of the bar moves the window and zooms
-            // it on a double click, as the system title bar would.
-            drag_region().flex(1.0),
-            editing.then(|| header_tools(app)),
-            tab_strip(app),
+            flex_row((
+                drag_region().flex(1.0),
+                editing.then(|| header_tools(app)),
+                tab_strip(app),
+            ))
+            .gap(Space::Md)
+            .flex(if editing { 5.0 } else { 1.0 }),
         ))
         .cross_axis_alignment(CrossAxisAlignment::Center)
         .gap(Space::Md)

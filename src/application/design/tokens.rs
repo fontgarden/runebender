@@ -211,7 +211,7 @@ pub(crate) const FOOTER_INSET: f64 = 10.0;
 /// the floating panels start at its bottom edge without a second top gutter.
 pub(crate) const TITLEBAR_HEIGHT: f64 = 34.0;
 /// Compact title-bar tabs leave clearance above and below their outlines.
-pub(crate) const HEADER_TAB_HEIGHT: f64 = 19.0;
+pub(crate) const HEADER_TAB_HEIGHT: f64 = 20.0;
 /// Horizontal breathing room around title-bar tab labels.
 pub(crate) const HEADER_TAB_TEXT_INSET: f64 = 6.0;
 /// Icon tabs share a short rectangular silhouette with the text tabs.

@@ -199,6 +199,7 @@ fn effects_for(name: &str, surface: ToolSurface) -> Option<ToolEffects> {
             | "graph_snapshot" | "graph_status" | "graph_trace_status" | "graph_image"
             | "editor_sessions" => ToolEffects::read(),
             "editor_connect"
+            | "editor_set_source"
             | "editor_open_glyph"
             | "editor_review"
             | "editor_select_points"

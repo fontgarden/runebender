@@ -176,90 +176,50 @@ fn layer_row(
     .boxed()
 }
 
-/// Masters: one compact row per designspace source. This is deliberately
-/// separate from reference-layer controls: GPUI presents master switching as
-/// a plain list, while underlays belong to the editor's Layers section.
-pub(crate) fn masters_section(app: &Workspace) -> Option<impl WidgetView<Workspace> + use<>> {
-    app.font.project.document_designspace()?;
+fn master_rows(app: &Workspace) -> Vec<impl WidgetView<Workspace> + use<>> {
     let pal = &app.palette;
-    let rows: Vec<_> = app
-        .font
+    app.font
         .short_master_names()
         .into_iter()
         .enumerate()
         .map(|(i, name)| {
             let active = i == app.font.active();
-            let style = ControlStyle::new(pal, ControlKind::Row).selected(pal, active);
+            let style = ControlStyle::new(pal, ControlKind::Row)
+                .selected(pal, active)
+                .hover_outline(pal.outline);
             sized_box(
                 button(
                     style,
-                    label(name)
-                        .text_size(TextSize::Body.px())
-                        .color(style.ink()),
+                    xrow(
+                        Region::Inline,
+                        (
+                            label(name)
+                                .text_size(TextSize::Body.px())
+                                .color(style.ink()),
+                            FlexSpacer::Flex(1.0),
+                        ),
+                    ),
                     move |app: &mut Workspace| app.set_master(i),
                 )
-                .padding(Space::Sm),
+                .padding(masonry::properties::Padding::horizontal(Length::px(
+                    design::SIDEBAR_ROW_INSET,
+                ))),
             )
             .dims(Dimensions::new(Dim::Stretch, Dim::from(ControlSize::Icon)))
         })
-        .collect();
+        .collect()
+}
+
+/// Masters: one compact row per designspace source. This is deliberately
+/// separate from reference-layer controls: GPUI presents master switching as
+/// a plain list, while underlays belong to the editor's Layers section.
+pub(crate) fn masters_section(app: &Workspace) -> Option<impl WidgetView<Workspace> + use<>> {
+    app.font.project.document_designspace()?;
     Some(recipes::section(
         app,
         "Masters",
         "Masters",
-        xcolumn(
-            Region::List,
-            (
-                xcolumn(Region::List, rows),
-                label("Source name")
-                    .text_size(TextSize::Body.px())
-                    .color(pal.text_muted),
-                input_typography::input_typography(
-                    text_input(app.source_name_buf.clone(), |app: &mut Workspace, value| {
-                        app.source_name_buf = value;
-                    })
-                    .text_color(pal.text),
-                    pal.text,
-                ),
-                label("Uses the axis sliders below")
-                    .text_size(TextSize::Body.px())
-                    .color(pal.text_muted),
-                xrow(
-                    Region::Inline,
-                    (
-                        recipes::action(pal, "Add source".into(), |app| {
-                            app.change_sources("add");
-                        }),
-                        recipes::action(pal, "Apply".into(), |app| {
-                            app.change_sources("update");
-                        }),
-                    ),
-                ),
-                xrow(
-                    Region::Inline,
-                    (
-                        recipes::action(pal, "Up".into(), |app| app.change_sources("up")),
-                        recipes::action(pal, "Down".into(), |app| {
-                            app.change_sources("down");
-                        }),
-                        recipes::action(pal, "Remove".into(), |app| {
-                            app.change_sources("remove");
-                        }),
-                    ),
-                ),
-                xrow(
-                    Region::Inline,
-                    (
-                        recipes::action(pal, "Undo sources".into(), |app| {
-                            app.change_sources("undo");
-                        }),
-                        recipes::action(pal, "Redo".into(), |app| {
-                            app.change_sources("redo");
-                        }),
-                    ),
-                ),
-            ),
-        ),
+        xcolumn(Region::List, master_rows(app)),
     ))
 }
 
@@ -292,16 +252,24 @@ pub(crate) fn axes_section(app: &Workspace) -> Option<impl WidgetView<Workspace>
                                 .color(text),
                         ),
                     ),
-                    recipes::neutral_slider(
-                        &app.palette,
+                    crate::application::widgets::gesture_slider::gesture_slider(
+                        pal,
                         ax.min,
                         ax.max,
                         value,
-                        move |app: &mut Workspace, v| {
-                            app.set_axis(i, v);
+                        move |app, v, _| app.set_axis(i, v),
+                        |_, _| {},
+                    )
+                    .accessibility_name(ax.name.clone())
+                    .track_color(
+                        if (value - app.font.master_axis_values(app.font.active())[i]).abs() > 0.001
+                        {
+                            pal.text
+                        } else {
+                            pal.slider_track()
                         },
                     )
-                    .width(Length::px(214.0)),
+                    .dims(Dimensions::new(Dim::Stretch, Dim::Auto)),
                 ),
             )
         })
@@ -317,9 +285,13 @@ pub(crate) fn axes_section(app: &Workspace) -> Option<impl WidgetView<Workspace>
         xcolumn(
             Region::List,
             (
-                label(summary)
-                    .text_size(TextSize::Caption.px())
-                    .color(pal.role("warning")),
+                label(if summary == "interpolated" {
+                    "Interpolated preview".to_string()
+                } else {
+                    summary
+                })
+                .text_size(TextSize::Caption.px())
+                .color(pal.text),
                 detail.map(|detail| {
                     label(detail)
                         .text_size(TextSize::Caption.px())

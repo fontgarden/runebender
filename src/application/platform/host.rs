@@ -96,7 +96,6 @@ impl Workspace {
         let source_roots = source_roots(&font);
         let source_fingerprint = source_fingerprint(&source_roots);
         let features_buf = font.feature_text().to_owned();
-        let source_name_buf = font.master_names()[font.active()].to_string();
         // A Glyphs or Fontra source opens through UFOs; say what the conversion left out.
         let import_note = match font.project.import_warnings.as_slice() {
             [] => String::new(),
@@ -216,7 +215,6 @@ impl Workspace {
             text_features_disabled: options.text_features_disabled.iter().cloned().collect(),
             text_script: options.text_script.clone(),
             text_language: options.text_language.clone(),
-            source_name_buf,
             layer_name_buf: "sketch".into(),
             // Headless frames can start with a dock folded away:
             // `RUNEBENDER_HIDDEN_DOCKS=left,right`.
@@ -230,14 +228,10 @@ impl Workspace {
                     .iter()
                     .map(|t| &*Box::leak(t.clone().into_boxed_str()))
                     .collect();
-                // Every sidebar and inspector section starts folded, so the panel opens clean
-                // and each one is a click away. This is state only;
-                // every header still toggles its existing accessible panel.
+                // Axes and Masters start expanded together in the Axes tab.
                 set.extend([
-                    "Categories",
                     "Global Scripts",
                     "Filters",
-                    "Sidebar Spacing",
                     "Sidebar Waterfall",
                     "Basic Latin",
                     "Basic Arabic",
@@ -257,11 +251,9 @@ impl Workspace {
                     "Related",
                     "Mark",
                     "Shaping",
-                    "Axes",
                     "Path Operations",
                     "Background",
                     "Measure",
-                    "Masters",
                 ]);
                 // A headless start on a script or category shows its group.
                 if start_script.is_some() {
@@ -720,9 +712,13 @@ mod tests {
             ),
             1
         );
-        app.change_sources("up");
+        app.font.project.move_source(source, 0).unwrap();
+        app.font.rebuild_cache();
+        app.refresh_source_views();
         assert_eq!(app.font.project.source_index(source), Some(0));
-        app.change_sources("remove");
+        app.font.project.remove_source(source).unwrap();
+        app.font.rebuild_cache();
+        app.refresh_source_views();
         assert!(app.font.project.source_index(source).is_none());
         app.undo_active_edit(false);
         assert_eq!(
@@ -730,7 +726,12 @@ mod tests {
             1,
             "missing-source undo must retain its transaction"
         );
-        app.change_sources("undo");
+        app.font
+            .project
+            .undo_sources(runebender::font::history::HistoryDirection::Undo)
+            .unwrap();
+        app.font.rebuild_cache();
+        app.refresh_source_views();
         assert_eq!(app.font.project.source_index(source), Some(0));
         app.mode = Mode::Overview;
         app.undo_active_edit(false);
@@ -739,8 +740,12 @@ mod tests {
             old_width
         );
         app.set_axis(0, 550.0);
-        app.source_name_buf = "Medium".into();
-        app.change_sources("add");
+        app.font
+            .project
+            .add_interpolated_source("Medium", "Medium.ufo", &app.font.project.location.clone())
+            .unwrap();
+        app.font.rebuild_cache();
+        app.refresh_source_views();
         assert_eq!(app.font.master_count(), 3);
         assert_eq!(
             app.font.master_names()[app.font.active()].as_str(),
@@ -771,7 +776,6 @@ mod tests {
         let document_id = workspace.document_id;
         assert!(matches!(workspace.mode, Mode::Overview));
         for title in [
-            "Categories",
             "Global Scripts",
             "Filters",
             "Coordinates",
@@ -781,11 +785,12 @@ mod tests {
             "Mark",
             "Path Operations",
             "Background",
-            "Masters",
-            "Axes",
             "Measure",
         ] {
             assert!(workspace.collapsed.contains(title));
+        }
+        for title in ["Categories", "Sidebar Spacing", "Axes", "Masters"] {
+            assert!(!workspace.collapsed.contains(title));
         }
         assert!(workspace.font.glyphs.is_empty());
         assert_eq!(workspace.selected, None);
@@ -1505,6 +1510,37 @@ mod tests {
         assert_eq!(workspace.font.active(), 1);
         assert_eq!(workspace.font.master_name(1), "Bold");
         std::fs::remove_dir_all(dir).expect("the designspace fixture is removed");
+    }
+
+    #[test]
+    fn overview_axes_preview_and_return_to_the_editable_master() {
+        use kurbo::Shape as _;
+        let (dir, designspace) = two_master_designspace("overview-axis");
+        for (file, width) in [("Regular.ufo", 100.0), ("Bold.ufo", 300.0)] {
+            let mut font = norad::Font::new();
+            let mut glyph = norad::Glyph::new("A");
+            glyph.codepoints.set(['A']);
+            glyph.width = 500.0;
+            glyph.contours.push(norad::Contour::new(
+                [(0.0, 0.0), (width, 0.0), (width, 400.0), (0.0, 400.0)]
+                    .into_iter()
+                    .map(|(x, y)| {
+                        norad::ContourPoint::new(x, y, norad::PointType::Line, false, None, None)
+                    })
+                    .collect(),
+                None,
+            ));
+            font.default_layer_mut().insert_glyph(glyph);
+            font.save(dir.join(file)).unwrap();
+        }
+        let mut app = Workspace::open(&designspace).unwrap();
+        let i = app.font.index_of("A").unwrap();
+        app.set_axis(0, 550.0);
+        assert_eq!(app.cells[i].outline.bounding_box().width(), 200.0);
+        app.set_master(0);
+        assert!(app.on_active_master());
+        assert_eq!(app.cells[i].outline.bounding_box().width(), 100.0);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

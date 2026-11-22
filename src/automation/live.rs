@@ -80,6 +80,14 @@ pub fn tools() -> Vec<agent::Tool> {
         parameters: json!({"type":"object", "properties":{}, "additionalProperties":false}),
     });
     result.push(agent::Tool {
+        name: "editor_set_source".into(),
+        description: "Navigate to an editable master by stable source ID. Requires a fresh editor context. Does not write or save a glyph.".into(),
+        parameters: json!({"type":"object","properties":{
+            "source":{"type":"integer","minimum":0},
+            "expected_context_revision":{"type":"string"}
+        },"required":["source","expected_context_revision"],"additionalProperties":false}),
+    });
+    result.push(agent::Tool {
         name: "editor_open_glyph".into(),
         description: "Open a named glyph in the current editor tab while preserving its text and preview context, active source and current tool. Rejects an active canvas gesture. Does not edit or save the font.".into(),
         parameters: json!({"type":"object", "properties":{
@@ -226,6 +234,7 @@ pub fn tools() -> Vec<agent::Tool> {
         if !matches!(
             tool.name.as_str(),
             "editor_context"
+                | "editor_set_source"
                 | "editor_open_glyph"
                 | "editor_review"
                 | "editor_select_points"
@@ -420,6 +429,7 @@ fn handle(project: &mut Project, name: &str, args: &Value) -> Result<Value, Stri
     if matches!(
         name,
         "editor_context"
+            | "editor_set_source"
             | "editor_open_glyph"
             | "editor_review"
             | "editor_select_points"

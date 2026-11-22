@@ -1486,9 +1486,12 @@ mod panel_resize_tests {
             pod.new_widget,
             (1336, 30),
         );
-        let normal_count = harness.root_widget().children()[0].children()[0]
-            .children()
-            .len();
+        let controls_count = |harness: &TestHarness<masonry::widgets::SizedBox>| {
+            harness.root_widget().children()[0].children()[0].children()[0]
+                .children()
+                .len()
+        };
+        let normal_count = controls_count(&harness);
 
         app.fullscreen = true;
         let fullscreen = xilem::view::sized_box(titlebar(&app));
@@ -1496,9 +1499,7 @@ mod panel_resize_tests {
             fullscreen.rebuild(&normal, &mut state, &mut ctx, root, &mut app);
         });
         assert_eq!(
-            harness.root_widget().children()[0].children()[0]
-                .children()
-                .len(),
+            controls_count(&harness),
             normal_count - 1,
             "full screen must remove the window-controls spacer"
         );
@@ -1508,12 +1509,7 @@ mod panel_resize_tests {
         harness.edit_root_widget(|root| {
             restored.rebuild(&fullscreen, &mut state, &mut ctx, root, &mut app);
         });
-        assert_eq!(
-            harness.root_widget().children()[0].children()[0]
-                .children()
-                .len(),
-            normal_count
-        );
+        assert_eq!(controls_count(&harness), normal_count);
     }
 
     #[test]

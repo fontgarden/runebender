@@ -251,6 +251,11 @@ where
 }
 
 impl<F, E> GestureSliderView<F, E> {
+    pub(crate) fn track_color(mut self, color: Color) -> Self {
+        self.track = color;
+        self
+    }
+
     /// Label the accessibility group containing the stock slider.
     pub(crate) fn accessibility_name(mut self, name: impl Into<String>) -> Self {
         self.accessibility_name = Some(name.into());

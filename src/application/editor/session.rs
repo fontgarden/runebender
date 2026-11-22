@@ -3411,7 +3411,15 @@ impl Workspace {
     }
 
     pub(crate) fn set_master(&mut self, index: usize) {
-        if index == self.font.active() || index >= self.font.master_count() {
+        if index >= self.font.master_count() {
+            return;
+        }
+        if index == self.font.active() {
+            if !self.on_active_master() {
+                self.axis_values = self.font.master_axis_values(index);
+                self.font.project.snap_location_to_master(index);
+                self.cells = Arc::new(cells_of(&self.font, &self.palette));
+            }
             return;
         }
         if self.features_edited {
@@ -3427,7 +3435,6 @@ impl Workspace {
         let active_name =
             matches!(self.mode, Mode::Editor(_)).then(|| self.session.glyph_name.clone());
         let index = self.font.active();
-        self.source_name_buf = self.font.master_names()[index].to_string();
         self.features_buf = self.font.feature_text().to_owned();
         self.features_status = None;
         if self.show_all_masters {
@@ -3540,6 +3547,46 @@ impl Workspace {
             .zip(&self.axis_values)
             .map(|(axis, value)| (axis.name.clone(), axis.user_to_normalized(*value)))
             .collect();
+        {
+            let mut cells = cells_of(&self.font, &self.palette);
+            if !self.on_active_master() {
+                let compiled = self.font.preview_font().ok().flatten().and_then(|font| {
+                    let coords: Vec<_> = font
+                        .axis_tags
+                        .iter()
+                        .map(|tag| {
+                            self.font
+                                .axes
+                                .iter()
+                                .find(|axis| &axis.tag == tag)
+                                .and_then(|axis| self.font.project.location.get(&axis.name))
+                                .copied()
+                                .unwrap_or(0.0)
+                        })
+                        .collect();
+                    font.outlines(&coords).ok()
+                });
+                if let Some(paths) = compiled {
+                    let paths: HashMap<_, _> = paths.into_iter().collect();
+                    for cell in &mut cells {
+                        if let Some(path) = paths.get(cell.name.as_ref()) {
+                            cell.outline = path.clone();
+                        }
+                    }
+                } else {
+                    for cell in &mut cells {
+                        if let Ok(path) = self
+                            .font
+                            .project
+                            .interpolated_outline_at(&cell.name, &self.font.project.location)
+                        {
+                            cell.outline = Arc::new(path);
+                        }
+                    }
+                }
+            }
+            self.cells = Arc::new(cells);
+        }
     }
 
     pub(crate) fn refresh_open_glyph(&mut self) {

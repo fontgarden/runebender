@@ -135,6 +135,36 @@ impl Workspace {
             }
             return self.live_context();
         }
+        if call.name == "editor_set_source" {
+            let args = &call.arguments;
+            let Some(id) = args["source"]
+                .as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+            else {
+                return json!({"ok":false,"error_code":"invalid_arguments"});
+            };
+            if args.as_object().map(|o| o.len()) != Some(2)
+                || !args["expected_context_revision"].is_string()
+            {
+                return json!({"ok":false,"error_code":"invalid_arguments"});
+            }
+            if self.live_context()["context_revision"] != args["expected_context_revision"] {
+                return json!({"ok":false,"error_code":"stale_context"});
+            }
+            if self.session.gesture_in_progress() || self.features_edited {
+                return json!({"ok":false,"error":"Finish the current edit before switching sources","error_code":"busy"});
+            }
+            let Some(index) = self
+                .font
+                .project
+                .document_sources()
+                .position(|s| s.id().0 == id)
+            else {
+                return json!({"ok":false,"error_code":"source_not_found"});
+            };
+            self.set_master(index);
+            return self.live_context();
+        }
         if call.name == "editor_open_glyph" {
             return self.live_open_glyph(&call.arguments);
         }

@@ -215,7 +215,6 @@ pub(crate) struct Workspace {
     /// Optional shaping script and language selected in the preview controls.
     pub(crate) text_script: Option<String>,
     pub(crate) text_language: Option<String>,
-    pub(crate) source_name_buf: String,
     pub(crate) layer_name_buf: String,
     /// Whether the left column is folded away.
     pub(crate) left_collapsed: bool,

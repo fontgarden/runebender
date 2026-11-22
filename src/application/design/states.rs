@@ -137,6 +137,13 @@ impl ControlStyle {
         style
     }
 
+    /// Outline the full hit area while pointing at the control.
+    #[must_use]
+    pub(crate) fn hover_outline(mut self, color: Color) -> Self {
+        self.hover.outline = color;
+        self
+    }
+
     /// The same control drawn disabled, or not.
     #[must_use]
     pub(crate) fn disabled(self, pal: &Palette, disabled: bool) -> Self {
@@ -381,6 +388,11 @@ impl ControlStyle {
     /// The color of the keyboard focus ring.
     pub(crate) fn focus_ring(&self) -> Color {
         self.focus_ring
+    }
+
+    pub(crate) fn with_radius(mut self, radius: f64) -> Self {
+        self.radius = radius;
+        self
     }
 
     /// The corner radius.

@@ -73,7 +73,7 @@ pointHalo = false
 app = "baseUi.02"
 # Gray overlay on the native macOS blur; independent of the opaque app background.
 # Its opacity is window.blurTintOpacity. Other hosts ignore this tint.
-backdropTint = "#808080"
+backdropTint = "#606060"
 # Main floating panel faces and sidebar backgrounds.
 panel = "baseUi.07"
 # Face color of frosted side panels (window.blurPanels); defaults to panel. It is lighter
@@ -278,7 +278,6 @@ popcount4 = "#FF4A3D"
 # Linux, browser, and headless proofs always use flat colors.
 blurBackground = true
 # Opacity of surfaces.backdropTint over the blur: 0 is clear, 1 is solid.
-# Midpoint tint at 0.25 lifts dark wallpaper while retaining visible blur.
 # The final blended color still varies with the wallpaper behind the window.
 # Used only on macOS with blurBackground enabled.
 blurTintOpacity = 0.50
