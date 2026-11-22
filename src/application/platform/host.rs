@@ -239,7 +239,6 @@ impl Workspace {
                     "Coordinates",
                     "Transformations",
                     "Curves",
-                    "Glyph",
                     "Font info",
                     "Dimensions",
                     "Advanced",
@@ -781,7 +780,6 @@ mod tests {
             "Coordinates",
             "Transformations",
             "Curves",
-            "Glyph",
             "Mark",
             "Path Operations",
             "Background",
@@ -789,7 +787,7 @@ mod tests {
         ] {
             assert!(workspace.collapsed.contains(title));
         }
-        for title in ["Categories", "Sidebar Spacing", "Axes", "Masters"] {
+        for title in ["Categories", "Sidebar Spacing", "Axes", "Masters", "Glyph"] {
             assert!(!workspace.collapsed.contains(title));
         }
         assert!(workspace.font.glyphs.is_empty());

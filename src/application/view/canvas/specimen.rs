@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use masonry::imaging::Painter;
-use masonry::kurbo::{Affine, BezPath, Size};
+use masonry::kurbo::{Affine, BezPath, Shape, Size};
 use masonry::layout::{Dim, Length};
 use masonry::properties::Dimensions;
 use xilem::WidgetView;
@@ -54,6 +54,7 @@ pub(crate) struct Block {
 #[derive(Debug, Default)]
 struct Specimen {
     blocks: Vec<Block>,
+    extra_spacing: Vec<Run>,
     ascender: f64,
     descender: f64,
 }
@@ -72,23 +73,102 @@ pub(crate) fn glyph_specimen(app: &Workspace) -> impl WidgetView<Workspace> + us
         .blocks
         .iter()
         .map(|block| {
-            recipes::section_of(
-                app,
-                block.key,
-                &block.caption,
-                vec![Group::new(
-                    "",
-                    vec![Row::Specimen {
-                        block: block.clone(),
-                        ascender: specimen.ascender,
-                        descender: specimen.descender,
-                    }],
-                )],
-            )
-            .boxed()
+            let groups = vec![Group::new(
+                "",
+                vec![Row::Specimen {
+                    block: block.clone(),
+                    ascender: specimen.ascender,
+                    descender: specimen.descender,
+                }],
+            )];
+            if block.key == "Sidebar Spacing" && !app.collapsed.contains(block.key) {
+                return sized_box(recipes::section(
+                    app,
+                    block.key,
+                    &block.caption,
+                    recipes::panel_stack(()),
+                ))
+                .padding(masonry::properties::Padding {
+                    top: design::PANEL_SECTION_INSET.length(),
+                    bottom: Length::px(0.0),
+                    left: design::PANEL_SECTION_INSET.length(),
+                    right: design::PANEL_SECTION_INSET.length(),
+                })
+                .boxed();
+            }
+            recipes::section_of(app, block.key, &block.caption, groups).boxed()
         })
         .collect::<Vec<_>>();
     recipes::panel_stack(sections)
+}
+
+/// One flexible canvas owns every spacing baseline, including the required examples.
+pub(crate) fn spacing_canvas(app: &Workspace) -> Option<impl WidgetView<Workspace> + use<>> {
+    if app.collapsed.contains("Sidebar Spacing") {
+        return None;
+    }
+    let proof = specimen(app);
+    let base = proof
+        .blocks
+        .last()
+        .filter(|block| block.key == "Sidebar Spacing")?;
+    let inset = design::PANEL_SECTION_INSET.px();
+    let em = (proof.ascender - proof.descender).max(1.0);
+    let natural = line_scales(base, design::DOCK_WIDTH - 2.0 * inset, em)[0]
+        * em
+        * LINE
+        * base.lines.len() as f64;
+    let ink = app.palette.proof_ink();
+    Some(
+        canvas(move |_: &mut Workspace, _, scene, size: Size| {
+            let base = proof.blocks.last().unwrap();
+            let width = size.width - 2.0 * inset;
+            if width <= 0.0 || size.height <= 0.0 {
+                return;
+            }
+            let nominal = line_scales(base, width, em)[0];
+            let count =
+                ((size.height / (nominal * em * LINE)).round() as usize).max(base.lines.len());
+            let runs: Vec<_> = base
+                .lines
+                .iter()
+                .chain(proof.extra_spacing.iter().cycle())
+                .take(count)
+                .collect();
+            let scale = runs
+                .iter()
+                .fold(nominal, |s, run| s.min(width / run.width))
+                .min(size.height / (runs.len() as f64 * em));
+            let last_bottom = runs
+                .last()
+                .unwrap()
+                .paths
+                .iter()
+                .filter(|p| !p.elements().is_empty())
+                .map(|p| p.bounding_box().y0)
+                .reduce(f64::min)
+                .unwrap_or(0.0);
+            let first = scale * proof.ascender;
+            let last = size.height + last_bottom * scale;
+            let leading = (last - first) / runs.len().saturating_sub(1).max(1) as f64;
+            let mut painter = Painter::new(scene);
+            for (i, run) in runs.iter().enumerate() {
+                let baseline = if runs.len() == 1 {
+                    last
+                } else {
+                    first + i as f64 * leading
+                };
+                let transform = Affine::new([scale, 0.0, 0.0, -scale, inset, baseline]);
+                for path in &run.paths {
+                    painter.fill(path, ink).transform(transform).draw();
+                }
+            }
+        })
+        .dims(Dimensions::new(
+            Dim::Stretch,
+            Dim::Fixed(Length::px(natural)),
+        )),
+    )
 }
 
 /// One proof body without a second caption, divider, or scrolling area.
@@ -100,6 +180,7 @@ pub(crate) fn block_view(
 ) -> impl WidgetView<Workspace> + use<> {
     let specimen = Specimen {
         blocks: vec![block],
+        extra_spacing: Vec::new(),
         ascender,
         descender,
     };
@@ -359,7 +440,24 @@ fn build(app: &Workspace) -> Specimen {
             });
         }
     }
+    let mut extra_spacing = Vec::new();
+    if let Some(c) = character
+        && blocks.last().is_some_and(|b| b.key == "Sidebar Spacing")
+    {
+        let controls = match script_of(c) {
+            Script::Arabic => "بتمهلويد",
+            Script::Hebrew => "הסתנכלרב",
+            Script::Figures => "0123456789",
+            _ => "HOnovaxTVe",
+        };
+        for (a, b) in controls.chars().zip(controls.chars().cycle().skip(1)) {
+            if let Some(run) = shape(&format!("{a}{c}{b}{c}{c}{a}{c}{b}{a}{c}")) {
+                extra_spacing.push(run);
+            }
+        }
+    }
     Specimen {
+        extra_spacing,
         blocks,
         ascender: app.font.ascender(),
         descender: app.font.descender(),
@@ -545,6 +643,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn spacing_uses_the_extra_height_of_the_glyph_sidebar() {
+        use crate::application::view::panels::tabs::sidebar;
+        use crate::application::view::render::panel_resize_tests_support::context;
+        use masonry::core::{Widget, WidgetRef};
+        use masonry_testing::TestHarness;
+        use xilem::core::View;
+
+        fn last_canvas_height(widget: WidgetRef<'_, dyn Widget>) -> Option<(f64, f64)> {
+            if widget.short_type_name() == "Canvas" {
+                let ctx = widget.ctx();
+                let height = ctx.border_box().height();
+                return Some((height, ctx.to_window((0.0, height).into()).y));
+            }
+            widget
+                .children()
+                .into_iter()
+                .filter_map(last_canvas_height)
+                .last()
+        }
+
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/font-sources/variable-fonts/VirtuaGrotesk/VirtuaGrotesk-Regular.ufo");
+        let mut app = Workspace::open(&fixture).unwrap();
+        app.selected = app.font.index_of("A");
+        let height = |app: &mut Workspace, window_height| {
+            let (pod, _) = sized_box(sidebar(app)).build(&mut context(), app);
+            let mut harness = TestHarness::create_with_size(
+                crate::application::view::default_property_set(),
+                pod.new_widget,
+                (254, window_height),
+            );
+            let _ = harness.render();
+            let (height, bottom) = last_canvas_height(harness.root_widget().as_dyn()).unwrap();
+            assert_eq!(
+                f64::from(window_height) - bottom,
+                design::PANEL_SECTION_INSET.px()
+            );
+            height
+        };
+        let short = height(&mut app, 1000);
+        let required = 1000 - short.round() as u32;
+        for slack in [160, 180, 200, 220] {
+            assert!((height(&mut app, required + slack) - f64::from(slack)).abs() < 1.0);
+        }
+        let tall = height(&mut app, 1200);
+        assert!((tall - short - 200.0).abs() < 1.0, "{short} -> {tall}");
+    }
+
+    #[test]
     fn proofs_fold_independently_and_keep_their_state_when_selection_changes() {
         use crate::application::view::render::panel_resize_tests_support::context;
         use masonry::core::{Widget, WidgetRef};
@@ -571,7 +718,13 @@ mod tests {
                 .all(|block| app.collapsed.contains(block.key))
         );
         let mut ctx = context();
-        let mut view = sized_box(glyph_specimen(&app));
+        let proof_view = |app: &Workspace| {
+            sized_box(recipes::panel_stack((
+                glyph_specimen(app),
+                spacing_canvas(app),
+            )))
+        };
+        let mut view = proof_view(&app);
         let (pod, mut state) = view.build(&mut ctx, &mut app);
         let mut harness = TestHarness::create_with_size(
             crate::application::view::default_property_set(),
@@ -590,7 +743,7 @@ mod tests {
             if !app.collapsed.remove(key) {
                 app.collapsed.insert(key);
             }
-            let next = sized_box(glyph_specimen(&app));
+            let next = proof_view(&app);
             harness.edit_root_widget(|root| {
                 next.rebuild(&view, &mut state, &mut ctx, root, &mut app);
             });
@@ -599,7 +752,7 @@ mod tests {
             let _ = harness.render();
         }
         app.selected = app.font.index_of("B");
-        let next = sized_box(glyph_specimen(&app));
+        let next = proof_view(&app);
         harness.edit_root_widget(|root| {
             next.rebuild(&view, &mut state, &mut ctx, root, &mut app);
         });

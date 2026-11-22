@@ -137,13 +137,6 @@ impl ControlStyle {
         style
     }
 
-    /// Outline the full hit area while pointing at the control.
-    #[must_use]
-    pub(crate) fn hover_outline(mut self, color: Color) -> Self {
-        self.hover.outline = color;
-        self
-    }
-
     /// The same control drawn disabled, or not.
     #[must_use]
     pub(crate) fn disabled(self, pal: &Palette, disabled: bool) -> Self {
@@ -320,6 +313,11 @@ impl ControlStyle {
             (
                 Face {
                     fill: shift(base, hover_step),
+                    outline: if kind == ControlKind::Row {
+                        pal.outline
+                    } else {
+                        rest.outline
+                    },
                     ..rest
                 },
                 Face {
@@ -485,6 +483,19 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn selectable_rows_outline_hover_and_keep_the_selected_ink() {
+        let pal = Palette::load("gray");
+        for selected in [false, true] {
+            let style = ControlStyle::new(&pal, ControlKind::Row).selected(&pal, selected);
+            let hover = style.face(true, false);
+            assert_eq!(hover.outline, pal.outline);
+            assert_eq!(hover.ink, style.ink());
+            let disabled = style.disabled(&pal, true);
+            assert_eq!(disabled.face(true, false), disabled.face(false, false));
         }
     }
 

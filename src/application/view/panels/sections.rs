@@ -184,9 +184,7 @@ fn master_rows(app: &Workspace) -> Vec<impl WidgetView<Workspace> + use<>> {
         .enumerate()
         .map(|(i, name)| {
             let active = i == app.font.active();
-            let style = ControlStyle::new(pal, ControlKind::Row)
-                .selected(pal, active)
-                .hover_outline(pal.outline);
+            let style = ControlStyle::new(pal, ControlKind::Row).selected(pal, active);
             sized_box(
                 button(
                     style,

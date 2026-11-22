@@ -375,6 +375,7 @@ fn axes_rail(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
         crate::application::view::panels::sections::masters_section(app)
             .map(|body| recipes::panel_group(&app.palette, body)),
     )))
+    .trailing_rule_clearance(design::PANEL_SECTION_INSET.px())
     .constrain_horizontal(true)
 }
 
@@ -739,6 +740,12 @@ fn category_sidebar(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
         total("Incompatible masters", app.font.incompatible_count()),
     ];
     filters.extend(filter_rows.into_iter().map(|row| row.boxed()));
+    let continuation = crate::application::view::canvas::specimen::spacing_canvas(app);
+    let bottom_inset = if continuation.is_some() {
+        design::PANEL_SECTION_INSET.px()
+    } else {
+        0.0
+    };
     flex_col((
         xcolumn(
             Region::List,
@@ -757,14 +764,26 @@ fn category_sidebar(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
         .padding(Space::Md),
         recipes::hairline(pal),
         // All sidebar sections share one scrolling area and the same folding headers.
-        portal(recipes::panel_stack((
-            sidebar_group(app, "Categories", cat_rows),
-            (!lang_rows.is_empty()).then(|| sidebar_group(app, "Global Scripts", lang_rows)),
-            sidebar_group(app, "Filters", filters),
-            crate::application::view::canvas::specimen::glyph_specimen(app),
-        )))
-        .trailing_rule_clearance(design::PANEL_SECTION_INSET.px())
-        .constrain_horizontal(true)
+        sized_box(
+            portal(recipes::panel_stack((
+                sidebar_group(app, "Categories", cat_rows),
+                (!lang_rows.is_empty()).then(|| sidebar_group(app, "Global Scripts", lang_rows)),
+                sidebar_group(app, "Filters", filters),
+                crate::application::view::canvas::specimen::glyph_specimen(app),
+                continuation.map(|view| view.flex(1.0)),
+            )))
+            .must_fill(true)
+            .trailing_rule_clearance(if bottom_inset > 0.0 {
+                0.0
+            } else {
+                design::PANEL_SECTION_INSET.px()
+            })
+            .constrain_horizontal(true),
+        )
+        .padding(masonry::properties::Padding {
+            bottom: Length::px(bottom_inset),
+            ..Default::default()
+        })
         .flex(1.0),
     ))
     .cross_axis_alignment(CrossAxisAlignment::Stretch)

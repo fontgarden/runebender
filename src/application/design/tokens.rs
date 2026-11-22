@@ -158,7 +158,7 @@ pub(crate) const SIDEBAR_SPLITTER_HIT_WIDTH: f64 = 16.0;
 /// Equal outer padding for section contents in either side panel.
 pub(crate) const PANEL_SECTION_INSET: Space = Space::Md;
 /// Standard space between a folding section header and its contents.
-pub(crate) const PANEL_SECTION_BODY_GAP: Space = Space::Sm;
+pub(crate) const PANEL_SECTION_BODY_GAP: Space = PANEL_SECTION_INSET;
 /// Space between a list row's face and its marker, name and count.
 /// It is close to the space above and below the row's text, so a selected row has even margins.
 pub(crate) const SIDEBAR_ROW_INSET: f64 = 4.0;

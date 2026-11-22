@@ -243,7 +243,7 @@ fn group_view(app: &Workspace, group: Group) -> impl WidgetView<Workspace> + use
     for row in group.rows {
         children.push(row_view(app, row));
     }
-    column(Region::List, children).gap(Space::Sm)
+    column(Region::List, children).gap(crate::application::design::PANEL_SECTION_INSET)
 }
 
 /// The name of a group: caption size, muted, title case as written.

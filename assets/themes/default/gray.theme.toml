@@ -185,9 +185,9 @@ toolActiveInk = "baseUi.08"
 toolInactiveInk = "baseUi.05"
 # Shared selected-grid color token.
 gridSelected = "baseUi.02"
-# Selected glyph tile face: two steps darker than controlSelected, so the
+# Selected glyph tile face: one step darker than controlSelected, so the
 # selected tile stands apart from the colored tiles around it.
-cellSelectedFill = "baseUi.01"
+cellSelectedFill = "baseUi.02"
 # Shared selected-cell ink token.
 cellSelectedInk = "baseUi.07"
 # Native selected backgrounds, including glyph tiles, sidebar rows, and controls.

@@ -323,6 +323,7 @@ where
             control,
         ),
     )
+    .gap(crate::application::design::PANEL_SECTION_INSET)
 }
 
 /// A labeled text field: caption over a control-height input.
