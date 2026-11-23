@@ -36,7 +36,11 @@ Mark anything that was not checked as "not checked".
   On Metal the value maps to `maximumDrawableCount = latency + 1` (`wgpu-hal/src/metal/surface.rs`).
 - Existing API to follow: `MasonryState::set_present_mode(window_id, present_mode)` in `masonry_winit/src/event_loop_runner.rs` changes another `SurfaceConfiguration` field at run time, through `RenderContext::set_present_mode`.
   Surfaces are created with `PresentMode::AutoVsync` in `create_surface`.
-- Measured effect of the value 1 on memory and on frame pacing: not measured.
+- Measured effect of the value 1 on memory: not measured.
+- Measured effect of the value 1 on frame pacing (2026-11-23, Apple M4 Pro, Metal, a 30 Hz external display, a synthetic 125 Hz canvas drag in an instrumented copy of `masonry_winit` at the pinned revision): none.
+  With 2 and with 1, the window presented 30 frames per second, `get_current_texture` blocked for 20 to 30 ms per frame, and the newest input was 36 to 37 ms old when `present` returned.
+  The wait for a drawable sets the pace, not the number of queued drawables.
+  See "Performance candidates" in [OVERVIEW.md](OVERVIEW.md).
   Item M3 in [the cleanup plan](../../CLEANUP-PLAN.md) is the trial.
 - Related issues and pull requests:
   - [#918](https://github.com/linebender/xilem/issues/918) "The memory usage is extremely high!" (open, 2025-04-04): DJMcNab called high memory use "a known problem" and asked to use the issue to find the major sources; later comments point at Vello's fixed buffers, `wgpu` memory hints and Vello's buffer cache.

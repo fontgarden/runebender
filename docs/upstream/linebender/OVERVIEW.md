@@ -67,6 +67,30 @@ All three commits apply to `dc496876` without conflict (`git merge-tree`, 2026-1
 - Action: none upstream.
   Drop the fork commit when Xilem uses a `wgpu` release with #9922; Masonry's existing `PreMultiplied` branch then applies.
 
+## Performance candidates
+
+These are not planned pull requests yet, and they have no working file.
+They are recorded here so that the facts are not measured twice.
+Do not start one before the owner has discussed it in this repository, and do not change the fork for one that upstream is unlikely to accept.
+
+The facts were checked on 2026-11-23 against `linebender/xilem` `main` at `9a78df87` (2026-11-22) and against the pinned fork revision `0b0b5e75`.
+The measurements are from an Apple M4 Pro with Metal.
+The native measurements used an instrumented copy of `masonry_winit` and a 30 Hz external display.
+
+| Candidate | Size | Upstream state | Evidence |
+| --- | --- | --- | --- |
+| A. Do not render and present a frame that repaints nothing | Small | Open issue [#1562](https://github.com/linebender/xilem/issues/1562): a maintainer confirms that an animation frame always causes a redraw. | `RenderRootSignal::RequestAnimFrame` is handled as a redraw request (`masonry_winit/src/event_loop_runner.rs`, marked `TODO`). The Text tool caret and a focused `TextArea` request an animation frame on each frame, so the whole window renders at the display rate. |
+| B. Replace the wait for the GPU after `present` | Small | No issue found. | `present_surface` calls `device.poll(wgpu::PollType::wait_indefinitely())`. On Metal that wait sleeps in steps of 1 ms (`wgpu-hal` 28.0.1, `metal/device.rs`). One step measured 1.27 ms; a frame costs 1.6 to 3.2 ms with the wait and 0.3 ms of CPU time without it. |
+| C. Wait for the drawable off the interface thread, and paint after the wait | Large | No issue found. It changes the frame loop on each platform, so discuss it upstream before any code. | `redraw` runs the paint pass and then calls `get_current_texture`, which blocks until the display releases a drawable. In the measurement above the block was 20 to 30 ms of a 33 ms frame, the CPU work was about 2 ms, and the newest input was 36 ms old at `present`. Without display synchronization and without the GPU wait, the newest input was 6 ms old. |
+| D. Run the application logic once for each frame, not once for each action | Medium | No issue found. | `MasonryDriver::on_action` in `xilem/src/driver.rs` runs the logic and the view diff at once for each action. A recorded session held 297 rebuilds in one second of window resizing. |
+| E. A `canvas` view that does not record on each rebuild | Small | No issue found. | `Canvas::rebuild` in `xilem_masonry/src/view/canvas.rs` calls `update_scene` without a comparison, and `Canvas::message` answers `CanvasSizeChanged` with `RequestRebuild`. Runebender uses `keyed_canvas` in `src/application/widgets/keyed_canvas.rs` in its place. |
+| F. The dense trace log of debug builds | Small | Upstream tracks it in [#1556](https://github.com/linebender/xilem/issues/1556). | `masonry_core/src/app/tracing_backend.rs` writes each trace event to a file in debug builds. A development session of 27 minutes wrote 302,118 lines, 42 MB. The time cost is not measured. |
+
+Damage regions are tracked upstream in [#789](https://github.com/linebender/xilem/issues/789), with no progress.
+A measurement of one editor frame showed a small gain from a cached panel layer with the classic Vello backend on this machine: 1.4 ms to about 0.8 ms at a scale factor of 2.
+Vello Hybrid (`imaging_vello_hybrid` 0.0.1) built and rendered the editor correctly, at 2.3 to 6.1 ms of CPU time for each frame against 0.3 ms for classic Vello.
+Neither is a candidate until a slow GPU is measured.
+
 ## Options Runebender needs, with a workaround in this repository
 
 Each of these workarounds is a file in `src/application/widgets/`.
