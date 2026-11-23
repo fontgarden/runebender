@@ -1984,7 +1984,11 @@ impl Session {
     }
 
     pub(crate) fn side_bearings(&self) -> Option<runebender::analysis::measure::SideBearings> {
-        runebender::analysis::measure::side_bearings(&self.paths(), self.advance())
+        runebender::analysis::measure::side_bearings_with_components(
+            &self.paths(),
+            &self.components,
+            self.advance(),
+        )
     }
 
     /// Bounding box of the selected points in design space, if any.

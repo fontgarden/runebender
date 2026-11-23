@@ -217,3 +217,20 @@ fn rtl_pair_scope_can_remove_an_exception_or_edit_the_group() {
         vec![("reh-ar.fina".to_string(), "public.kern2.teh".to_string())]
     );
 }
+
+/// A composite glyph has ink where its component draws, so its bearings count that outline.
+/// Without it the card showed the glyph as blank, and a typed right bearing became the advance.
+#[test]
+fn a_composite_glyph_measures_its_bearings_from_the_component_outline() {
+    let mut editor = composite_editor();
+    let bearings = editor
+        .session
+        .side_bearings()
+        .expect("a glyph with a component has ink");
+    assert_eq!((bearings.lsb, bearings.rsb), (0, 100));
+
+    editor.field = Some(MetricField::Rsb);
+    editor.field_buf = "50".into();
+    assert!(editor.commit_metric());
+    assert_eq!(editor.session.advance(), 450.0);
+}

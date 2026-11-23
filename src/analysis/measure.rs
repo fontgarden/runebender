@@ -522,10 +522,24 @@ pub struct SideBearings {
 /// LSB is the leftmost x, measured from the origin. RSB is the advance minus
 /// the rightmost x. Returns `None` for an empty glyph.
 pub fn side_bearings(paths: &[Path], advance: f64) -> Option<SideBearings> {
+    side_bearings_with_components(paths, &BezPath::new(), advance)
+}
+
+/// Side bearings of the contours in `paths` together with the resolved component outlines.
+///
+/// A composite glyph has ink where its components draw, so its bearings count them.
+/// The lines of the bearings end at the extreme on-curve points of the contours, or at the
+/// middle of the ink when the glyph has components only.
+pub fn side_bearings_with_components(
+    paths: &[Path],
+    components: &BezPath,
+    advance: f64,
+) -> Option<SideBearings> {
     let mut bez = BezPath::new();
     for p in paths {
         p.append_to_bezpath(&mut bez);
     }
+    bez.extend(components.elements().iter().copied());
     let points = paths
         .iter()
         .flat_map(|path| path.points().as_slice())
