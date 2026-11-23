@@ -58,9 +58,10 @@ if (output) fs.mkdirSync(output, { recursive: true });
         });
         assert.deepEqual(sizes.actual, sizes.expected, 'canvas uses every display pixel');
       };
+      // The window ends above the metrics card, whose green header would count as a marker.
       const markers = () => frame.evaluate(() => {
         const c = document.querySelector('canvas'), s = devicePixelRatio;
-        const x = Math.round(450 * s), y = Math.round(70 * s), w = Math.round(500 * s), h = Math.round(460 * s);
+        const x = Math.round(450 * s), y = Math.round(70 * s), w = Math.round(500 * s), h = Math.round(420 * s);
         const data = c.getContext('2d').getImageData(x, y, w, h).data;
         let first, minY = Infinity, maxY = 0, count = 0;
         for (let py = 0; py < h; py++) for (let px = 0; px < w; px++) {

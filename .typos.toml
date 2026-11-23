@@ -47,3 +47,8 @@ tehMarbuta = "tehMarbuta"
 Virtua = "Virtua"
 Underware = "Underware"
 ba = "ba"
+# The Arabic letter teh inside longer test names.
+teh = "teh"
+# Exact quotes of an upstream wgpu pull request title and a Zulip topic.
+multipled = "multipled"
+premultipled = "premultipled"

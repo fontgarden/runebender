@@ -459,6 +459,7 @@ pub(crate) const MENUS: &[&str] = &[
 ];
 
 /// Resolve a key press from the same accelerator metadata used by both menu bars.
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn action_for_key(key: &Key, modifiers: Modifiers) -> Option<AppAction> {
     action_for_key_impl(key, modifiers, false)
 }

@@ -90,11 +90,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
+      # The browser workspace has no loadable manifest until the adapter is prepared,
+      # so the cache step runs after it, and macOS caches the root workspace only.
+      - name: Prepare browser adapter
+        if: runner.os == 'Linux'
+        run: python3 web/prepare.py
       - uses: Swatinem/rust-cache@v2
+        if: runner.os == 'Linux'
         with:
           workspaces: |
             . -> target
             web -> target
+      - uses: Swatinem/rust-cache@v2
+        if: runner.os != 'Linux'
+        with:
+          workspaces: . -> target
       - name: Production clippy
         run: cargo clippy --workspace --lib --bins --locked -- -D warnings
       - name: Auxiliary clippy
@@ -112,9 +122,6 @@ jobs:
             cargo clippy --workspace --lib --bins --features macos-updater --locked -- -D warnings
           SPARKLE_FRAMEWORK_PATH="$(python3 scripts/sparkle.py)" \
             cargo clippy --workspace --tests --examples --benches --features macos-updater,integration-fonts --locked -- -D warnings
-      - name: Prepare browser adapter
-        if: runner.os == 'Linux'
-        run: python3 web/prepare.py
       - name: Browser clippy
         if: runner.os == 'Linux'
         env:
@@ -187,6 +194,8 @@ jobs:
         with:
           toolchain: ${{ env.RUST_MIN_VER }}
           targets: wasm32-unknown-unknown
+      - name: Prepare browser adapter
+        run: python3 web/prepare.py
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: web -> target

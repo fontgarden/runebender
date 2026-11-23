@@ -70,7 +70,7 @@ const PRUNE_MIN_AGE: Duration = Duration::from_secs(30);
 /// crashed or killed editor leaves behind. Returns how many were removed.
 /// Only entries this user owns in the temporary directory are touched, and
 /// a socket that merely times out is left alone in case its editor is busy.
-/// A directory newer than [`PRUNE_MIN_AGE`] is left alone as well, so an editor that is
+/// A directory newer than `PRUNE_MIN_AGE` is left alone as well, so an editor that is
 /// starting or closing at the same moment keeps its socket.
 pub fn prune_stale() -> usize {
     prune(sessions(), PRUNE_MIN_AGE)

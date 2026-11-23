@@ -37,7 +37,7 @@ pub struct Piece {
     pub first: u32,
     /// The index of the last owner in the sample's text, in characters.
     pub last: u32,
-    /// The region came from a seed, so its polygon reaches [`OVERLAP`] into its neighbors.
+    /// The region came from a seed, so its polygon reaches `OVERLAP` into its neighbors.
     pub grown: bool,
 }
 
