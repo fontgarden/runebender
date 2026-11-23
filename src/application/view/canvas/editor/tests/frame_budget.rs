@@ -187,11 +187,52 @@ fn frame_budget_report() {
         if masters > 1 {
             let start = Instant::now();
             headless.app.set_master(1);
+            let switched = start.elapsed();
             headless.rebuild(logic);
+            let rebuilt = start.elapsed();
             headless.redraw();
             println!("switch master + rebuild      {:.2} ms", ms(start.elapsed()));
+            println!(
+                "  set_master {:.2} ms, rebuild {:.2} ms, paint {:.2} ms",
+                ms(switched),
+                ms(rebuilt - switched),
+                ms(start.elapsed() - rebuilt)
+            );
+            let start = Instant::now();
+            headless.app.font.rebuild_cache();
+            let cache = start.elapsed();
+            let start = Instant::now();
+            let cells = crate::application::view::canvas::grid::cells_of(
+                &headless.app.font,
+                &headless.app.palette,
+            );
+            println!(
+                "  of set_master: glyph cache {:.2} ms, cells {:.2} ms ({} cells)",
+                ms(cache),
+                ms(start.elapsed()),
+                cells.len()
+            );
             headless.app.set_master(0);
             headless.rebuild(logic);
+            // RUNEBENDER_BENCH_REPEAT=<count> switches master that many times, so a
+            // sampling profiler attached to this process sees the switch.
+            if let Some(count) = std::env::var("RUNEBENDER_BENCH_REPEAT")
+                .ok()
+                .and_then(|count| count.parse::<usize>().ok())
+            {
+                let start = Instant::now();
+                for step in 0..count {
+                    headless.app.set_master((step + 1) % masters);
+                    headless.rebuild(logic);
+                    headless.redraw();
+                }
+                println!(
+                    "repeated master switch       {:.2} ms each",
+                    ms(start.elapsed()) / count as f64
+                );
+                headless.app.set_master(0);
+                headless.rebuild(logic);
+            }
         }
         section_costs(&headless.app, false);
         println!("overview first paint         {:.2} ms", ms(first_paint));
@@ -381,6 +422,70 @@ fn frame_budget_report() {
             assert!(font.is_ok());
             println!("proof shaping font parse     {:.2} ms", ms(parsed));
         }
+    }
+
+    // A drag of every point of the glyph: the edit path without the widget.
+    {
+        let mut session = headless
+            .find_widget::<EditorWidget>()
+            .expect("the editor canvas is in the tree")
+            .inner()
+            .session
+            .clone();
+        session.select_all();
+        let selected = session.selection.len();
+        session.begin_point_drag();
+        let moves = 120;
+        let start = Instant::now();
+        for step in 1..=moves {
+            session.drag_points_to((f64::from(step), f64::from(step % 7)), false);
+        }
+        let each = start.elapsed().as_secs_f64() * 1e6 / f64::from(moves);
+        session.end_point_drag();
+        println!();
+        println!("select-all drag move         {each:>9.1} µs   ({selected} points)");
+        let start = Instant::now();
+        for _ in 0..20 {
+            drop(session.clone());
+        }
+        println!(
+            "session clone                {:>9.1} µs",
+            start.elapsed().as_secs_f64() * 1e6 / 20.0
+        );
+    }
+
+    // RUNEBENDER_BENCH_TEXT=<text> times the text line the canvas reads on each paint and
+    // each pointer move while a composition is on the tab.
+    if let Ok(text) = std::env::var("RUNEBENDER_BENCH_TEXT") {
+        use crate::application::editor::tools::text::{TextInputs, TextState};
+        let app = &headless.app;
+        let inputs = TextInputs::new(&app.font)
+            .with_location(&app.font, &app.axis_values)
+            .with_text(&text);
+        let state = TextState::new(&inputs);
+        let time = |label: &str, work: &dyn Fn()| {
+            let rounds = 200;
+            let start = Instant::now();
+            for _ in 0..rounds {
+                work();
+            }
+            println!(
+                "{label:<28} {:>9.1} µs",
+                start.elapsed().as_secs_f64() * 1e6 / f64::from(rounds)
+            );
+        };
+        println!();
+        println!("text line, {} characters:", text.chars().count());
+        time("text placed", &|| drop(state.placed()));
+        time("text caret", &|| {
+            std::hint::black_box(state.caret());
+        });
+        time("text active origin", &|| {
+            std::hint::black_box(state.active_origin());
+        });
+        time("text kern hit", &|| {
+            std::hint::black_box(state.kern_hit(Point::new(300.0, 300.0)));
+        });
     }
 
     println!();

@@ -63,8 +63,14 @@ struct Specimen {
 /// The document state a specimen was shaped from.
 type Key = (u64, usize, Vec<u64>, Option<usize>);
 
+/// One specimen for each master of a large family.
+const CACHE_LIMIT: usize = 16;
+
 thread_local! {
-    static CACHE: RefCell<Option<(Key, Arc<Specimen>)>> = const { RefCell::new(None) };
+    /// The specimens of the current document revision, newest last. A switch between
+    /// masters returns to a location shaped before, and shaping every block again takes
+    /// several milliseconds.
+    static CACHE: RefCell<Vec<(Key, Arc<Specimen>)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The independently folding proofs below Categories, Global Scripts, and Filters.
@@ -230,13 +236,16 @@ fn specimen(app: &Workspace) -> Arc<Specimen> {
     );
     CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if let Some((cached, specimen)) = cache.as_ref()
-            && *cached == key
-        {
+        // An edit makes every stored specimen stale.
+        cache.retain(|(cached, _)| cached.0 == key.0);
+        if let Some((_, specimen)) = cache.iter().find(|(cached, _)| *cached == key) {
             return specimen.clone();
         }
         let specimen = Arc::new(build(app));
-        *cache = Some((key, specimen.clone()));
+        if cache.len() >= CACHE_LIMIT {
+            cache.remove(0);
+        }
+        cache.push((key, specimen.clone()));
         specimen
     })
 }

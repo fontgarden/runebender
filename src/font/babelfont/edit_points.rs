@@ -72,13 +72,21 @@ impl LayerEditDraft {
         if selected.is_empty() {
             return Ok(false);
         }
+        // One pass over the layer, not one scan for each point: a pointer move with every
+        // point selected otherwise costs the square of the point count.
+        let present: HashSet<_> = self
+            .layer
+            .paths()
+            .flat_map(|path| &path.nodes)
+            .filter_map(|node| read_id(&node.format_specific))
+            .collect();
         for id in selected {
-            if self.node(*id).is_none() {
+            if !present.contains(&id.0) {
                 return Err(DocumentEditError::MissingPoint(*id));
             }
         }
         for (id, position) in originals {
-            if self.node(*id).is_none() {
+            if !present.contains(&id.0) {
                 return Err(DocumentEditError::MissingPoint(*id));
             }
             ensure_finite(&[position.x, position.y])?;

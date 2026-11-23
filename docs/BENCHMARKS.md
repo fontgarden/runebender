@@ -167,6 +167,22 @@ It compiles the preview font before the timed rebuilds, because the window compi
 Set `RUNEBENDER_BENCH_FONT` to a designspace or UFO to probe another font, and `RUNEBENDER_BENCH_GLYPH` to the glyph to open in it.
 `RUNEBENDER_BENCH_KEEP=<folder>` makes the `large_font` benchmark leave its fixtures in that folder for this purpose.
 `RUNEBENDER_BENCH_REPEAT=<count>` repeats the edit and its rebuild, so a sampling profiler attached to the test process sees that work.
+With `RUNEBENDER_BENCH_OVERVIEW=1`, the same variable repeats a switch of master.
+`RUNEBENDER_BENCH_TEXT=<text>` times the text line that the canvas reads on each paint: the placed sorts, the caret, the active origin and the kerning hit test.
+The probe also prints the time of one pointer move with every point of the glyph selected, and the time of one copy of the session.
+
+Measured on 2026-11-23 with the dev profile on the same machine, after the work of that day:
+
+| Measurement | Before | After |
+| --- | ---: | ---: |
+| Repaint requests in a rebuild with no change in state | 40 | 0 |
+| Layout requests in a rebuild with no change in state | 10 | 0 |
+| Pointer move with all 264 points of `E009` selected | 252 us | 73 us |
+| Switch of master, first visit, 919 glyphs and 8 masters | 15.7 ms | 9.7 ms |
+| Switch of master, return to a visited master | 15.7 ms | 2.4 ms |
+| Text line of 44 characters, placed sorts | not measured | 3.4 us |
+
+The text line is cheap, so its layout is not cached.
 
 Measured on 2026-11-17 with Rust 1.96, macOS arm64, Apple M4 Pro:
 

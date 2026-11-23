@@ -452,6 +452,15 @@ pub(crate) fn compare_section(app: &Workspace) -> impl WidgetView<Workspace> + u
             )),
         );
     }
+    // A folded section shows no body. Do not compare every master with the active one
+    // for it: that reads each glyph of each master on every switch of master.
+    if app.collapsed.contains("Compare") {
+        return section(
+            app,
+            "Compare",
+            Either::A(readout(String::new(), pal.text_muted)),
+        );
+    }
     let active = app.font.active();
     let reference_info = app
         .font

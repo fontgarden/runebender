@@ -63,6 +63,10 @@ pub(crate) struct FontModel {
     /// Constant-time lookup into the display-ordered canonical entries.
     /// Each glyph's position in `glyphs`. Shared, so text outlines can use it without a copy.
     name_map: Arc<HashMap<String, usize>>,
+    /// The entries of the masters that were active before, by master index, with the
+    /// document revision they were built at. A switch back at the same revision reuses
+    /// them; building them reads the outline of each glyph.
+    parked_entries: HashMap<usize, ParkedEntries>,
     /// The layer being edited for a glyph, when it is not the active master's own layer.
     /// An entry for another source, or for a layer the glyph no longer has, is ignored.
     pub(crate) edit_layers: HashMap<String, runebender::font::variable::LayerId>,
@@ -94,6 +98,9 @@ struct Readouts {
     /// Geometry comparisons against the active source, by source index.
     comparisons: Option<(ReadoutKey, HashMap<usize, GeometryComparison>)>,
 }
+
+/// The document revision, the entries and the name index of a master that is not active.
+type ParkedEntries = (u64, Vec<GlyphEntry>, Arc<HashMap<String, usize>>);
 
 /// The theme whose mark names label glyph entries, parsed once.
 fn mark_theme() -> Option<&'static Theme> {
@@ -220,6 +227,7 @@ impl FontModel {
             project,
             glyphs: Vec::new(),
             name_map: Arc::default(),
+            parked_entries: HashMap::new(),
             axes,
             edit_layers: HashMap::new(),
             text_inputs: std::sync::Mutex::new(None),
@@ -233,6 +241,12 @@ impl FontModel {
 
     /// Rebuild every shell entry from the active canonical source.
     pub(crate) fn rebuild_cache(&mut self) {
+        // The callers change the glyph list or its sources, so no parked master is valid.
+        self.parked_entries.clear();
+        self.fill_cache();
+    }
+
+    fn fill_cache(&mut self) {
         let source = self
             .project
             .source_id(self.active())
@@ -356,9 +370,22 @@ impl FontModel {
         if index >= self.project.document_sources().count() || index == self.project.active {
             return;
         }
+        let revision = self.project.document_revision();
+        let leaving = (
+            revision,
+            std::mem::take(&mut self.glyphs),
+            self.name_map.clone(),
+        );
+        self.parked_entries.insert(self.project.active, leaving);
         self.project.active = index;
         self.project.snap_location_to_master(index);
-        self.rebuild_cache();
+        match self.parked_entries.remove(&index) {
+            Some((built_at, glyphs, name_map)) if built_at == revision => {
+                self.glyphs = glyphs;
+                self.name_map = name_map;
+            }
+            _ => self.fill_cache(),
+        }
     }
 
     pub(crate) fn index_of(&self, name: &str) -> Option<usize> {
