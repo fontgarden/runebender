@@ -214,17 +214,60 @@ pub(crate) fn parse(text: &str) -> Result<Config, toml::de::Error> {
     toml::from_str(text)
 }
 
-/// The config for this run. Never fails: a missing or bad file yields defaults.
-pub(crate) fn load() -> Config {
-    path()
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .and_then(|text| parse(&text).ok())
-        .unwrap_or_default()
+/// The config for this run, and a message when the file exists and cannot be used.
+///
+/// Never fails: a missing or bad file yields defaults.
+/// A bad file is reported, because one unknown key discards every setting in it.
+pub(crate) fn load() -> (Config, Option<String>) {
+    let Some(path) = path() else {
+        return (Config::default(), None);
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(text) => from_text(&text, &path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (Config::default(), None),
+        Err(error) => (
+            Config::default(),
+            Some(format!("Could not read {}: {error}", path.display())),
+        ),
+    }
+}
+
+/// The config in `text`, or the defaults and a message that names `path` and the error.
+fn from_text(text: &str, path: &std::path::Path) -> (Config, Option<String>) {
+    match parse(text) {
+        Ok(config) => (config, None),
+        Err(error) => {
+            let reason = error.message();
+            let place = error
+                .span()
+                .map(|span| text[..span.start.min(text.len())].matches('\n').count() + 1)
+                .map(|line| format!(" line {line}"))
+                .unwrap_or_default();
+            (
+                Config::default(),
+                Some(format!(
+                    "Settings ignored: {}{place}: {reason}",
+                    path.display()
+                )),
+            )
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bad_file_yields_defaults_and_a_message_that_names_the_line() {
+        let path = std::path::Path::new("/config/runebender/config.toml");
+        let (config, message) = from_text("[editing]\ngird = 2\n", path);
+        assert_eq!(config.specimen.drawbot, Config::default().specimen.drawbot);
+        let message = message.expect("an unknown key is reported");
+        assert!(message.contains("config.toml line 2"), "{message}");
+        assert!(message.contains("gird"), "{message}");
+        assert_eq!(from_text("", path).1, None);
+    }
 
     #[test]
     fn the_specimen_section_names_renderers_with_home_expanded() {

@@ -30,7 +30,8 @@ pub(crate) fn run(
     event_loop: EventLoopBuilder,
     path: Option<&FsPath>,
 ) -> Result<(), EventLoopError> {
-    crate::application::platform::config::load().apply();
+    let (config, config_error) = crate::application::platform::config::load();
+    config.apply();
     let options = LaunchOptions::current();
     // A capture compiles its previews before it renders its one frame; a window compiles them
     // on worker threads.
@@ -40,6 +41,10 @@ pub(crate) fn run(
     // a headless screenshot reaches edit mode without clicks.
     if let Some(workspace) = app.workspace.as_mut() {
         options.apply(workspace);
+        // A settings file that cannot be used falls back to defaults, so say so.
+        if let Some(error) = config_error {
+            workspace.note = error;
+        }
     }
     // Headless: render one frame and exit. No window, no event loop.
     if let Some(capture) = &options.capture {
