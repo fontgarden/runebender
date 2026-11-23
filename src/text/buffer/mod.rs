@@ -934,6 +934,34 @@ impl TextBuffer {
         inserted
     }
 
+    /// Insert stored text at the cursor, with each line ending as a line break, and shape once.
+    ///
+    /// [`Self::text`] writes a line break as `\n`, so this is the function that restores a
+    /// buffer from its stored text without joining its lines.
+    /// `\r\n` and a lone `\r` count as one line ending.
+    /// Unmapped characters are skipped, as with [`Self::insert_characters`].
+    /// Returns the number of sorts inserted.
+    pub fn insert_text(&mut self, text: &str) -> usize {
+        let mut inserted = 0;
+        let mut characters = text.chars().peekable();
+        while let Some(character) = characters.next() {
+            match character {
+                '\r' | '\n' => {
+                    if character == '\r' && characters.peek() == Some(&'\n') {
+                        characters.next();
+                    }
+                    self.insert_line_break();
+                    inserted += 1;
+                }
+                _ => inserted += usize::from(self.insert_character_unshaped(character, None)),
+            }
+        }
+        if inserted != 0 {
+            self.shape_arabic_if_rtl();
+        }
+        inserted
+    }
+
     /// Insert the glyph mapped to `char` at the cursor as an inactive sort and advance the cursor.
     /// `active_advance_width` is the live width of the glyph being edited and wins over the inventory width, except for Arabic characters on an RTL line, which shaping will resize anyway.
     /// Reshapes around the insertion point. Returns false when the inventory has no glyph for the character.

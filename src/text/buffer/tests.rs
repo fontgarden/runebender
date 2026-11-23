@@ -230,6 +230,39 @@ fn active_sort_flags_remain_unique_after_switch_and_insert() {
     );
 }
 
+/// The stored text of a buffer holds a line break as a line ending.
+/// A buffer built again from that text keeps its lines, where `insert_characters` joined them.
+#[test]
+fn stored_text_restores_its_line_breaks() {
+    let inventory = || {
+        serde_json::from_str(
+            r#"{
+                "unicode": { "65": "A", "66": "B" },
+                "widths": { "A": 640, "B": 600 }
+            }"#,
+        )
+        .expect("valid glyph inventory")
+    };
+    let mut typed = TextBuffer::new();
+    typed.set_glyph_inventory(inventory());
+    assert!(typed.insert_character('A'));
+    typed.insert_line_break();
+    assert!(typed.insert_character('B'));
+    let stored = typed.text();
+    assert_eq!(stored, "A\nB");
+
+    let mut restored = TextBuffer::new();
+    restored.set_glyph_inventory(inventory());
+    assert_eq!(restored.insert_text(&stored), 3);
+    assert_eq!(restored.text(), stored);
+    assert_eq!(restored.len(), typed.len());
+
+    let mut windows = TextBuffer::new();
+    windows.set_glyph_inventory(inventory());
+    assert_eq!(windows.insert_text("A\r\nB\rZ"), 4, "Z has no glyph");
+    assert_eq!(windows.text(), "A\nB\n");
+}
+
 #[test]
 fn insert_character_uses_glyph_inventory() {
     let mut buffer = TextBuffer::new();

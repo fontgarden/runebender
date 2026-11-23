@@ -557,7 +557,8 @@ impl TextState {
             Some(direction) => buffer.set_direction(direction),
             None => buffer.set_auto_direction(),
         }
-        buffer.insert_characters(&inputs.initial);
+        // The stored text holds a line break as a line ending, so restore it as one.
+        buffer.insert_text(&inputs.initial);
         if let Some((name, codepoint, advance)) = &inputs.active_glyph {
             let existing = {
                 buffer
