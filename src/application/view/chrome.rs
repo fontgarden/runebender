@@ -15,6 +15,7 @@ use crate::application::editor::tools::graph;
 use crate::application::view::label;
 use crate::application::view::panels::tabs::{tab_chip, tab_strip};
 use crate::application::widgets::drag_region::drag_region;
+use crate::application::widgets::keyed_canvas::keyed_canvas;
 use crate::application::widgets::text_label::{self, Anchor};
 use crate::application::widgets::tool_group::{ToolGroup, tool_group};
 use crate::application::workspace::{Mode, Tool, Workspace};
@@ -26,7 +27,7 @@ use xilem::WidgetView;
 use xilem::style::Style;
 use xilem::view::FlexExt as _;
 use xilem::view::flex_row;
-use xilem::view::{canvas, flex_col, portal, sized_box};
+use xilem::view::{flex_col, portal, sized_box};
 
 /// The title bar for editor tools and tabs.
 ///
@@ -250,38 +251,41 @@ fn document_readout(app: &Workspace, note: String) -> impl WidgetView<Workspace>
     };
     sized_box(
         portal(
-            canvas(move |_: &mut Workspace, _, scene, size| {
-                let mut painter: masonry::imaging::Painter<'_> =
-                    masonry::imaging::Painter::new(scene);
-                let text_size = TextSize::Body.px();
-                let middle = kurbo::Point::new(size.width / 2.0, size.height / 2.0);
-                if !note.is_empty() {
+            keyed_canvas(
+                (note.clone(), path.clone(), name.clone(), ink),
+                move |_, scene, size| {
+                    let mut painter: masonry::imaging::Painter<'_> =
+                        masonry::imaging::Painter::new(scene);
+                    let text_size = TextSize::Body.px();
+                    let middle = kurbo::Point::new(size.width / 2.0, size.height / 2.0);
+                    if !note.is_empty() {
+                        text_label::draw_elided(
+                            &mut painter,
+                            middle,
+                            &note,
+                            text_size,
+                            ink,
+                            Anchor::Middle,
+                            size.width,
+                        );
+                        return;
+                    }
+                    let text = if text_label::width(&path, text_size) <= size.width {
+                        &path
+                    } else {
+                        &name
+                    };
                     text_label::draw_elided(
                         &mut painter,
                         middle,
-                        &note,
+                        text,
                         text_size,
                         ink,
                         Anchor::Middle,
                         size.width,
                     );
-                    return;
-                }
-                let text = if text_label::width(&path, text_size) <= size.width {
-                    &path
-                } else {
-                    &name
-                };
-                text_label::draw_elided(
-                    &mut painter,
-                    middle,
-                    text,
-                    text_size,
-                    ink,
-                    Anchor::Middle,
-                    size.width,
-                );
-            })
+                },
+            )
             .alt_text(description),
         )
         .constrain_horizontal(true)

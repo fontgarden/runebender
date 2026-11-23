@@ -35,6 +35,7 @@
 
 use std::sync::Arc;
 
+use crate::application::widgets::keyed_canvas::keyed_canvas;
 use masonry::layout::{Dim, Length};
 use masonry::properties::Dimensions;
 use xilem::style::Style;
@@ -508,7 +509,7 @@ fn status(
             prose(pal, text),
             fraction.map(|f| {
                 let f = f.clamp(0.0, 1.0);
-                sized_box(canvas(move |_: &mut Workspace, _, scene, size| {
+                sized_box(keyed_canvas((f, track, fill), move |_, scene, size| {
                     use masonry::imaging::Painter;
                     use masonry::kurbo::{Rect, Shape as _};
                     let mut painter = Painter::new(scene);

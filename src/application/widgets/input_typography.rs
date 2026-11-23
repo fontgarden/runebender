@@ -32,13 +32,16 @@ fn style_placeholder(mut input: WidgetMut<'_, TextInput>) {
     );
 }
 
-fn style_input(mut input: WidgetMut<'_, TextInput>, text_color: Color) {
-    {
-        let mut text = TextInput::text_mut(&mut input);
-        if text.get_prop::<ContentColor>().color != text_color {
-            text.insert_prop(ContentColor::new(text_color));
-        }
+/// Set the ink of the editable text, only when it differs.
+fn color_input(input: &mut WidgetMut<'_, TextInput>, text_color: Color) {
+    let mut text = TextInput::text_mut(input);
+    if text.get_prop::<ContentColor>().color != text_color {
+        text.insert_prop(ContentColor::new(text_color));
     }
+}
+
+fn style_input(mut input: WidgetMut<'_, TextInput>, text_color: Color) {
+    color_input(&mut input, text_color);
     style_placeholder(input);
 }
 
@@ -129,7 +132,10 @@ where
         let mut child = InputTypography::child_mut(&mut element);
         self.input
             .rebuild(&prev.input, state, ctx, child.reborrow_mut(), app);
-        style_input(child, self.text_color);
+        // The placeholder keeps the font and size it got when the widget was added.
+        // Setting them again here clears the label's layout and requests layout on
+        // every rebuild of the application.
+        color_input(&mut child, self.text_color);
     }
     fn teardown(
         &self,

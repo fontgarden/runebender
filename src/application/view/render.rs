@@ -22,6 +22,7 @@ use crate::application::view::panels::info::info_panel;
 use crate::application::view::panels::preview::{glyph_preview, preview_strip};
 use crate::application::view::panels::tabs::{editor_nav, sidebar};
 use crate::application::widgets::ground::ground;
+use crate::application::widgets::keyed_canvas::keyed_canvas;
 use crate::application::widgets::menu_shell;
 use crate::application::widgets::scroll_viewport::portal;
 #[cfg(target_os = "macos")]
@@ -38,7 +39,7 @@ use xilem::core::lens;
 use xilem::style::Style;
 use xilem::view::FlexExt as _;
 use xilem::view::ZStackExt as _;
-use xilem::view::{canvas, flex_col, sized_box};
+use xilem::view::{flex_col, sized_box};
 
 /// A kurbo value as the `f32` a Vello text size or stroke width
 /// takes.
@@ -86,7 +87,7 @@ where
     };
     xilem::view::zstack((
         content.alignment(UnitPoint::TOP_LEFT),
-        sized_box(canvas(move |_: &mut State, _, scene, size| {
+        sized_box(keyed_canvas(color, move |_, scene, size| {
             use masonry::imaging::Painter;
             let mut painter = Painter::new(scene);
             painter.fill(size.to_rect(), color).draw();
@@ -2393,5 +2394,49 @@ pub(crate) mod panel_resize_tests_support {
         let index = app.font.index_of("A").expect("core fixture contains A");
         app.open_glyph(index);
         app
+    }
+}
+
+#[cfg(test)]
+mod idle_tests {
+    //! Count-based checks of wasted work: what a rebuild invalidates when nothing changed.
+
+    use super::app_logic;
+    use super::panel_resize_tests_support::workspace_for_layout;
+    use crate::application::platform::screenshot::Headless;
+    use std::time::Duration;
+    use xilem::view::sized_box;
+
+    /// A rebuild of the editor with no change in state must not make the window render.
+    ///
+    /// Each widget that records its scene or requests layout during such a rebuild costs a
+    /// paint pass, a GPU render and a presentation of the whole window, and background
+    /// polls rebuild several times a second.
+    #[test]
+    fn an_idle_editor_rebuild_requests_no_frame() {
+        settles(workspace_for_layout());
+    }
+
+    /// The same rule for the overview, where the glyph grid takes the canvas's place.
+    #[test]
+    fn an_idle_overview_rebuild_requests_no_frame() {
+        let mut app = workspace_for_layout();
+        app.back_to_overview();
+        settles(app);
+    }
+
+    fn settles(app: crate::application::workspace::Workspace) {
+        let logic = |app: &mut crate::application::workspace::Workspace| sized_box(app_logic(app));
+        let mut headless = Headless::new(app, logic, (1400, 900), 1.0);
+        // Settle: the first rebuilds record the canvases and lay the tree out.
+        for _ in 0..3 {
+            headless.rebuild(logic);
+            headless.anim_frame(Duration::from_millis(500));
+            headless.redraw();
+        }
+        assert!(
+            !headless.rebuild(logic),
+            "a rebuild with no state change invalidated a widget"
+        );
     }
 }

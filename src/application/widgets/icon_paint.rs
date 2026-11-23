@@ -3,13 +3,14 @@
 
 //! Paint a glyph from the editable application icon UFO in any control.
 
+use crate::application::widgets::keyed_canvas::keyed_canvas;
 use masonry::imaging::Painter;
 use masonry::kurbo::{Cap, Join, Rect, Stroke};
 use masonry::layout::Length;
 use masonry::properties::Dimensions;
 use runebender::ui::icons::icons;
 use xilem::style::Style as _;
-use xilem::view::{canvas, sized_box};
+use xilem::view::sized_box;
 use xilem::{Color, WidgetView};
 
 use crate::application::workspace::Workspace;
@@ -43,7 +44,7 @@ pub(crate) fn view(
     size: f64,
 ) -> impl WidgetView<Workspace> {
     sized_box(
-        canvas(move |_: &mut Workspace, _, scene, frame| {
+        keyed_canvas((name, color), move |_, scene, frame| {
             paint(
                 &mut Painter::new(scene).as_dyn(),
                 name,

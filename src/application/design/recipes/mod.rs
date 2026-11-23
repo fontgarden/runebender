@@ -21,12 +21,13 @@ use crate::application::design::{
 };
 use crate::application::design::{column, row};
 use crate::application::view::{label, text_input};
+use crate::application::widgets::keyed_canvas::keyed_canvas;
 use masonry::layout::{Dim, Length};
 use masonry::properties::Dimensions;
 use xilem::WidgetView;
 use xilem::style::Style;
 use xilem::view::FlexExt as _;
-use xilem::view::{FlexSpacer, canvas, sized_box};
+use xilem::view::{FlexSpacer, sized_box};
 
 use crate::application::design::theme::Palette;
 use crate::application::workspace::Workspace;
@@ -573,7 +574,7 @@ pub(crate) enum Marker {
 
 /// A row marker painted from the editable icon UFO.
 pub(crate) fn marker(marker: Marker, color: xilem::Color) -> impl WidgetView<Workspace> + use<> {
-    sized_box(canvas(move |_: &mut Workspace, _, scene, size| {
+    sized_box(keyed_canvas((marker, color), move |_, scene, size| {
         use masonry::imaging::Painter;
         let name = match marker {
             Marker::None => return,
@@ -763,7 +764,16 @@ where
     let selected_ring = pal.outline;
     let clear_ink = pal.editor_control_ink();
     let line = pal.stroke;
-    let face = sized_box(canvas(move |_: &mut Workspace, _, scene, size| {
+    let key = (
+        color,
+        selected,
+        clear,
+        outline,
+        selected_ring,
+        clear_ink,
+        line,
+    );
+    let face = sized_box(keyed_canvas(key, move |_, scene, size| {
         use masonry::imaging::Painter;
         use masonry::kurbo::{Circle, Rect, Stroke as Pen};
         let mut painter = Painter::new(scene);

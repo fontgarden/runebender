@@ -18,15 +18,16 @@ use masonry::layout::{Dim, Length};
 use masonry::properties::Dimensions;
 use xilem::WidgetView;
 use xilem::style::Style;
-use xilem::view::{canvas, sized_box};
+use xilem::view::sized_box;
 
 use crate::application::design::recipes::{Group, Row};
 use crate::application::design::{self, recipes};
 use crate::application::editor::tools::text as text_tool;
+use crate::application::widgets::keyed_canvas::keyed_canvas;
 use crate::application::workspace::Workspace;
 
 /// One shaped line in font units, baseline at zero, starting at x = 0.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct Run {
     paths: Vec<BezPath>,
     width: f64,
@@ -34,7 +35,7 @@ struct Run {
 }
 
 /// How a block sizes its lines.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Setting {
     /// Every line at one size: the largest at which the widest line fits, up to `max_em`
     /// pixels of em.
@@ -43,7 +44,7 @@ enum Setting {
     Waterfall { max_em: f64 },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Block {
     key: &'static str,
     caption: String,
@@ -120,55 +121,59 @@ pub(crate) fn spacing_canvas(app: &Workspace) -> Option<impl WidgetView<Workspac
         * base.lines.len() as f64;
     let ink = app.palette.proof_ink();
     Some(
-        canvas(move |_: &mut Workspace, _, scene, size: Size| {
-            let base = proof.blocks.last().unwrap();
-            let width = size.width - 2.0 * inset;
-            if width <= 0.0 || size.height <= 0.0 {
-                return;
-            }
-            let nominal = line_scales(base, width, em)[0];
-            #[expect(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                reason = "a rounded, non-negative count of lines that fit the panel"
-            )]
-            let count =
-                ((size.height / (nominal * em * LINE)).round() as usize).max(base.lines.len());
-            let runs: Vec<_> = base
-                .lines
-                .iter()
-                .chain(proof.extra_spacing.iter().cycle())
-                .take(count)
-                .collect();
-            let scale = runs
-                .iter()
-                .fold(nominal, |s, run| s.min(width / run.width))
-                .min(size.height / (runs.len() as f64 * em));
-            let last_bottom = runs
-                .last()
-                .unwrap()
-                .paths
-                .iter()
-                .filter(|p| !p.elements().is_empty())
-                .map(|p| p.bounding_box().y0)
-                .reduce(f64::min)
-                .unwrap_or(0.0);
-            let first = scale * proof.ascender;
-            let last = size.height + last_bottom * scale;
-            let leading = (last - first) / runs.len().saturating_sub(1).max(1) as f64;
-            let mut painter = Painter::new(scene);
-            for (i, run) in runs.iter().enumerate() {
-                let baseline = if runs.len() == 1 {
-                    last
-                } else {
-                    first + i as f64 * leading
-                };
-                let transform = Affine::new([scale, 0.0, 0.0, -scale, inset, baseline]);
-                for path in &run.paths {
-                    painter.fill(path, ink).transform(transform).draw();
+        // The cached specimen is one allocation until the document or the master changes.
+        keyed_canvas(
+            (Arc::as_ptr(&proof) as usize, ink),
+            move |_, scene, size: Size| {
+                let base = proof.blocks.last().unwrap();
+                let width = size.width - 2.0 * inset;
+                if width <= 0.0 || size.height <= 0.0 {
+                    return;
                 }
-            }
-        })
+                let nominal = line_scales(base, width, em)[0];
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "a rounded, non-negative count of lines that fit the panel"
+                )]
+                let count =
+                    ((size.height / (nominal * em * LINE)).round() as usize).max(base.lines.len());
+                let runs: Vec<_> = base
+                    .lines
+                    .iter()
+                    .chain(proof.extra_spacing.iter().cycle())
+                    .take(count)
+                    .collect();
+                let scale = runs
+                    .iter()
+                    .fold(nominal, |s, run| s.min(width / run.width))
+                    .min(size.height / (runs.len() as f64 * em));
+                let last_bottom = runs
+                    .last()
+                    .unwrap()
+                    .paths
+                    .iter()
+                    .filter(|p| !p.elements().is_empty())
+                    .map(|p| p.bounding_box().y0)
+                    .reduce(f64::min)
+                    .unwrap_or(0.0);
+                let first = scale * proof.ascender;
+                let last = size.height + last_bottom * scale;
+                let leading = (last - first) / runs.len().saturating_sub(1).max(1) as f64;
+                let mut painter = Painter::new(scene);
+                for (i, run) in runs.iter().enumerate() {
+                    let baseline = if runs.len() == 1 {
+                        last
+                    } else {
+                        first + i as f64 * leading
+                    };
+                    let transform = Affine::new([scale, 0.0, 0.0, -scale, inset, baseline]);
+                    for path in &run.paths {
+                        painter.fill(path, ink).transform(transform).draw();
+                    }
+                }
+            },
+        )
         .dims(Dimensions::new(
             Dim::Stretch,
             Dim::Fixed(Length::px(natural)),
@@ -192,17 +197,21 @@ pub(crate) fn block_view(
     let width = design::DOCK_WIDTH - 2.0 * design::PANEL_SECTION_INSET.px();
     let height = layout(None, &specimen, width, f64::INFINITY);
     let pal = app.palette.clone();
-    sized_box(canvas(
-        move |_app: &mut Workspace, _ctx, scene, size: Size| {
-            let mut painter: Painter<'_> = Painter::new(scene);
-            layout(
-                Some((&mut painter, pal.proof_ink())),
-                &specimen,
-                size.width,
-                size.height,
-            );
-        },
-    ))
+    let key = (
+        specimen.blocks.clone(),
+        ascender,
+        descender,
+        pal.proof_ink(),
+    );
+    sized_box(keyed_canvas(key, move |_ctx, scene, size: Size| {
+        let mut painter: Painter<'_> = Painter::new(scene);
+        layout(
+            Some((&mut painter, pal.proof_ink())),
+            &specimen,
+            size.width,
+            size.height,
+        );
+    }))
     .dims(Dimensions::new(
         Dim::Stretch,
         Dim::Fixed(Length::px(height)),

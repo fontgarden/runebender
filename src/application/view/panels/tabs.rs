@@ -24,6 +24,7 @@ use crate::application::view::{label, text_input};
 use crate::application::widgets::even_row::even_row;
 use crate::application::widgets::icon_paint;
 use crate::application::widgets::input_typography;
+use crate::application::widgets::keyed_canvas::keyed_canvas;
 use crate::application::widgets::scroll_viewport::portal;
 use crate::application::workspace::{Mode, Sel, Workspace};
 use masonry::layout::{Dim, Length};
@@ -34,7 +35,7 @@ use std::sync::Arc;
 use xilem::WidgetView;
 use xilem::style::Style;
 use xilem::view::FlexExt as _;
-use xilem::view::{canvas, flex_col, sized_box};
+use xilem::view::{flex_col, sized_box};
 
 /// The editor rail's implemented navigation panels.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -251,10 +252,10 @@ fn rail_tabs(app: &Workspace, editing: bool) -> impl WidgetView<Workspace> + use
         ))
     };
     sized_box(xilem::view::zstack((
-        sized_box(canvas({
+        sized_box({
             let background = pal.tab_rail.with_alpha(pal.side_panel_alpha());
             let outline = pal.outline;
-            move |_: &mut Workspace, _, scene, size| {
+            keyed_canvas((background, outline), move |_, scene, size| {
                 use masonry::imaging::Painter;
                 use masonry::kurbo::Rect;
                 let mut painter = Painter::new(scene);
@@ -270,8 +271,8 @@ fn rail_tabs(app: &Workspace, editing: bool) -> impl WidgetView<Workspace> + use
                         outline,
                     )
                     .draw();
-            }
-        }))
+            })
+        })
         .dims(Dimensions::new(Dim::Stretch, Dim::Stretch)),
         // Whole-pixel tab widths keep every gap and inset at exactly the rail inset.
         even_row(

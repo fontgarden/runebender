@@ -7,6 +7,7 @@ use crate::application::design;
 use crate::application::design::Space;
 use crate::application::design::point_marker::{self, PointKind};
 use crate::application::editor::tools::text as text_tool;
+use crate::application::widgets::keyed_canvas::keyed_canvas;
 use crate::application::widgets::preview_blur;
 use crate::application::workspace::Workspace;
 use masonry::layout::Dim;
@@ -196,7 +197,10 @@ fn outline_strip(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
             .map(|path| path.bounding_box())
             .reduce(|bounds, next| bounds.union(next))
     });
-    let drawing = canvas(move |_app: &mut Workspace, _ctx, scene, size: Size| {
+    // The key holds every value the drawing reads, so an unchanged proof is not recorded,
+    // rasterized and presented again on each rebuild of the application.
+    let key = (preview_paths.clone(), preview_bounds, advance, blur, fill);
+    let drawing = keyed_canvas(key, move |_ctx, scene, size: Size| {
         let mut p = Painter::new(scene);
         if let Some(bounds) = preview_bounds {
             let t = proof_transform(bounds, advance, size);
@@ -315,83 +319,88 @@ pub(crate) fn glyph_preview(app: &Workspace) -> impl WidgetView<Workspace> + use
     let pal = app.palette.clone();
     let background = pal.glyph_preview;
     let neural = app.font.project.is_neural();
-    sized_box(canvas(
-        move |_app: &mut Workspace, _ctx, scene, size: Size| {
-            let mut p = Painter::new(scene);
-            // Own every pixel of the preview allocation. Relying only on the
-            // wrapper background left the splitter's top edge on the panel
-            // surface, which read as a second-colour strip above the glyph.
-            p.fill_rect(size.to_rect(), background);
-            // Canvas measures at least 100px tall even when the inspector has
-            // less space left. In that case a fitted outline would be clipped
-            // by the window, so keep the small remainder empty.
-            if size.height < design::INSPECTOR_PREVIEW_MIN_READABLE_HEIGHT {
-                return;
+    // The key holds every value the drawing reads. The palette is compared by identity:
+    // a theme change installs a new one.
+    let key = (
+        data.clone(),
+        stable_bounds,
+        std::sync::Arc::as_ptr(&pal) as usize,
+        neural,
+    );
+    sized_box(keyed_canvas(key, move |_ctx, scene, size: Size| {
+        let mut p = Painter::new(scene);
+        // Own every pixel of the preview allocation. Relying only on the
+        // wrapper background left the splitter's top edge on the panel
+        // surface, which read as a second-colour strip above the glyph.
+        p.fill_rect(size.to_rect(), background);
+        // Canvas measures at least 100px tall even when the inspector has
+        // less space left. In that case a fitted outline would be clipped
+        // by the window, so keep the small remainder empty.
+        if size.height < design::INSPECTOR_PREVIEW_MIN_READABLE_HEIGHT {
+            return;
+        }
+        let Some((outline, contours)) = &data else {
+            return;
+        };
+        let bounds = stable_bounds.unwrap_or_else(|| outline.bounding_box());
+        // A neural canvas is a whole piece of writing: points would only
+        // crowd it. Fill the space with solid copies of the ink instead.
+        if neural {
+            let ink = pal.proof_ink();
+            for t in stacked_transforms(bounds, size) {
+                p.fill(&**outline, ink).transform(t).draw();
             }
-            let Some((outline, contours)) = &data else {
-                return;
-            };
-            let bounds = stable_bounds.unwrap_or_else(|| outline.bounding_box());
-            // A neural canvas is a whole piece of writing: points would only
-            // crowd it. Fill the space with solid copies of the ink instead.
-            if neural {
-                let ink = pal.proof_ink();
-                for t in stacked_transforms(bounds, size) {
-                    p.fill(&**outline, ink).transform(t).draw();
-                }
-                return;
-            }
-            let scale = (size.width * design::OVERVIEW_GLYPH_PREVIEW_FILL
-                / bounds.width().max(1.0))
+            return;
+        }
+        let scale = (size.width * design::OVERVIEW_GLYPH_PREVIEW_FILL / bounds.width().max(1.0))
             .min(size.height * design::OVERVIEW_GLYPH_PREVIEW_FILL / bounds.height().max(1.0))
             .max(0.0);
-            let t = Affine::translate(-bounds.center().to_vec2())
-                .then_scale_non_uniform(scale, -scale)
-                .then_translate((size.width / 2.0, size.height / 2.0).into());
-            let stroke = Stroke::new(pal.stroke);
-            p.stroke(&(t * (**outline).clone()), &stroke, pal.role("pathStroke"))
-                .draw();
-            for contour in contours {
-                let n = contour.len();
-                for (i, (x, y, point_type, _)) in contour.iter().enumerate() {
-                    if *point_type != runebender::font::LayerPointType::OffCurve {
-                        continue;
-                    }
-                    let off = t * Point::new(*x, *y);
-                    for j in [(i + n - 1) % n, (i + 1) % n] {
-                        let (on_x, on_y, on_type, _) = contour[j];
-                        if on_type != runebender::font::LayerPointType::OffCurve {
-                            p.stroke(
-                                Line::new(off, t * Point::new(on_x, on_y)),
-                                &stroke,
-                                pal.handle_line,
-                            )
-                            .draw();
-                        }
-                    }
+        let t = Affine::translate(-bounds.center().to_vec2())
+            .then_scale_non_uniform(scale, -scale)
+            .then_translate((size.width / 2.0, size.height / 2.0).into());
+        let stroke = Stroke::new(pal.stroke);
+        p.stroke(&(t * (**outline).clone()), &stroke, pal.role("pathStroke"))
+            .draw();
+        for contour in contours {
+            let n = contour.len();
+            for (i, (x, y, point_type, _)) in contour.iter().enumerate() {
+                if *point_type != runebender::font::LayerPointType::OffCurve {
+                    continue;
                 }
-                for (x, y, point_type, smooth) in contour {
-                    let at = t * Point::new(*x, *y);
-                    let kind = PointKind::of(
-                        *point_type != runebender::font::LayerPointType::OffCurve,
-                        *smooth,
-                    );
-                    let ink = point_marker::ink(&pal, kind.hue(&pal), false, background);
-                    let radius = kind.radius() * design::INSPECTOR_PREVIEW_POINT_SCALE;
-                    if kind.is_square() {
-                        let shape =
-                            Rect::new(at.x - radius, at.y - radius, at.x + radius, at.y + radius);
-                        p.fill(shape, ink.interior).draw();
-                        p.stroke(shape, &stroke, ink.ring).draw();
-                    } else {
-                        let shape = Circle::new(at, radius);
-                        p.fill(shape, ink.interior).draw();
-                        p.stroke(shape, &stroke, ink.ring).draw();
+                let off = t * Point::new(*x, *y);
+                for j in [(i + n - 1) % n, (i + 1) % n] {
+                    let (on_x, on_y, on_type, _) = contour[j];
+                    if on_type != runebender::font::LayerPointType::OffCurve {
+                        p.stroke(
+                            Line::new(off, t * Point::new(on_x, on_y)),
+                            &stroke,
+                            pal.handle_line,
+                        )
+                        .draw();
                     }
                 }
             }
-        },
-    ))
+            for (x, y, point_type, smooth) in contour {
+                let at = t * Point::new(*x, *y);
+                let kind = PointKind::of(
+                    *point_type != runebender::font::LayerPointType::OffCurve,
+                    *smooth,
+                );
+                let ink = point_marker::ink(&pal, kind.hue(&pal), false, background);
+                let radius = kind.radius() * design::INSPECTOR_PREVIEW_POINT_SCALE;
+                if kind.is_square() {
+                    let shape =
+                        Rect::new(at.x - radius, at.y - radius, at.x + radius, at.y + radius);
+                    p.fill(shape, ink.interior).draw();
+                    p.stroke(shape, &stroke, ink.ring).draw();
+                } else {
+                    let shape = Circle::new(at, radius);
+                    p.fill(shape, ink.interior).draw();
+                    p.stroke(shape, &stroke, ink.ring).draw();
+                }
+            }
+        }
+    }))
     .background_color(background)
     // The inspector stack supplies the remaining height. Fill that allocation
     // so no panel-colored tail can appear below the glyph.

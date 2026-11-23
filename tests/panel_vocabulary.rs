@@ -40,6 +40,7 @@ const RAW_VIEWS: &[&str] = &[
     "flex_row(",
     "sized_box(",
     "canvas(",
+    "keyed_canvas(",
     "FlexSpacer",
     "text_input(",
     "button(",
