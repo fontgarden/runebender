@@ -61,7 +61,7 @@ struct Specimen {
 }
 
 /// The document state a specimen was shaped from.
-type Key = (u64, usize, Vec<u64>, Option<usize>);
+type Key = (u64, usize, Vec<u64>, Option<usize>, [bool; 4]);
 
 /// One specimen for each master of a large family.
 const CACHE_LIMIT: usize = 16;
@@ -233,6 +233,14 @@ fn specimen(app: &Workspace) -> Arc<Specimen> {
             .map(|value| value.to_bits())
             .collect(),
         app.selected,
+        // A folded block is listed without its lines, so opening it builds again.
+        [
+            "Sidebar Waterfall",
+            "Basic Latin",
+            "Basic Arabic",
+            "Basic Hebrew",
+        ]
+        .map(|key| app.collapsed.contains(key)),
     );
     CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
@@ -400,16 +408,21 @@ fn build(app: &Workspace) -> Specimen {
         .iter()
         .filter_map(|glyph| glyph.codepoint)
         .collect();
-    let shape = |text: &str| -> Option<Run> {
-        if !text
-            .chars()
+    let is_covered = |text: &str| {
+        text.chars()
             .filter(|c| !c.is_whitespace() && *c != '\u{0640}')
             .all(|c| covered.contains(&c))
-        {
+    };
+    let shape = |text: &str| -> Option<Run> {
+        if !is_covered(text) {
             return None;
         }
         shape_line(&inputs, text)
     };
+    // A folded block shows only its header. It is listed when the font covers its text,
+    // and its lines are shaped when it opens: shaping every block takes several
+    // milliseconds on each new master or selection.
+    let folded = |key: &str| app.collapsed.contains(key);
 
     let mut blocks = Vec::new();
     // The selected glyph's character: its own, or its base glyph's for an unencoded form
@@ -426,11 +439,18 @@ fn build(app: &Workspace) -> Specimen {
         })
     });
     let selected_script = character.map(script_of);
-    if let Some(run) = character.and_then(|c| shape(&waterfall_string(c))) {
+    let waterfall = character.map(waterfall_string).and_then(|text| {
+        if folded("Sidebar Waterfall") {
+            is_covered(&text).then(Vec::new)
+        } else {
+            shape(&text).map(|run| vec![run; 6])
+        }
+    });
+    if let Some(lines) = waterfall {
         blocks.push(Block {
             key: "Sidebar Waterfall",
             caption: "Waterfall".into(),
-            lines: vec![run; 6],
+            lines,
             setting: Setting::Waterfall { max_em: 72.0 },
         });
     }
@@ -438,8 +458,16 @@ fn build(app: &Workspace) -> Specimen {
     let mut sets = basic_sets();
     sets.sort_by_key(|(script, _, _)| Some(*script) != selected_script);
     for (_, caption, lines) in sets {
-        let lines: Vec<Run> = lines.iter().filter_map(|line| shape(line)).collect();
-        if lines.len() >= 2 {
+        let (count, lines) = if folded(caption) {
+            (
+                lines.iter().filter(|line| is_covered(line)).count(),
+                Vec::new(),
+            )
+        } else {
+            let lines: Vec<Run> = lines.iter().filter_map(|line| shape(line)).collect();
+            (lines.len(), lines)
+        };
+        if count >= 2 {
             blocks.push(Block {
                 key: caption,
                 caption: caption.into(),

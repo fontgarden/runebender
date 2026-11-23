@@ -178,11 +178,19 @@ Measured on 2026-11-23 with the dev profile on the same machine, after the work 
 | Repaint requests in a rebuild with no change in state | 40 | 0 |
 | Layout requests in a rebuild with no change in state | 10 | 0 |
 | Pointer move with all 264 points of `E009` selected | 252 us | 73 us |
-| Switch of master, first visit, 919 glyphs and 8 masters | 15.7 ms | 9.7 ms |
+| Switch of master, first visit, 919 glyphs and 8 masters | 15.7 ms | 7.9 ms |
 | Switch of master, return to a visited master | 15.7 ms | 2.4 ms |
 | Text line of 44 characters, placed sorts | not measured | 3.4 us |
+| Rebuild of the overview with no change, 863 glyphs | 1.38 ms | 0.59 ms |
+| Open a glyph from the overview, rebuild | 3.8 ms | 3.9 ms |
 
 The text line is cheap, so its layout is not cached.
+A profile of opening a glyph put 73% of the rebuild in Masonry: making the widgets of the editor and laying them out.
+The application logic was 18%.
+The time is not reduced, because it is the cost of replacing one large widget tree with another.
+`RUNEBENDER_BENCH_OPEN=<count>` repeats the open and the close for a profiler.
+A pen handle drag copies the layer transaction on each pointer move.
+A copy of the whole session takes 100 us at 264 points, so that drag is left as it is.
 
 Measured on 2026-11-17 with Rust 1.96, macOS arm64, Apple M4 Pro:
 

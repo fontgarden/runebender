@@ -183,6 +183,31 @@ fn frame_budget_report() {
             headless.rebuild(logic);
         }
         stats("open glyph + rebuild + paint", &mut opens);
+        // RUNEBENDER_BENCH_OPEN=<count> opens and closes a glyph that many times, so a
+        // sampling profiler attached to this process sees the two rebuilds.
+        if let Some(count) = std::env::var("RUNEBENDER_BENCH_OPEN")
+            .ok()
+            .and_then(|count| count.parse::<usize>().ok())
+        {
+            let (mut open, mut close) = (Duration::ZERO, Duration::ZERO);
+            for _ in 0..count {
+                let start = Instant::now();
+                headless.app.open_glyph(index);
+                headless.rebuild(logic);
+                open += start.elapsed();
+                headless.redraw();
+                let start = Instant::now();
+                headless.app.back_to_overview();
+                headless.rebuild(logic);
+                close += start.elapsed();
+                headless.redraw();
+            }
+            println!(
+                "repeated open                {:.2} ms, close {:.2} ms",
+                ms(open) / count as f64,
+                ms(close) / count as f64
+            );
+        }
         let masters = headless.app.font.master_count();
         if masters > 1 {
             let start = Instant::now();

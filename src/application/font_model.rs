@@ -97,7 +97,12 @@ struct Readouts {
     used_by: Option<(ReadoutKey, String, Vec<String>)>,
     /// Geometry comparisons against the active source, by source index.
     comparisons: Option<(ReadoutKey, HashMap<usize, GeometryComparison>)>,
+    /// Counts of the glyphs that match a sidebar row, by the kind of row and its indexes.
+    counts: Option<(ReadoutKey, RowCounts)>,
 }
+
+/// Glyph counts by the kind of sidebar row and its two indexes.
+type RowCounts = HashMap<(u8, usize, usize), usize>;
 
 /// The document revision, the entries and the name index of a master that is not active.
 type ParkedEntries = (u64, Vec<GlyphEntry>, Arc<HashMap<String, usize>>);
@@ -774,6 +779,44 @@ impl FontModel {
         *comparisons
             .entry(index)
             .or_insert_with(|| self.compare_source_geometry(index))
+    }
+
+    /// A count over every glyph for one sidebar row, computed once for each state of the
+    /// document. `kind` separates the rows that share an index space.
+    pub(crate) fn glyph_count(
+        &self,
+        kind: u8,
+        index: (usize, usize),
+        count: impl FnOnce() -> usize,
+    ) -> usize {
+        let key = self.readout_key();
+        let entry = (kind, index.0, index.1);
+        {
+            let mut readouts = self
+                .readouts
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            match &readouts.counts {
+                Some((at, counts)) if *at == key => {
+                    if let Some(known) = counts.get(&entry) {
+                        return *known;
+                    }
+                }
+                _ => readouts.counts = Some((key, HashMap::new())),
+            }
+        }
+        // Counted without the lock, because the count reads the model.
+        let counted = count();
+        let mut readouts = self
+            .readouts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some((at, counts)) = &mut readouts.counts
+            && *at == key
+        {
+            counts.insert(entry, counted);
+        }
+        counted
     }
 
     fn readout_key(&self) -> ReadoutKey {

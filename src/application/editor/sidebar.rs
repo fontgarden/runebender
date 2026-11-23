@@ -136,13 +136,19 @@ impl Workspace {
         let Some(g) = sb::language_groups().get(i) else {
             return 0;
         };
-        self.font
-            .glyphs
-            .iter()
-            .filter(|e| {
-                sb::glyph_matches_language_group(&e.name, Self::entry_codepoints(e).as_slice(), g)
-            })
-            .count()
+        self.font.glyph_count(0, (i, 0), || {
+            self.font
+                .glyphs
+                .iter()
+                .filter(|e| {
+                    sb::glyph_matches_language_group(
+                        &e.name,
+                        Self::entry_codepoints(e).as_slice(),
+                        g,
+                    )
+                })
+                .count()
+        })
     }
 
     /// Present-count for GF-coverage filter `i` (glyphs the font has).
@@ -154,13 +160,19 @@ impl Workspace {
         else {
             return 0;
         };
-        self.font
-            .glyphs
-            .iter()
-            .filter(|e| {
-                sb::glyph_matches_character_filter(&e.name, Self::entry_codepoints(e).as_slice(), f)
-            })
-            .count()
+        self.font.glyph_count(1, (i, 0), || {
+            self.font
+                .glyphs
+                .iter()
+                .filter(|e| {
+                    sb::glyph_matches_character_filter(
+                        &e.name,
+                        Self::entry_codepoints(e).as_slice(),
+                        f,
+                    )
+                })
+                .count()
+        })
     }
 
     /// How many glyphs a category's subfilter holds.
@@ -190,14 +202,19 @@ impl Workspace {
         else {
             return (0, None);
         };
-        let present = self
-            .font
-            .glyphs
-            .iter()
-            .filter(|e| {
-                sb::glyph_matches_character_filter(&e.name, Self::entry_codepoints(e).as_slice(), f)
-            })
-            .count();
+        let present = self.font.glyph_count(2, (gi, fi), || {
+            self.font
+                .glyphs
+                .iter()
+                .filter(|e| {
+                    sb::glyph_matches_character_filter(
+                        &e.name,
+                        Self::entry_codepoints(e).as_slice(),
+                        f,
+                    )
+                })
+                .count()
+        });
         (present, f.expected_count)
     }
 

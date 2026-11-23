@@ -329,6 +329,7 @@ A test checks that this section and the previous one name every `RUNEBENDER_*` v
 | `RUNEBENDER_BENCH_GLYPH=<name>` | Frame probe: the glyph to open; the default is `a`. |
 | `RUNEBENDER_BENCH_OVERVIEW=1` | Frame probe: measure the overview grid instead of a point drag. |
 | `RUNEBENDER_BENCH_REPEAT=<count>` | Frame probe: repeat the edit and its rebuild for a sampling profiler; in the overview, repeat a switch of master. |
+| `RUNEBENDER_BENCH_OPEN=<count>` | Frame probe, in the overview: open and close a glyph this many times for a sampling profiler. |
 | `RUNEBENDER_BENCH_TEXT=<text>` | Frame probe: time the text line of a composition with this text. |
 | `RUNEBENDER_BENCH_GLYPHS=<count>[,<count>]` | Large-font benchmark: the glyph counts of the fixtures. |
 | `RUNEBENDER_BENCH_KEEP=<dir>` | Large-font benchmark: keep the fixture of each size in this folder. |
