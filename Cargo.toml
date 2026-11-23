@@ -199,6 +199,14 @@ opt-level = 3
 
 # Development builds: dependencies are optimized once and cached, and the workspace's own
 # crates use a light optimization level so the editor is responsive and rebuilds stay short.
+# Local profile for `make run-release`: every crate at full speed.
+# It inherits fat LTO and one codegen unit from the release profile, and builds into
+# `target/performance`, so it does not replace the artifacts of a normal release build.
+# Distributed binaries use the release profile.
+[profile.performance]
+inherits = "release"
+opt-level = 3
+
 [profile.dev]
 opt-level = 1
 
