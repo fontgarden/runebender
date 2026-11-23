@@ -73,7 +73,8 @@ pub struct UndoStack<S> {
 impl<S> Default for UndoStack<S> {
     fn default() -> Self {
         Self {
-            undo: VecDeque::with_capacity(MAX_CANONICAL_HISTORY),
+            // No reservation: a font-wide command makes one stack for each layer it edits.
+            undo: VecDeque::new(),
             redo: VecDeque::new(),
         }
     }

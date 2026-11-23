@@ -300,12 +300,16 @@ impl Server {
 
     /// Takes the next request without blocking the UI thread.
     pub fn try_recv(&self) -> Option<Pending> {
+        // The flag is cleared before the read. A handler sets it after it queues a request, so
+        // a request that arrives during this call leaves the flag set for the next wake.
+        // Cleared after an empty read, it could hide a request until the client timed out.
+        self.pending.store(false, Ordering::Release);
         match self.receiver.try_recv() {
-            Ok(request) => Some(request),
-            Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected) => {
-                self.pending.store(false, Ordering::Release);
-                None
+            Ok(request) => {
+                self.pending.store(true, Ordering::Release);
+                Some(request)
             }
+            Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected) => None,
         }
     }
 }
