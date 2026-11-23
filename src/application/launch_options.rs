@@ -13,6 +13,7 @@ use crate::application::editor::tools::review::ReviewMode;
 use crate::application::editor::tools::review_reading::Sample;
 use crate::application::editor::tools::{scripts, voice};
 use crate::application::pieces::PreviewView;
+use crate::application::platform::frame_times;
 use crate::application::view::canvas::editor::ViewOptions;
 use crate::application::view::panels::tabs::Rail;
 use crate::application::widgets::frame_stats;
@@ -303,6 +304,11 @@ pub(crate) const VARIABLES: &[Variable] = &[
         "1",
         "In a window, render every frame and report the frame cadence on stderr.",
     ),
+    variable(
+        "RUNEBENDER_FRAME_TIMES",
+        "<1|path>",
+        "In a window, record frame times without a change of pacing: `1` writes to stderr, a path replaces that file, and the footer shows the last second.",
+    ),
 ];
 
 /// Where one headless capture goes and how large it is.
@@ -398,6 +404,8 @@ pub(crate) struct LaunchOptions {
     pub(crate) capture: Option<CaptureOptions>,
     /// Render every frame of the window and report the cadence on stderr.
     pub(crate) frame_stats: bool,
+    /// Record frame times to stderr for `1`, or to the file at this path.
+    pub(crate) frame_times: Option<OsString>,
     /// Compile on the calling thread when `RUNEBENDER_SCREENSHOT` is set, even to a value that
     /// is not Unicode, and on a worker thread otherwise.
     pub(crate) compile_mode: CompileMode,
@@ -560,6 +568,7 @@ impl LaunchOptions {
         Self {
             capture,
             frame_stats: variables.is_set(frame_stats::ENV),
+            frame_times: variables.os(frame_times::ENV),
             compile_mode: if variables.is_set("RUNEBENDER_SCREENSHOT") {
                 CompileMode::Blocking
             } else {
@@ -1167,6 +1176,7 @@ mod tests {
         let options = options(&[]);
         assert_eq!(options.capture, None);
         assert!(!options.frame_stats);
+        assert_eq!(options.frame_times, None);
     }
 
     #[test]
@@ -1322,5 +1332,11 @@ mod tests {
     #[test]
     fn frame_statistics_need_only_a_set_variable() {
         assert!(options(&[("RUNEBENDER_FRAME_STATS", "")]).frame_stats);
+    }
+
+    #[test]
+    fn frame_times_keep_the_target_as_given() {
+        let target = options(&[("RUNEBENDER_FRAME_TIMES", "frames.log")]).frame_times;
+        assert_eq!(target, Some(OsString::from("frames.log")));
     }
 }

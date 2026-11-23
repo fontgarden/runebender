@@ -217,6 +217,12 @@ pub(crate) fn marks_bar(app: &Workspace) -> impl WidgetView<Workspace, Widget: S
 /// name below that. A transient `note`
 /// takes the readout's place while it has something to say.
 fn document_readout(app: &Workspace, note: String) -> impl WidgetView<Workspace> + use<> {
+    // With `RUNEBENDER_FRAME_TIMES` set, the frame times of the last second take the idle place.
+    let note = if note.is_empty() {
+        crate::application::platform::frame_times::readout().unwrap_or_default()
+    } else {
+        note
+    };
     let source = app.font.source();
     // The path as opened may be relative to wherever the app was started,
     // and may climb through `..`; show it from the root with those folded.

@@ -10,6 +10,7 @@ pub(crate) mod dialogs;
 #[path = "browser_dialogs.rs"]
 pub(crate) mod dialogs;
 pub(crate) mod export;
+pub(crate) mod frame_times;
 pub(crate) mod model;
 pub(crate) mod proof_samples;
 pub(crate) mod reference_fonts;

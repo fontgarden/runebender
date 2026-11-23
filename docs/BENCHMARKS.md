@@ -210,6 +210,36 @@ Its test-only preview compilation is synchronous; the native window compiles tha
 Use `RUNEBENDER_FRAME_STATS=1` in an agreed native interactive session to observe display cadence, and use the browser checks in [web/README.md](../web/README.md) for browser input and rendering.
 Browser `renderMs` excludes pointer handling before rendering and is not an input-to-display latency measurement.
 
+### Frame times of a working session
+
+Set `RUNEBENDER_FRAME_TIMES` to record the frame times of a window while a person works in it.
+The recorder requests no frame and changes no pacing.
+A value of `1` writes to stderr, and a path replaces that file.
+
+```sh
+RUNEBENDER_FRAME_TIMES=frame-times.log make run-release FONT=path/to/Font.designspace
+```
+
+The recorder writes one line for each second in which the window did work, with the mean and the worst case of each stage in milliseconds.
+Each line ends with the open view, glyph and tool.
+
+| Stage | Meaning |
+| --- | --- |
+| `interval` | The time between the starts of two consecutive redraws. A gap of 250 ms or more is idle time and is not counted. |
+| `redraw` | One redraw: the Masonry paint pass, the Vello render, the wait for the next drawable of the display, and the present call. |
+| `input` | The handling of one pointer, scroll or key event, with the application logic that it starts. |
+| `logic` | One run of the application logic and the view rebuild. |
+| `paint` | One paint of the editor canvas or of the glyph grid. It is part of a redraw. |
+| `latency` | The time from the start of the newest input event of a frame to the end of the redraw that shows it. |
+
+An `input`, `logic` or `paint` step of 8 ms or more, and a redraw of 50 ms or more, also gets a line of its own that starts with `slow`.
+The footer shows the last second in short form, and it changes when the interface rebuilds.
+
+Read the stages as follows.
+A high `input`, `logic` or `paint` value is work of the editor on the interface thread.
+A `redraw` near the refresh period of the display with low `paint` is the wait for the display, which the pinned Xilem does not report separately.
+The `latency` value ends at the present call, so the compositor and the display add their own delay to it.
+
 ### Grid and initial-text follow-up
 
 Local optimized probes on the same M4 Pro / 48 GiB host compared the layout helpers from `91f1ee0` with the cached implementation and compared incremental insertion with `TextBuffer::insert_characters`.

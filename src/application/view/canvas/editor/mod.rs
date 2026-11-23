@@ -420,6 +420,7 @@ impl Widget for EditorWidget {
         _props: &PropertiesRef<'_>,
         painter: &mut Painter<'_>,
     ) {
+        let _timer = crate::application::platform::frame_times::PaintTimer::start();
         self.paint_canvas(painter);
     }
 

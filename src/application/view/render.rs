@@ -327,6 +327,11 @@ where
 
 pub(crate) fn app_logic(app: &mut Workspace) -> impl WidgetView<Workspace> + use<> {
     use xilem::core::one_of::{Either, OneOf3};
+    crate::application::platform::frame_times::context(|| match app.mode {
+        Mode::Overview => "overview".into(),
+        Mode::Editor(_) => format!("editor {} {:?}", app.session.glyph_name, app.tool),
+        Mode::Graph => "graph".into(),
+    });
     // Tell the proof-file watcher which document and view are open.
     if let Ok(mut watch) = app.proof_watch.lock() {
         let document = app.font.document_source();

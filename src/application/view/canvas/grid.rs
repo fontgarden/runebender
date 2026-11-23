@@ -827,6 +827,7 @@ impl Widget for GridWidget {
         _props: &PropertiesRef<'_>,
         painter: &mut Painter<'_>,
     ) {
+        let _timer = crate::application::platform::frame_times::PaintTimer::start();
         let rows = self.packed();
         let total = rows.len();
         self.set_scroll_row(self.scroll_row(), total);

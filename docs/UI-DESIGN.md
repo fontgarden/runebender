@@ -294,6 +294,7 @@ Most of them exist for captures, but each one also applies to a window unless it
 | `RUNEBENDER_IN_WINDOW_MENU=1` | On macOS, show the in-window menu that the other platforms use. |
 | `RUNEBENDER_MENU_OPEN=<title>` | Open the in-window menu with this title. |
 | `RUNEBENDER_FRAME_STATS=1` | In a window, render every frame and report the frame cadence on stderr. |
+| `RUNEBENDER_FRAME_TIMES=<1\|path>` | In a window, record frame times without a change of pacing: `1` writes to stderr, a path replaces that file, and the footer shows the last second. |
 
 ### Variables that other code reads
 

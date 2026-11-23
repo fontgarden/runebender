@@ -4,18 +4,24 @@
 //! The launch path: the event loop, the window, and the first frame.
 
 use crate::application::launch_options::{CompileMode, LaunchOptions};
+use crate::application::platform::frame_times;
 use crate::application::platform::screenshot;
 use crate::application::view::render::root_logic;
 use crate::application::view::{UI_FONT, default_property_set};
 use crate::application::workspace::AppState;
 use masonry::core::{ErasedAction, WidgetId};
-use masonry_winit::app::{AppDriver, DriverCtx, WgpuContext, WindowId};
+use masonry_winit::app::{
+    AppDriver, DriverCtx, MasonryState, MasonryUserEvent, WgpuContext, WindowId,
+};
 use std::cell::Cell;
 use std::path::Path as FsPath;
 use std::rc::Rc;
 use std::sync::Arc;
+use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::error::EventLoopError;
+use winit::event::WindowEvent;
+use winit::event_loop::ActiveEventLoop;
 use winit::window::Theme;
 use xilem::view::sized_box;
 use xilem::{EventLoopBuilder, Xilem};
@@ -173,7 +179,98 @@ pub(crate) fn run(
         theme: window_theme,
         applied: initial_theme,
     };
-    masonry_winit::app::run_with(event_loop, windows, driver, default_property_set())
+    if let Some(target) = &options.frame_times {
+        frame_times::enable(target);
+    }
+    // This is `masonry_winit::app::run_with` with a clock around each event.
+    let _ = masonry::app::try_init_tracing();
+    let mut event_loop_state = TimedEventLoop {
+        state: MasonryState::new(event_loop.create_proxy(), windows, default_property_set()),
+        driver,
+    };
+    event_loop.run_app(&mut event_loop_state)
+}
+
+/// The Masonry event loop, with each window event reported to the frame time recorder.
+///
+/// It forwards every callback to [`MasonryState`] as the stock Masonry handler does.
+/// The recorder is off unless `RUNEBENDER_FRAME_TIMES` is set, and then a callback costs one
+/// read of a flag.
+struct TimedEventLoop<D> {
+    state: MasonryState,
+    driver: D,
+}
+
+impl<D: AppDriver> ApplicationHandler<MasonryUserEvent> for TimedEventLoop<D> {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        self.state.handle_resumed(event_loop, &mut self.driver);
+    }
+
+    fn suspended(&mut self, event_loop: &ActiveEventLoop) {
+        self.state.handle_suspended(event_loop);
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window: winit::window::WindowId,
+        event: WindowEvent,
+    ) {
+        let started = frame_times::start();
+        // The name of the event and whether the user caused it; `None` for a redraw.
+        let kind = match &event {
+            WindowEvent::RedrawRequested => None,
+            WindowEvent::CursorMoved { .. } => Some(("pointer move", true)),
+            WindowEvent::MouseInput { .. } => Some(("pointer button", true)),
+            WindowEvent::MouseWheel { .. }
+            | WindowEvent::PinchGesture { .. }
+            | WindowEvent::PanGesture { .. } => Some(("scroll", true)),
+            WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(_) => Some(("key", true)),
+            WindowEvent::Touch(_) => Some(("touch", true)),
+            WindowEvent::Resized(_) => Some(("resize", false)),
+            _ => Some(("window event", false)),
+        };
+        self.state
+            .handle_window_event(event_loop, window, event, &mut self.driver);
+        match kind {
+            None => frame_times::redraw(started),
+            Some((name, user)) => frame_times::input(name, started, user),
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        device: winit::event::DeviceId,
+        event: winit::event::DeviceEvent,
+    ) {
+        self.state
+            .handle_device_event(event_loop, device, event, &mut self.driver);
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: MasonryUserEvent) {
+        let started = frame_times::start();
+        self.state
+            .handle_user_event(event_loop, event, &mut self.driver);
+        frame_times::input("background result", started, false);
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.state.handle_about_to_wait(event_loop);
+    }
+
+    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: winit::event::StartCause) {
+        self.state.handle_new_events(event_loop, cause);
+    }
+
+    fn exiting(&mut self, event_loop: &ActiveEventLoop) {
+        self.state.handle_exiting(event_loop);
+        frame_times::finish();
+    }
+
+    fn memory_warning(&mut self, event_loop: &ActiveEventLoop) {
+        self.state.handle_memory_warning(event_loop);
+    }
 }
 
 /// Forward Xilem events while keeping the application's single native window themed.
@@ -201,7 +298,9 @@ impl<D: AppDriver> AppDriver for WindowAppearanceDriver<D> {
         widget_id: WidgetId,
         action: ErasedAction,
     ) {
+        let started = frame_times::start();
         self.inner.on_action(window_id, ctx, widget_id, action);
+        frame_times::logic(started);
         self.sync_theme(window_id, ctx);
     }
 
@@ -211,11 +310,13 @@ impl<D: AppDriver> AppDriver for WindowAppearanceDriver<D> {
         ctx: &mut DriverCtx<'_>,
         action: ErasedAction,
     ) {
+        let started = frame_times::start();
         self.inner.on_async_action(window_id, ctx, action);
+        frame_times::logic(started);
         self.sync_theme(window_id, ctx);
     }
 
-    fn on_start(&mut self, state: &mut masonry_winit::app::MasonryState) {
+    fn on_start(&mut self, state: &mut MasonryState) {
         self.inner.on_start(state);
     }
 
