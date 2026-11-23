@@ -88,7 +88,10 @@ pub(crate) fn editor_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<>
             canvas::editor::EditorEvent::Selection => {
                 app.refresh_coord_bufs();
             }
-            canvas::editor::EditorEvent::Edited => app.finish_open_glyph_refresh(),
+            canvas::editor::EditorEvent::Edited => {
+                app.finish_open_glyph_refresh();
+                app.refresh_coord_bufs();
+            }
             canvas::editor::EditorEvent::ToggleComponentAlignment => {
                 app.command_toggle_component_alignment();
             }
@@ -142,6 +145,7 @@ pub(crate) fn editor_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<>
             }
         },
     )
+    .preview_hold(app.font.project.preview_hold())
     .interpolation(if app.interpolation_is_active() {
         app.interpolation_canvas().ok()
     } else {

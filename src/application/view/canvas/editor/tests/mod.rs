@@ -61,6 +61,7 @@ fn empty_session() -> Session {
 fn widget() -> EditorWidget {
     EditorWidget {
         hoi: None,
+        preview_hold: None,
         hoi_drag: None,
         hoi_control: None,
         session: session(),

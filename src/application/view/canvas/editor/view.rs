@@ -24,7 +24,9 @@ pub(super) fn dispatch_editor_event(
         SessionSyncOutcome::Unchanged if !matches!(event, EditorEvent::Edited) => {
             on_event(app, event);
         }
-        SessionSyncOutcome::Unchanged | SessionSyncOutcome::Rejected => {}
+        // The gesture changed no geometry, but it can have changed the selection.
+        SessionSyncOutcome::Unchanged => on_event(app, EditorEvent::Selection),
+        SessionSyncOutcome::Rejected => {}
     }
 }
 
@@ -38,6 +40,7 @@ fn interp_eq(a: &Option<Arc<kurbo::BezPath>>, b: &Option<Arc<kurbo::BezPath>>) -
 
 pub(crate) struct EditorView<F> {
     hoi: Option<Arc<InterpolationCanvas>>,
+    preview_hold: Option<Arc<std::sync::atomic::AtomicBool>>,
     session: Arc<Session>,
     palette: Arc<Palette>,
     groups: (String, String),
@@ -87,6 +90,7 @@ pub(crate) fn editor<F: Fn(&mut Workspace, EditorEvent) + 'static>(
         .revision();
     EditorView {
         hoi: None,
+        preview_hold: None,
         session,
         palette,
         groups,
@@ -198,6 +202,13 @@ impl<F> EditorView<F> {
         self.hoi = data;
         self
     }
+
+    /// The flag the canvas sets while a pointer gesture is in progress, so the font
+    /// snapshot for the preview compile waits for the gesture to end.
+    pub(crate) fn preview_hold(mut self, hold: Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.preview_hold = Some(hold);
+        self
+    }
 }
 
 impl<F> ViewMarker for EditorView<F> {}
@@ -214,6 +225,7 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
         }
         let widget = EditorWidget {
             hoi: self.hoi.clone(),
+            preview_hold: self.preview_hold.clone(),
             hoi_drag: None,
             hoi_control: None,
             session,
@@ -278,6 +290,13 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
         _: &mut Workspace,
     ) {
         let mut dirty = false;
+        if !matches!(
+            (&self.preview_hold, &element.widget.preview_hold),
+            (Some(new), Some(old)) if Arc::ptr_eq(new, old)
+        ) {
+            element.widget.hold_preview(false);
+            element.widget.preview_hold = self.preview_hold.clone();
+        }
         if self.hoi != prev.hoi {
             let reframe = match (&self.hoi, &prev.hoi) {
                 (Some(a), Some(b)) => a.glyph != b.glyph || a.interval != b.interval,
@@ -474,7 +493,10 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
         }
     }
 
-    fn teardown(&self, (): &mut Self::ViewState, _: &mut ViewCtx, _: Mut<'_, Self::Element>) {}
+    fn teardown(&self, (): &mut Self::ViewState, _: &mut ViewCtx, element: Mut<'_, Self::Element>) {
+        // A canvas that goes away during a gesture must not leave the snapshot on hold.
+        element.widget.hold_preview(false);
+    }
 
     fn message(
         &self,

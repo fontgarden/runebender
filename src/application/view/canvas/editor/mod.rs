@@ -231,6 +231,9 @@ enum Drag {
 
 pub(crate) struct EditorWidget {
     hoi: Option<Arc<InterpolationCanvas>>,
+    /// Set while a pointer gesture is in progress; the preview compile's font snapshot
+    /// waits for it.
+    preview_hold: Option<Arc<std::sync::atomic::AtomicBool>>,
     hoi_drag: Option<interpolation::InterpolationDrag>,
     hoi_control: Option<usize>,
     session: Session,
@@ -318,11 +321,21 @@ pub(crate) enum MetricField {
 }
 
 impl EditorWidget {
-    fn emit(&self, ctx: &mut EventCtx<'_>, edited: bool) {
-        if edited {
-            ctx.submit_action::<EditorEvent>(EditorEvent::Edited);
+    /// Postpone or allow the font snapshot for the preview compile.
+    fn hold_preview(&self, hold: bool) {
+        if let Some(flag) = &self.preview_hold {
+            flag.store(hold, std::sync::atomic::Ordering::Relaxed);
         }
-        ctx.submit_action::<EditorEvent>(EditorEvent::Selection);
+    }
+
+    fn emit(&self, ctx: &mut EventCtx<'_>, edited: bool) {
+        // One action for each gesture: every action syncs the session and rebuilds the
+        // application. `Edited` also reports the selection.
+        ctx.submit_action::<EditorEvent>(if edited {
+            EditorEvent::Edited
+        } else {
+            EditorEvent::Selection
+        });
         ctx.request_render();
     }
 
@@ -416,6 +429,13 @@ impl Widget for EditorWidget {
         _props: &mut PropertiesMut<'_>,
         event: &PointerEvent,
     ) {
+        // The snapshot for the preview compile copies the whole font on this thread.
+        // Keep it out of a gesture; the release lets it run.
+        match event {
+            PointerEvent::Down(_) => self.hold_preview(true),
+            PointerEvent::Up(_) | PointerEvent::Cancel(_) => self.hold_preview(false),
+            _ => {}
+        }
         self.handle_pointer_event(ctx, event);
     }
 
@@ -435,6 +455,12 @@ impl Widget for EditorWidget {
         event: &masonry::core::Update,
     ) {
         use masonry::core::Update;
+        if matches!(
+            event,
+            Update::ActiveChanged(false) | Update::StashedChanged(true)
+        ) {
+            self.hold_preview(false);
+        }
         if matches!(
             event,
             Update::FocusChanged(false)

@@ -123,9 +123,12 @@ fn unchanged_editor_release_skips_the_real_edited_callback_and_retains_redo() {
         &mut workspace,
         &mut unchanged,
         EditorEvent::Edited,
-        |app, _| {
-            callbacks.set(callbacks.get() + 1);
-            app.finish_open_glyph_refresh();
+        |app, event| {
+            // An unchanged release reports the selection, never an edit.
+            if matches!(event, EditorEvent::Edited) {
+                callbacks.set(callbacks.get() + 1);
+                app.finish_open_glyph_refresh();
+            }
         },
     );
 
@@ -139,9 +142,12 @@ fn unchanged_editor_release_skips_the_real_edited_callback_and_retains_redo() {
         &mut workspace,
         &mut out_and_back,
         EditorEvent::Edited,
-        |app, _| {
-            callbacks.set(callbacks.get() + 1);
-            app.finish_open_glyph_refresh();
+        |app, event| {
+            // An unchanged release reports the selection, never an edit.
+            if matches!(event, EditorEvent::Edited) {
+                callbacks.set(callbacks.get() + 1);
+                app.finish_open_glyph_refresh();
+            }
         },
     );
 

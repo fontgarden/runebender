@@ -33,7 +33,8 @@ pub(super) struct CompileCache {
     )>,
     result: Option<Result<Arc<CompiledFont>, String>>,
     pending: Option<PreviewJob>,
-    queued: Option<babelfont::Font>,
+    /// Set while a pointer gesture is in progress; see [`Project::preview_hold`].
+    hold: Arc<std::sync::atomic::AtomicBool>,
     /// When the sources last changed while a preview was wanted; the snapshot and compile
     /// wait until the edits pause.
     #[cfg(not(target_arch = "wasm32"))]
@@ -618,13 +619,28 @@ impl Project {
             cache.result = Some(self.compile().map(Arc::new));
             cache.key = Some(key);
             cache.pending = None;
-            cache.queued = None;
         }
         cache.result.as_ref().expect("compiled revision").clone()
     }
 
+    /// The flag that postpones the snapshot for the preview compile.
+    ///
+    /// The snapshot copies the whole font on the calling thread, which is the interface
+    /// thread. The editor sets the flag while a pointer gesture is in progress, so the copy
+    /// does not take frames from a drag. [`Self::request_preview`] takes the snapshot on its
+    /// first call after the flag is cleared.
+    pub fn preview_hold(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        self.variable
+            .compiled
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .hold
+            .clone()
+    }
+
     /// Request the latest preview without blocking the desktop event loop.
-    /// Edits during a compile replace one queued snapshot; stale results never publish.
+    /// One compile runs at a time. Edits during a compile wait for it to end, then one
+    /// snapshot of the latest sources starts the next compile; stale results never publish.
     /// Browser hosts currently compile synchronously because Rust threads are unavailable.
     pub fn request_preview(&self) -> Result<Option<Arc<CompiledFont>>, String> {
         #[cfg(target_arch = "wasm32")]
@@ -644,26 +660,6 @@ impl Project {
                 cache.key = Some(key);
                 cache.wanted = Some(std::time::Instant::now());
             }
-            if cache
-                .wanted
-                .is_some_and(|since| since.elapsed() >= PREVIEW_DEBOUNCE)
-            {
-                cache.wanted = None;
-                match self.babelfont_snapshot() {
-                    Ok(font) => {
-                        if cache.pending.is_some() {
-                            cache.queued = Some(font);
-                        } else {
-                            cache.pending = Some(PreviewJob::start(font));
-                        }
-                    }
-                    Err(error) => {
-                        cache.pending = None;
-                        cache.queued = None;
-                        cache.result = Some(Err(error));
-                    }
-                }
-            }
             if cache.pending.as_ref().is_some_and(PreviewJob::is_finished) {
                 let job = cache.pending.take().expect("finished job");
                 let result = job
@@ -672,12 +668,25 @@ impl Project {
                     .unwrap_or_else(|error| error.into_inner())
                     .take()
                     .expect("finished result");
-                if let Some(font) = cache.queued.take() {
-                    cache.pending = Some(PreviewJob::start(font));
-                } else if cache.wanted.is_none() {
+                if cache.wanted.is_none() {
                     // A pending debounce means the key changed after this job started,
                     // so its result belongs to an older revision.
                     cache.result = Some(result);
+                }
+            }
+            // The snapshot copies the whole font on this thread. Take it only when no
+            // compile is running, so one compile needs one copy, and never during a pointer
+            // gesture.
+            if cache.pending.is_none()
+                && !cache.hold.load(std::sync::atomic::Ordering::Relaxed)
+                && cache
+                    .wanted
+                    .is_some_and(|since| since.elapsed() >= PREVIEW_DEBOUNCE)
+            {
+                cache.wanted = None;
+                match self.babelfont_snapshot() {
+                    Ok(font) => cache.pending = Some(PreviewJob::start(font)),
+                    Err(error) => cache.result = Some(Err(error)),
                 }
             }
             cache.result.clone().transpose()
