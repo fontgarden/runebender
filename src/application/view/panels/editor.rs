@@ -70,8 +70,7 @@ pub(crate) fn editor_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<>
             // selected; live selection remains widget-owned.
             let selection =
                 crate::application::launch_options::LaunchOptions::current().text_selection;
-            text_tool::TextInputs::for_glyph(&app.font, app.session.root_glyph())
-                .with_location(&app.font, &app.axis_values)
+            text_tool::TextInputs::for_editor(app)
                 .with_context(app.text_context_id())
                 .with_text(&app.initial_text)
                 .with_direction(app.text_dir)
@@ -103,6 +102,18 @@ pub(crate) fn editor_pane(app: &Workspace) -> impl WidgetView<Workspace> + use<>
             }
             canvas::editor::EditorEvent::Undo => app.undo_open_glyph(false),
             canvas::editor::EditorEvent::Redo => app.undo_open_glyph(true),
+            canvas::editor::EditorEvent::KernGroup(first, group) => {
+                app.set_kern_group(first, group);
+            }
+            canvas::editor::EditorEvent::RemoveKernPair(a, b) => app.delete_kern_pair(&a, &b),
+            canvas::editor::EditorEvent::PreviewKern(gap) => app.proof_drag_gap = gap,
+            canvas::editor::EditorEvent::KernPair(first, second, value) => {
+                app.proof_drag_gap = None;
+                app.kern_first_buf = first;
+                app.kern_second_buf = second;
+                app.kern_value_buf = value.to_string();
+                app.set_kern_pair_from_bufs();
+            }
             canvas::editor::EditorEvent::TextChanged(text) => app.set_editor_text(text),
             canvas::editor::EditorEvent::SketchChanged => {
                 app.note = "Sketch ink changed; the glyph outline is unchanged".into();

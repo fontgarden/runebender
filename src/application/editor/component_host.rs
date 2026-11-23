@@ -14,7 +14,7 @@
 use crate::application::editor::session::{PointView, Session};
 use crate::application::font_model::FontModel;
 use crate::application::platform::host;
-use crate::application::workspace::{MetadataEdit, Mode, Tab, TextContext, Workspace};
+use crate::application::workspace::{MetadataEdit, Tab, TextContext, Workspace};
 use std::sync::Arc;
 
 use masonry::kurbo::{Affine, BezPath, Line, Point, Vec2};
@@ -543,7 +543,7 @@ impl Workspace {
         }
         if let Some(index) = self.font.index_of(&name) {
             self.selected = Some(index);
-            self.mode = Mode::Editor(index);
+            self.enter_editor_mode(index);
         }
         self.name_buf = name;
         self.unicode_buf = self

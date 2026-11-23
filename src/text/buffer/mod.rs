@@ -150,6 +150,10 @@ pub struct TextLayoutItem {
     pub y: f64,
     /// Advance width of the glyph as placed, after shaping.
     pub advance_width: f64,
+    /// The sort's unkerned frame width at this location.
+    pub nominal_width: f64,
+    /// Signed distance from the preceding visual sort's nominal edge, within its run.
+    pub spacing_before: f64,
 }
 
 /// One stretch of a line at a single bidi embedding level.
@@ -583,6 +587,7 @@ pub struct TextBuffer {
     /// A buffer that changes its own copy clones it first.
     kerning: Arc<TextKerningModel>,
     glyph_inventory: Arc<TextGlyphInventory>,
+    drag_gap: Option<(usize, f64)>,
     manual_kerning: Option<ManualKerningSession>,
     /// Preview feature overrides handed to the shaper.
     feature_overrides: Vec<(String, bool)>,
@@ -619,6 +624,7 @@ impl Default for TextBuffer {
             auto_direction: true,
             kerning: Arc::default(),
             glyph_inventory: Arc::default(),
+            drag_gap: None,
             manual_kerning: None,
             feature_overrides: Vec::new(),
             script_override: None,

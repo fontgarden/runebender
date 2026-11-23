@@ -195,7 +195,7 @@ pub(crate) fn info_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
     );
     let glyph_section = recipes::section_with_header_height(
         app,
-        "Glyph",
+        if editing { "Editor Glyph" } else { "Glyph" },
         "Glyph",
         glyph_body,
         if nodes && app.collapsed.contains("Glyph") {
@@ -230,11 +230,11 @@ pub(crate) fn info_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
             (editing && app.tool == Tool::Sketch)
                 .then(|| recipes::panel_group(pal, super::sketch::panel(app))),
             editing.then(|| recipes::panel_group(pal, coordinates_section(app))),
+            editing.then(|| recipes::panel_group(pal, curves_section(app))),
             (editing && !app.font.project.is_neural())
                 .then(|| recipes::panel_group(pal, super::live_proof::section(app))),
         )),
         editing.then(|| recipes::panel_group(pal, transformations_section(app))),
-        editing.then(|| recipes::panel_group(pal, curves_section(app))),
         editing.then(|| recipes::panel_group(pal, path_operations_section(app))),
         recipes::panel_group(pal, glyph_section),
         editing.then(|| recipes::panel_group(pal, background_section(app))),
@@ -262,7 +262,7 @@ pub(crate) fn info_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
         (!editing).then(|| recipes::panel_group(pal, features_section(app))),
         layers_section(app).map(|body| recipes::panel_group(pal, body)),
         editing
-            .then(|| axes_section(app))
+            .then(|| axes_section(app, "Editor Axes"))
             .flatten()
             .map(|body| recipes::panel_group(pal, body)),
         editing.then(|| recipes::panel_group(pal, measure_section(app))),

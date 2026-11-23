@@ -350,6 +350,7 @@ impl Workspace {
             // An empty override previews the active glyph itself, which is
             // GPUI's resting edit state. Shaping text remains opt-in through
             // the inspector, sample commands, or the headless environment.
+            proof_drag_gap: None,
             preview_text: options.preview_text.clone().unwrap_or_default(),
             preview_blur: options.preview_blur,
             preview_visible: true,
@@ -553,7 +554,7 @@ impl Workspace {
                         self.restore_text_context(text_context);
                         self.selected = self.font.index_of(&self.session.glyph_name);
                         if let Some(selected) = self.selected {
-                            self.mode = Mode::Editor(selected);
+                            self.enter_editor_mode(selected);
                             self.refresh_metric_bufs();
                             self.refresh_coord_bufs();
                         }
@@ -801,6 +802,11 @@ mod tests {
         assert_eq!(workspace.session.glyph_name, "A");
         assert!(matches!(workspace.mode, Mode::Editor(0)));
         assert_eq!(workspace.tabs.len(), 1);
+        assert!(!workspace.collapsed.contains("Coordinates"));
+        assert!(!workspace.collapsed.contains("Curves"));
+        for key in ["Proof", "Editor Glyph", "Editor Layers", "Editor Axes"] {
+            assert!(workspace.collapsed.contains(key));
+        }
 
         workspace.save();
         workspace.list = true;

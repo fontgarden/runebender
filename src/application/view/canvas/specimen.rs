@@ -127,6 +127,11 @@ pub(crate) fn spacing_canvas(app: &Workspace) -> Option<impl WidgetView<Workspac
                 return;
             }
             let nominal = line_scales(base, width, em)[0];
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "a rounded, non-negative count of lines that fit the panel"
+            )]
             let count =
                 ((size.height / (nominal * em * LINE)).round() as usize).max(base.lines.len());
             let runs: Vec<_> = base
@@ -683,6 +688,11 @@ mod tests {
             height
         };
         let short = height(&mut app, 1000);
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a rounded test width in logical pixels, below 1000"
+        )]
         let required = 1000 - short.round() as u32;
         for slack in [160, 180, 200, 220] {
             assert!((height(&mut app, required + slack) - f64::from(slack)).abs() < 1.0);

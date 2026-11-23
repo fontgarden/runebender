@@ -35,9 +35,21 @@ pub(in super::super) fn press(
     }
     // Sidebearing lines (only when not near a point).
     let affine = editor.glyph_affine();
+    let segment = (editor.tool == Tool::Select
+        && editor.hit_point(at).is_none()
+        && editor.hit_part_point(at).is_none())
+    .then(|| {
+        runebender::outline::segment_ops::nearest_ordinary_layer_segment_with_t(
+            editor.session.current_layer()?,
+            editor.screen_to_glyph_design(at),
+            HIT_RADIUS_PX / editor.session.viewport.zoom,
+        )
+    })
+    .flatten();
     let adv_x = (affine * Point::new(editor.session.advance(), 0.0)).x;
     let lsb_x = (affine * Point::new(0.0, 0.0)).x;
-    if editor.hit_point(at).is_none()
+    if segment.is_none()
+        && editor.hit_point(at).is_none()
         && editor.hit_part_point(at).is_none()
         && !editor.session.neural
         && editor.session.host.is_none()
@@ -100,6 +112,24 @@ pub(in super::super) fn press(
         }
         None => {
             let design = editor.screen_to_glyph_design(at);
+            if let Some((segment, _)) = segment {
+                let ids = segment.point_ids();
+                if !shift {
+                    editor.session.select_only(SelectionTarget::Nothing);
+                }
+                if shift && ids.iter().all(|id| editor.session.selection.contains(id)) {
+                    for id in ids {
+                        editor.session.selection.remove(&id);
+                    }
+                } else {
+                    editor.session.select_points(ids, true);
+                }
+                editor.session.begin_point_drag();
+                editor.drag = Drag::Points { start: at };
+                editor.emit(ctx, false);
+                ctx.request_render();
+                return;
+            }
             if let Some(component) = editor.session.component_at(design) {
                 editor
                     .session
@@ -226,6 +256,9 @@ pub(in super::super) fn release(
             if cancelled {
                 editor.session.cancel_point_drag();
             } else {
+                if editor.view.maintain_g2 {
+                    editor.session.constrain_point_drag();
+                }
                 editor.session.end_point_drag();
             }
             editor.drag = Drag::None;

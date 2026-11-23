@@ -34,7 +34,7 @@ use std::sync::Arc;
 use xilem::WidgetView;
 use xilem::style::Style;
 use xilem::view::FlexExt as _;
-use xilem::view::{FlexSpacer, canvas, flex_col, sized_box};
+use xilem::view::{canvas, flex_col, sized_box};
 
 /// The editor rail's implemented navigation panels.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -371,7 +371,7 @@ where
 
 fn axes_rail(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     portal(recipes::panel_stack((
-        axes_section(app).map(|body| recipes::panel_group(&app.palette, body)),
+        axes_section(app, "Axes").map(|body| recipes::panel_group(&app.palette, body)),
         crate::application::view::panels::sections::masters_section(app)
             .map(|body| recipes::panel_group(&app.palette, body)),
     )))
@@ -720,7 +720,7 @@ fn category_sidebar(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
             Region::Inline,
             (
                 label(name).text_size(TextSize::Body.px()).color(pal.text),
-                FlexSpacer::Flex(1.0),
+                xilem::view::FlexSpacer::Flex(1.0),
                 label(value.to_string())
                     .text_size(TextSize::Body.px())
                     .color(pal.text_muted),

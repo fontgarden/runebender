@@ -172,7 +172,11 @@ fn outline_strip(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
         } else {
             inputs
         };
-        let placed = text_tool::TextState::new(&inputs).placed();
+        let mut text = text_tool::TextState::new(&inputs);
+        if app.has_text_session {
+            text.buffer.preview_drag_gap(app.proof_drag_gap);
+        }
+        let placed = text.placed();
         let advance = placed
             .iter()
             .map(|sort| sort.origin.x + sort.advance)

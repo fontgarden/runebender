@@ -235,8 +235,7 @@ impl Workspace {
             padding: 8.0,
             padding_y: 8.0,
             captions_below: true,
-            ascender: self.font.ascender(),
-            descender: self.font.descender(),
+            baseline_offset: Some(self.font.font_info().metrics.resolved().cap_height * 0.5),
             upm: self.font.units_per_em(),
             detail: self.detail,
         }
@@ -250,8 +249,7 @@ impl Workspace {
             padding_y: design::RAIL_GRID_INSET,
             // A neural item has no code point to recognize it by, so it keeps its name.
             captions_below: self.font.project.is_neural(),
-            ascender: self.font.ascender(),
-            descender: self.font.descender(),
+            baseline_offset: None,
             upm: self.font.units_per_em(),
             detail: false,
         }

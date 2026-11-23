@@ -337,6 +337,8 @@ pub(crate) struct Workspace {
     pub(crate) extrude_buf: String,
     pub(crate) roughen_buf: String,
     pub(crate) roughen_seed: u64,
+    /// Temporary visual boundary and snapped displacement during a text-tool kern drag.
+    pub(crate) proof_drag_gap: Option<(usize, f64)>,
     /// Text rendered in the proof strip; empty shows the current glyph.
     pub(crate) preview_text: String,
     /// Gaussian blur radius for the proof strip in logical pixels.

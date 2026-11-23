@@ -277,8 +277,8 @@ pub(crate) struct CellMetrics {
     pub padding_y: f64,
     /// Whether each row reserves a caption band below its thumbnail.
     pub captions_below: bool,
-    pub ascender: f64,
-    pub descender: f64,
+    /// Distance in font units from the preview center down to the shared baseline.
+    pub baseline_offset: Option<f64>,
     pub upm: f64,
     /// Detail view: a third line under the name with the category and advance.
     ///
@@ -598,6 +598,32 @@ impl GridWidget {
         first..first.saturating_add(self.visible_rows())
     }
 
+    fn preview_transform(
+        &self,
+        rect: Rect,
+        outline: &kurbo::BezPath,
+        advance: f64,
+        scale: f64,
+    ) -> Affine {
+        if let Some(offset) = self.metrics.baseline_offset {
+            let baseline = rect.center().y + scale * offset;
+            let center = if advance > 0.0 {
+                advance * 0.5
+            } else {
+                outline.bounding_box().center().x
+            };
+            return sort_transform(rect.center().x, center, baseline, scale);
+        }
+        // Mini-map tiles use the visible ink as the navigation icon.
+        let ink = outline.bounding_box().center();
+        sort_transform(
+            rect.center().x,
+            ink.x,
+            rect.center().y + ink.y * scale,
+            scale,
+        )
+    }
+
     /// Snap each fitted row's edges together so painting and pointer bounds agree.
     fn row_bounds(&self, row: usize) -> (f64, f64) {
         let top = self.inset_y() + row as f64 * self.row_pitch() - self.scroll;
@@ -905,19 +931,24 @@ impl Widget for GridWidget {
                 let line = (label_size * 1.10).ceil();
 
                 let preview_rect = Rect::new(rect.x0, rect.y0, rect.x1, rect.y1 - block);
+                let upm = self.metrics.upm.max(1.0);
+                let scale = 0.60 * (self.cell_height() - block) / upm;
+                painter.push_fill_clip(preview_rect.inset(-1.0));
                 if !cell.outline.elements().is_empty() {
                     let preview =
-                        fit_transform(preview_rect, cell.outline.bounding_box(), self.metrics.upm);
+                        self.preview_transform(preview_rect, &cell.outline, cell.advance, scale);
                     // Glyphs and captions share the resolved tile ink: its
                     // mark hue for outlined tiles, contrasting ink for filled ones.
                     painter.fill(&*cell.outline, ink).transform(preview).draw();
                 } else if let Some(reference) = empty_cell_reference(cell.codepoint) {
-                    let preview = fit_transform(preview_rect, reference.bounding_box(), 1000.0);
+                    let preview =
+                        self.preview_transform(preview_rect, &reference, 0.0, scale * upm / 1000.0);
                     painter
                         .fill(&*reference, self.palette.grid_reference_ink(ink))
                         .transform(preview)
                         .draw();
                 }
+                painter.pop_clip();
                 if label_lines == 0 {
                     continue;
                 }
@@ -1113,26 +1144,16 @@ impl Widget for GridWidget {
     }
 }
 
-/// GPUI thumbnail placement: retain em-relative sizes while centering ink.
-/// Expand the em window for tall marks rather than clipping their outlines.
-fn fit_transform(cell: Rect, ink: Rect, upm: f64) -> Affine {
-    const EM_FILL: f64 = 0.65;
-    const BASELINE_FROM_TOP: f64 = 0.8;
-    const THUMBNAIL_FILL: f64 = 0.92;
-    let em_height = upm.max(1.0) / EM_FILL;
-    let em_top = -BASELINE_FROM_TOP * em_height;
-    let top = em_top.min(-ink.y1);
-    let bottom = (em_top + em_height).max(-ink.y0);
-    // Ink taller than the em window, as on a neural canvas, would otherwise
-    // fill the tile from edge to caption; keep a margin above and below it.
-    const INK_HEIGHT_FILL: f64 = 0.75;
-    let scale = ((cell.width() / ink.width().max(1.0))
-        .min(cell.height() / (bottom - top).max(1.0))
-        * THUMBNAIL_FILL)
-        .min(cell.height() * INK_HEIGHT_FILL / ink.height().max(1.0));
-    let x = cell.x0 + (cell.width() - ink.width() * scale) / 2.0 - ink.x0 * scale;
-    let y = cell.y0 + (cell.height() - ink.height() * scale) / 2.0 + ink.y1 * scale;
-    Affine::new([scale, 0.0, 0.0, -scale, x, y])
+/// Place the sort on the row baseline, preserving font-unit positions.
+fn sort_transform(cell_center: f64, sort_center: f64, baseline: f64, scale: f64) -> Affine {
+    Affine::new([
+        scale,
+        0.0,
+        0.0,
+        -scale,
+        cell_center - sort_center * scale,
+        baseline,
+    ])
 }
 
 // ---------------------------------------------------------------------------
@@ -1315,8 +1336,7 @@ mod thumbnail_tests {
                 padding: crate::application::design::RAIL_GRID_INSET,
                 padding_y: crate::application::design::RAIL_GRID_INSET,
                 captions_below: false,
-                ascender: 800.0,
-                descender: -200.0,
+                baseline_offset: None,
                 upm: 1000.0,
                 detail: false,
             },
@@ -1787,21 +1807,29 @@ mod thumbnail_tests {
     }
 
     #[test]
-    fn thumbnail_ink_is_centered_and_tall_marks_stay_inside() {
-        let cell = Rect::new(10.0, 20.0, 110.0, 120.0);
-        for ink in [
-            Rect::new(80.0, 0.0, 680.0, 700.0),
-            Rect::new(-100.0, 900.0, 100.0, 2400.0),
-        ] {
-            let transform = fit_transform(cell, ink, 1000.0);
-            let drawn = transform.transform_rect_bbox(ink);
-            assert!((drawn.center() - cell.center()).hypot() < 1e-9);
-            assert!(cell.contains(drawn.origin()));
-            assert!(drawn.x1 <= cell.x1 && drawn.y1 <= cell.y1);
-        }
-        let period = fit_transform(cell, Rect::new(0.0, 0.0, 100.0, 100.0), 1000.0)
-            .transform_rect_bbox(Rect::new(0.0, 0.0, 100.0, 100.0));
-        assert!(period.height() < cell.height() * 0.1);
+    fn mini_map_centers_ink_and_overview_keeps_font_metrics() {
+        let mut grid = rail();
+        let mut outline = kurbo::BezPath::new();
+        outline.move_to((20.0, 600.0));
+        outline.line_to((60.0, 700.0));
+        let tile = Rect::new(0.0, 0.0, 40.0, 40.0);
+        let transform = grid.preview_transform(tile, &outline, 200.0, 0.05);
+        assert_eq!(transform * outline.bounding_box().center(), tile.center());
+        grid.metrics.baseline_offset = Some(200.0);
+        assert_eq!(
+            grid.preview_transform(tile, &outline, 200.0, 0.05),
+            sort_transform(20.0, 100.0, 30.0, 0.05)
+        );
+    }
+
+    #[test]
+    fn grid_sorts_share_a_baseline_and_scale() {
+        let quote = sort_transform(50.0, 120.0, 80.0, 0.1);
+        let comma = sort_transform(170.0, 200.0, 80.0, 0.1);
+        assert_eq!((quote * Point::new(120.0, 700.0)).y, 10.0);
+        assert_eq!((comma * Point::new(200.0, -120.0)).y, 92.0);
+        assert_eq!(quote * Point::new(120.0, 0.0), Point::new(50.0, 80.0));
+        assert_eq!(comma * Point::new(200.0, 0.0), Point::new(170.0, 80.0));
     }
 
     #[test]

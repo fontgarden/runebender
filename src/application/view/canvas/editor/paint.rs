@@ -2,61 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! The paint pass of the editor widget, from the canvas background to the metrics card.
-//! The functions that build the thickness image are also here.
+
+use runebender::analysis::curve::CombSample;
 
 use super::tools::label::LabelDrag;
 use super::*;
 use crate::application::design::point_marker::{self, PointKind};
-
-/// Cache key for the thickness image: the outline's geometry and the ramp's colors.
-fn thickness_key(outline: &kurbo::BezPath, pal: &Palette, upm: f64) -> u64 {
-    use std::hash::{Hash as _, Hasher as _};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    upm.to_bits().hash(&mut hasher);
-    for element in outline.elements() {
-        std::mem::discriminant(element).hash(&mut hasher);
-        let points: &[Point] = match element {
-            kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => std::slice::from_ref(p),
-            kurbo::PathEl::QuadTo(a, b) => &[*a, *b],
-            kurbo::PathEl::CurveTo(a, b, c) => &[*a, *b, *c],
-            kurbo::PathEl::ClosePath => &[],
-        };
-        for p in points {
-            p.x.to_bits().hash(&mut hasher);
-            p.y.to_bits().hash(&mut hasher);
-        }
-    }
-    for t in [0.0, 0.5, 1.0] {
-        for component in pal.thickness_fill(t).components {
-            component.to_bits().hash(&mut hasher);
-        }
-    }
-    hasher.finish()
-}
-
-/// Rasterize the thickness field of `outline` as a straight-alpha RGBA image,
-/// with the affine that places its pixels in design space.
-fn thickness_image(
-    outline: &kurbo::BezPath,
-    pal: &Palette,
-    upm: f64,
-) -> Option<(ImageData, Affine)> {
-    let mut field = runebender::analysis::thickness::glyph_thickness_field(outline, upm)?;
-    if let Some(reference) =
-        crate::application::launch_options::LaunchOptions::current().thickness_reference
-    {
-        field.reference = reference;
-    }
-    let rgba = pal.thickness_rgba(&field);
-    let image = ImageData {
-        data: Blob::new(Arc::new(rgba)),
-        format: ImageFormat::Rgba8,
-        alpha_type: ImageAlphaType::Alpha,
-        width: u32::try_from(field.width).ok()?,
-        height: u32::try_from(field.height).ok()?,
-    };
-    Some((image, field.pixel_to_design()))
-}
 
 impl EditorWidget {
     /// The other parts' outlines, handles and points, for View > Components.
@@ -105,6 +56,7 @@ impl EditorWidget {
     /// [`Widget::paint`] calls this.
     /// Each step paints one layer over the steps before it.
     pub(super) fn paint_canvas(&mut self, painter: &mut Painter<'_>) {
+        self.heat.get_mut().begin_frame();
         let pal = self.palette.clone();
         painter.fill_rect(self.size.to_rect(), pal.canvas);
 
@@ -136,7 +88,7 @@ impl EditorWidget {
         let affine = self.glyph_affine();
         self.paint_underlay(painter, &pal, affine);
         self.paint_layer_ghosts(painter, &pal, affine);
-        self.paint_design_grid(painter, &pal, affine);
+        self.paint_design_grid(painter, &pal, affine, 1.0);
         self.paint_metric_frame(painter, &pal);
 
         // Editing affordances only render on a master. Off a master the view
@@ -144,7 +96,6 @@ impl EditorWidget {
         // behavior): swap the outline, don't ghost it behind an editable one.
         if self.interp.is_none() {
             self.paint_composite_parts(painter, &pal, affine);
-            self.paint_curvature_comb(painter, &pal, affine);
             self.paint_outline(painter, &pal, affine);
             self.paint_points(painter, &pal, affine);
             self.paint_pen_previews(painter, &pal, affine);
@@ -211,22 +162,69 @@ impl EditorWidget {
         let metric_ys = text_sort_metric_ys(m);
         let placed = text.placed();
         let rule = Stroke::new(DesignStroke::Hairline.px());
-        let fixed_scale = self.view.thickness
-            && self.interp.is_none()
-            && crate::application::launch_options::LaunchOptions::current()
-                .thickness_reference
-                .is_some();
-        let mut fields = self.text_thickness.borrow_mut();
-        let mut visible = std::collections::HashSet::new();
+        let fixed_scale =
+            self.view.thickness && self.interp.is_none() && self.view.thickness_reference.is_some();
         for sort in &placed {
             let box_ = Rect::from_points(
                 view_affine * Point::new(sort.origin.x, sort_bottom + sort.origin.y),
-                view_affine * Point::new(sort.origin.x + sort.advance, sort_top + sort.origin.y),
+                view_affine
+                    * Point::new(sort.origin.x + sort.nominal_width, sort_top + sort.origin.y),
             );
-            if self.tool == Tool::Text && sort.selected {
+            let kern_target = match self.drag {
+                Drag::Kern { grabbed, .. } => Some(grabbed),
+                Drag::None if self.tool == Tool::Text && self.kern_alt_down => {
+                    self.kern_hover.as_ref().map(|(index, _)| *index)
+                }
+                _ => None,
+            };
+            if kern_target == Some(sort.index) {
+                painter
+                    .fill(box_, pal.mark("orange").unwrap_or(pal.role("selection")))
+                    .draw();
+                painter.stroke(box_, &rule, pal.outline).draw();
+            } else if self.tool == Tool::Text && sort.selected {
                 painter
                     .fill(box_, pal.role("selection").with_alpha(0.32))
                     .draw();
+            }
+        }
+        // Paint every background before any glyph ink, including overhangs.
+        for sort in &placed {
+            let box_ = Rect::from_points(
+                view_affine * Point::new(sort.origin.x, sort_bottom + sort.origin.y),
+                view_affine
+                    * Point::new(sort.origin.x + sort.nominal_width, sort_top + sort.origin.y),
+            );
+            if sort.spacing_before.abs() >= 0.5 {
+                let x = (view_affine
+                    * Point::new(sort.origin.x - sort.spacing_before, sort.origin.y))
+                .x;
+                let band = Rect::from_points(Point::new(x, box_.y0), Point::new(box_.x0, box_.y1));
+                let hue = if sort.spacing_before < 0.0 {
+                    "purple"
+                } else {
+                    "pink"
+                };
+                painter
+                    .fill(
+                        band,
+                        pal.mark(hue)
+                            .unwrap_or(ink)
+                            .with_alpha(crate::application::design::Alpha::Underlay.value()),
+                    )
+                    .draw();
+                let label = format!("{:+.0}", sort.spacing_before);
+                let size = TextSize::Body.px();
+                if band.width() >= text_label::width(&label, size) + 4.0 {
+                    text_label::draw(
+                        painter,
+                        Point::new(band.center().x, band.y0 + f64::from(size)),
+                        &label,
+                        size,
+                        pal.text,
+                        Anchor::Middle,
+                    );
+                }
             }
             if mark >= 3.0 && !sort.active {
                 let quiet = pal.role("metricQuiet");
@@ -242,24 +240,18 @@ impl EditorWidget {
                         .draw();
                 }
             }
+        }
+        for sort in &placed {
             if !sort.active || self.tool == Tool::Text {
                 let affine = view_affine * Affine::translate(sort.origin.to_vec2());
                 painter.fill(&*sort.outline, ink).transform(affine).draw();
                 if fixed_scale {
-                    let key = thickness_key(&sort.outline, pal, self.session.metrics.upm);
-                    visible.insert(key);
-                    if let Some((image, placement)) = fields.entry(key).or_insert_with(|| {
-                        thickness_image(&sort.outline, pal, self.session.metrics.upm)
-                    }) {
-                        painter.draw_image(&*image, affine * *placement);
-                    }
+                    self.paint_heat(painter, &sort.outline, affine, false);
                 }
             }
         }
-        fields.retain(|key, _| visible.contains(key));
         // Draw crosses over every sort's quiet rules, including shared
-        // boundaries. The active sort's marks go last when Text owns it;
-        // outline tools draw them with the active glyph frame below.
+        // boundaries. Only the Text tool draws marks on the active sort.
         if mark >= 3.0 {
             for sort in placed.iter().filter(|sort| !sort.active).chain(
                 placed
@@ -267,7 +259,8 @@ impl EditorWidget {
                     .filter(|sort| sort.active && self.tool == Tool::Text),
             ) {
                 let x0 = (view_affine * sort.origin).x;
-                let x1 = (view_affine * Point::new(sort.origin.x + sort.advance, sort.origin.y)).x;
+                let x1 =
+                    (view_affine * Point::new(sort.origin.x + sort.nominal_width, sort.origin.y)).x;
                 let ys = metric_ys
                     .iter()
                     .map(|&y| (view_affine * Point::new(sort.origin.x, sort.origin.y + y)).y);
@@ -276,7 +269,8 @@ impl EditorWidget {
                 paint_metric_crosses(painter, [x0, x1], [top, bottom], ys, mark, pal.outline);
             }
         }
-        if self.tool == Tool::Text && self.cursor_visible {
+        if self.tool == Tool::Text && self.cursor_visible && !matches!(self.drag, Drag::Kern { .. })
+        {
             // The caret follows GPUI and Web: a full sort-height rule with
             // inward triangular caps scaled from its on-screen height. It
             // uses the same single outline stroke as the sort corners.
@@ -428,7 +422,13 @@ impl EditorWidget {
     }
 
     /// Paint the design grid, as dots or lines according to View > Grid.
-    fn paint_design_grid(&self, painter: &mut Painter<'_>, pal: &Palette, affine: Affine) {
+    pub(super) fn paint_design_grid(
+        &self,
+        painter: &mut Painter<'_>,
+        pal: &Palette,
+        affine: Affine,
+        strength: f64,
+    ) {
         // 8-unit intersection once the zoom passes 0.8x, and a finer
         // 2-unit dot past 8x. Dot sizes share the point-marker scale,
         // keeping the colored space inside markers proportional at every zoom.
@@ -468,7 +468,7 @@ impl EditorWidget {
                 }
                 let color = pal
                     .role("designGridCoarse")
-                    .with_alpha(crate::application::view::render::px32(alpha));
+                    .with_alpha(crate::application::view::render::px32(alpha * strength));
                 if self.view.grid_lines {
                     painter.stroke(&marks, &Stroke::new(0.5), color).draw();
                     return;
@@ -518,7 +518,7 @@ impl EditorWidget {
         }
     }
 
-    /// Paint the metric lines and crosses of the glyph frame.
+    /// Paint the metric lines of the active glyph frame.
     fn paint_metric_frame(&self, painter: &mut Painter<'_>, pal: &Palette) {
         let m = &self.session.metrics;
         // Inside a component, the frame is the composite's: its sort, its advance.
@@ -547,20 +547,6 @@ impl EditorWidget {
         let bottom = (frame_affine * Point::new(0.0, m.descender)).y;
         for x in [x0, x1].into_iter().filter(|_| !neural) {
             painter.fill_rect(vertical_rule_rect(x, top, bottom, rule), frame);
-        }
-        let mark =
-            (((box_top - m.descender) * self.session.viewport.zoom).abs() * 0.05).clamp(1.5, 24.0);
-        if !neural {
-            paint_metric_crosses(
-                painter,
-                [x0, x1],
-                [top, bottom],
-                levels
-                    .iter()
-                    .map(|&y| (frame_affine * Point::new(0.0, y)).y),
-                mark,
-                pal.outline,
-            );
         }
     }
 
@@ -606,19 +592,31 @@ impl EditorWidget {
         }
     }
 
-    /// Paint the curvature comb under the editable outline.
-    fn paint_curvature_comb(&self, painter: &mut Painter<'_>, pal: &Palette, affine: Affine) {
-        // Curvature comb: paint the coloured strip before the editable
-        // outline, handles, and points. This is the GPUI layer order: the
-        // comb remains vivid, while every editing affordance stays clear
-        // and selectable above it.
+    pub(super) fn comb_samples(&mut self) -> Vec<Vec<CombSample>> {
+        use runebender::analysis::curve::{cubics_from_layer, curvature_comb, max_curvature};
+
+        let Some(layer) = self.session.current_layer() else {
+            return Vec::new();
+        };
+        let cubics = cubics_from_layer(layer);
+        let peak = self.comb_peak.unwrap_or_else(|| max_curvature(&cubics));
+        if peak <= 1e-12 {
+            // Allow a straight-only layer to acquire its first curve.
+            return Vec::new();
+        }
+        self.comb_peak = Some(peak);
+        // 35% of the former 74-unit peak. Flip the normal without changing tooth length.
+        let gain = if self.view.comb_flipped { -0.35 } else { 0.35 };
+        curvature_comb(&cubics, gain, 74.0 / peak, false, 16)
+    }
+
+    /// Draw above the ink and heat field so both sides remain visible.
+    fn paint_curvature_comb(&mut self, painter: &mut Painter<'_>, pal: &Palette, affine: Affine) {
         if self.view.comb {
-            let strips = self.session.curvature_comb();
-            let maxk = strips
-                .iter()
-                .flatten()
-                .map(|sample| sample.kappa.abs())
-                .fold(0.0, f64::max);
+            let strips = self.comb_samples();
+            let Some(maxk) = self.comb_peak else {
+                return;
+            };
             for strip in strips {
                 for pair in strip.windows(2) {
                     let mut quad = kurbo::BezPath::new();
@@ -627,11 +625,7 @@ impl EditorWidget {
                     quad.line_to(affine * pair[1].outer);
                     quad.line_to(affine * pair[0].outer);
                     quad.close_path();
-                    let k = if maxk > 1e-12 {
-                        (pair[0].kappa.abs() + pair[1].kappa.abs()) * 0.5 / maxk
-                    } else {
-                        0.0
-                    };
+                    let k = ((pair[0].kappa.abs() + pair[1].kappa.abs()) * 0.5 / maxk).min(1.0);
                     painter
                         .stroke(&quad, &Stroke::new(pal.stroke_emphasis), pal.comb_keyline())
                         .draw();
@@ -653,32 +647,33 @@ impl EditorWidget {
             pal.outline_fill()
         };
         painter.fill(&outline, fill).draw();
-        // Thickness: the local thickness field of the ink as an image,
-        // colored on the warm ramp. Painted over the fill and under the
-        // outline stroke, so the band replaces the ink and the edge stays
-        // crisp. The field is cached by outline, so only an edit recomputes it.
         if self.view.thickness && self.interp.is_none() {
-            let design_outline = self.session.outline();
-            let key = thickness_key(&design_outline, pal, self.session.metrics.upm);
-            let image = match &self.thickness_image {
-                Some((cached, image, placement)) if *cached == key => {
-                    Some((image.clone(), *placement))
-                }
-                _ => {
-                    let image = thickness_image(&design_outline, pal, self.session.metrics.upm);
-                    self.thickness_image = image
-                        .clone()
-                        .map(|(image, placement)| (key, image, placement));
-                    image
-                }
-            };
-            if let Some((image, pixel_to_design)) = image {
-                painter.draw_image(&image, affine * pixel_to_design);
-            }
+            self.paint_heat(painter, &self.session.outline(), affine, true);
         }
+        self.paint_curvature_comb(painter, pal, affine);
         painter
             .stroke(&outline, &Stroke::new(pal.stroke), pal.role("pathStroke"))
             .draw();
+        if self.tool == Tool::Select
+            && self.session.selection.len() >= 2
+            && let Some(layer) = self.session.current_layer()
+        {
+            for segment in runebender::outline::segment_ops::ordinary_layer_segments(layer) {
+                if segment
+                    .point_ids()
+                    .iter()
+                    .all(|id| self.session.selection.contains(id))
+                {
+                    painter
+                        .stroke(
+                            affine * segment.seg.to_path(0.1),
+                            &Stroke::new(pal.stroke + 1.0),
+                            pal.role("pointSelected"),
+                        )
+                        .draw();
+                }
+            }
+        }
     }
 
     /// Paint the handles and point markers of the open glyph and, for View > Components, of the other parts.
@@ -726,42 +721,22 @@ impl EditorWidget {
                 // redraws the dots or line chords which fall inside the
                 // marker after its interior and before its ring. This makes
                 // exact grid alignment readable without weakening the point.
-                let (coarse_alpha, fine_alpha) = grid_alphas(self.session.viewport.zoom);
-                let (coarse_dot, fine_dot) = point_grid_dot_sizes(self.session.viewport.zoom);
-                let grid_color = if selected || pal.points_filled {
-                    ink.ring
-                } else {
-                    hue
-                };
-                for (spacing, alpha, dot_size, line_width) in [
-                    (8.0, coarse_alpha, coarse_dot, POINT_GRID_COARSE_LINE_WIDTH),
-                    (2.0, fine_alpha, fine_dot, POINT_GRID_FINE_LINE_WIDTH),
-                ] {
-                    if alpha <= 0.0 {
-                        continue;
-                    }
-                    let marks = point_grid_marks(
-                        affine,
-                        sp,
-                        r,
-                        square,
-                        spacing,
-                        dot_size,
-                        self.view.grid_lines,
-                    );
-                    if marks.is_empty() {
-                        continue;
-                    }
-                    let color =
-                        grid_color.with_alpha(crate::application::view::render::px32(alpha));
-                    if self.view.grid_lines {
-                        painter
-                            .stroke(&marks, &Stroke::new(line_width), color)
-                            .draw();
+                self.paint_marker_grid(
+                    painter,
+                    affine,
+                    sp,
+                    r,
+                    if square {
+                        marks::GridWindow::Square
                     } else {
-                        painter.fill(&marks, color).draw();
-                    }
-                }
+                        marks::GridWindow::Circle
+                    },
+                    if selected || pal.points_filled {
+                        ink.ring
+                    } else {
+                        hue
+                    },
+                );
                 point_marker::paint_ring(painter, &shape, ink.ring, widths);
             }
         }
@@ -797,6 +772,47 @@ impl EditorWidget {
         }
     }
 
+    fn paint_marker_grid(
+        &self,
+        painter: &mut Painter<'_>,
+        affine: Affine,
+        sp: Point,
+        r: f64,
+        window: marks::GridWindow,
+        grid_color: xilem::Color,
+    ) {
+        let (coarse_alpha, fine_alpha) = grid_alphas(self.session.viewport.zoom);
+        let (coarse_dot, fine_dot) = point_grid_dot_sizes(self.session.viewport.zoom);
+        for (spacing, alpha, dot_size, line_width) in [
+            (8.0, coarse_alpha, coarse_dot, POINT_GRID_COARSE_LINE_WIDTH),
+            (2.0, fine_alpha, fine_dot, POINT_GRID_FINE_LINE_WIDTH),
+        ] {
+            if alpha <= 0.0 {
+                continue;
+            }
+            let marks = point_grid_marks(
+                affine,
+                sp,
+                r,
+                window,
+                spacing,
+                dot_size,
+                self.view.grid_lines,
+            );
+            if marks.is_empty() {
+                continue;
+            }
+            let color = grid_color.with_alpha(crate::application::view::render::px32(alpha));
+            if self.view.grid_lines {
+                painter
+                    .stroke(&marks, &Stroke::new(line_width), color)
+                    .draw();
+            } else {
+                painter.fill(&marks, color).draw();
+            }
+        }
+    }
+
     /// Paint the anchors of the open glyph.
     fn paint_anchors(&self, painter: &mut Painter<'_>, pal: &Palette, affine: Affine) {
         let widths = point_marker::widths(self.session.viewport.zoom);
@@ -804,9 +820,12 @@ impl EditorWidget {
         // Anchors use the same point construction, with solid pink inside
         // the shared dark keyline. Selection retains the node palette.
         let anchor_color = pal.mark("pink").unwrap_or_else(|| pal.role("danger"));
-        for (anchor, position) in self.session.anchor_points() {
-            let p = affine * position;
-            let selected = self.session.selected_anchors.contains(&anchor);
+        let Some(layer) = self.session.current_layer() else {
+            return;
+        };
+        for anchor in layer.anchors() {
+            let p = affine * anchor.position();
+            let selected = self.session.selected_anchors.contains(&anchor.id());
             let ink = point_marker::Ink {
                 ring: point_marker::outline(pal),
                 interior: if selected {
@@ -826,7 +845,27 @@ impl EditorWidget {
                 kurbo::PathEl::ClosePath,
             ]);
             let halo = pal.point_halo.then(|| pal.role("halo"));
-            point_marker::paint(painter, &diamond, ink, halo, widths);
+            point_marker::paint_ground(painter, &diamond, ink.interior, halo, widths);
+            self.paint_marker_grid(painter, affine, p, r, marks::GridWindow::Diamond, ink.ring);
+            point_marker::paint_ring(painter, &diamond, ink.ring, widths);
+            if selected {
+                let size = TextSize::Body.px();
+                let gap = r + 4.0;
+                let (x, align) =
+                    if p.x + gap + text_label::width(anchor.name(), size) <= self.size.width {
+                        (p.x + gap, Anchor::Start)
+                    } else {
+                        (p.x - gap, Anchor::End)
+                    };
+                text_label::draw(
+                    painter,
+                    Point::new(x, p.y - gap),
+                    anchor.name(),
+                    size,
+                    pal.text,
+                    align,
+                );
+            }
         }
     }
 

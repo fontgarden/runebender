@@ -18,6 +18,7 @@ mod menu;
 mod metrics_card;
 mod paint;
 mod pointer;
+mod thickness;
 mod tools;
 mod view;
 
@@ -86,6 +87,10 @@ fn cursor_visible_at(elapsed_ns: u64) -> bool {
 /// What the editor reports upward.
 #[derive(Debug)]
 pub(crate) enum EditorEvent {
+    KernGroup(bool, String),
+    PreviewKern(Option<(usize, f64)>),
+    KernPair(String, String, f64),
+    RemoveKernPair(String, String),
     Interpolation(crate::application::editor::tools::interpolation::InterpolationEvent),
     /// The glyph changed; the app should refresh its cached preview.
     Edited,
@@ -139,6 +144,16 @@ pub(crate) enum EditorEvent {
 }
 
 enum Drag {
+    Kern {
+        grabbed: usize,
+        first: String,
+        second: String,
+        boundary: usize,
+        start_x: f64,
+        rtl: bool,
+        original: f64,
+        value: f64,
+    },
     /// A press on another part's point is opening that part; the point drag starts when the
     /// new session arrives.
     Enter {
@@ -230,11 +245,9 @@ pub(crate) struct EditorWidget {
     /// The sketch ink last rasterized for the canvas, by sketch revision and ink alpha,
     /// so a zoom or hover repaint does not rebuild and re-upload a 512 px image.
     sketch_image: Option<(u64, u32, ImageData)>,
-    /// The thickness field last rasterized for the canvas, by outline and ramp
-    /// colors, so a zoom or hover repaint does not recompute the field.
-    thickness_image: Option<(u64, ImageData, Affine)>,
-    /// Fields for the visible text sorts when a common reference width is set.
-    text_thickness: std::cell::RefCell<std::collections::HashMap<u64, Option<(ImageData, Affine)>>>,
+    heat: std::cell::RefCell<thickness::HeatCache>,
+    /// Reference curvature for this layer while the comb is visible.
+    comb_peak: Option<f64>,
     /// The design grid's dots for the coarse and fine levels, kept between frames.
     /// Each holds the dots for one zoom and canvas size; panning only moves them.
     grid_dots: std::cell::RefCell<[Option<(GridDotsKey, kurbo::BezPath)>; 2]>,
@@ -277,6 +290,8 @@ pub(crate) struct EditorWidget {
     /// Three numbers over the drawing therefore cost an editing mode.
     field: Option<MetricField>,
     field_buf: String,
+    kern_groups: [bool; 2],
+    kern_typed: bool,
     /// The local AI shapes tool: the box dragged, the word typed into
     /// the field painted under it, and what the model drew.
     ai_box: Option<Rect>,
@@ -284,6 +299,8 @@ pub(crate) struct EditorWidget {
     ai_hover: Option<(i8, i8)>,
     ai_ghost: Option<Arc<ShapeGhost>>,
     /// Text caret blink phase; reset whenever the person moves or edits it.
+    kern_hover: Option<(usize, String)>,
+    kern_alt_down: bool,
     cursor_blink_elapsed_ns: u64,
     cursor_visible: bool,
 }
@@ -291,6 +308,10 @@ pub(crate) struct EditorWidget {
 /// Which number in the metrics panel is being typed into.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MetricField {
+    GroupLeft,
+    GroupRight,
+    KernLeft,
+    KernRight,
     Lsb,
     Width,
     Rsb,
@@ -407,6 +428,31 @@ impl Widget for EditorWidget {
         self.handle_text_event(ctx, event);
     }
 
+    fn update(
+        &mut self,
+        ctx: &mut UpdateCtx<'_>,
+        _: &mut PropertiesMut<'_>,
+        event: &masonry::core::Update,
+    ) {
+        use masonry::core::Update;
+        if matches!(
+            event,
+            Update::FocusChanged(false)
+                | Update::ActiveChanged(false)
+                | Update::StashedChanged(true)
+        ) && matches!(self.drag, Drag::Kern { .. })
+        {
+            if let Some(event) = tools::text::finish_kern(self, true) {
+                ctx.submit_action::<EditorEvent>(event);
+            }
+            ctx.request_render();
+            ctx.request_cursor_icon_change();
+        }
+        if matches!(event, Update::HoveredChanged(false)) && self.kern_hover.take().is_some() {
+            ctx.request_render();
+        }
+    }
+
     fn on_anim_frame(
         &mut self,
         ctx: &mut UpdateCtx<'_>,
@@ -445,6 +491,14 @@ impl Widget for EditorWidget {
             } else {
                 CursorIcon::Default
             };
+        }
+        if self.tool == Tool::Text {
+            if matches!(self.drag, Drag::Kern { .. }) {
+                return CursorIcon::Grabbing;
+            }
+            if self.kern_hover.is_some() {
+                return CursorIcon::Grab;
+            }
         }
         let resizing = match self.drag {
             Drag::AiResize { handle } => Some(handle),

@@ -293,7 +293,7 @@ The `design_context` tool and the Chat prompt read these files.
 ### 3.2 Live tools
 
 <!-- check: live-tools -->
-The live server publishes 50 tools.
+The live server publishes 51 tools.
 
 | Group | Tools |
 | --- | --- |

@@ -454,8 +454,6 @@ pub(crate) struct LaunchOptions {
     pub(crate) tool: Tool,
     /// The canvas view options to turn on.
     pub(crate) view: ViewOptions,
-    /// Fixed stroke width for comparisons across glyphs.
-    pub(crate) thickness_reference: Option<f64>,
     /// The design-space location, as pairs of axis tag or name and value.
     pub(crate) axis: Vec<(String, f64)>,
     /// The style name of the master to make active.
@@ -558,6 +556,7 @@ impl LaunchOptions {
                     .filter(|value| value.is_finite() && *value > 0.0)
                     .unwrap_or(1.0),
             });
+        let synchronous_analysis = capture.is_some();
         Self {
             capture,
             frame_stats: variables.is_set(frame_stats::ENV),
@@ -651,11 +650,14 @@ impl LaunchOptions {
                 Some("shapes") => Tool::AiShape,
                 _ => Tool::Select,
             },
-            thickness_reference: variables
-                .text("RUNEBENDER_THICKNESS_REFERENCE")
-                .and_then(|s| s.parse::<f64>().ok())
-                .filter(|x| x.is_finite() && *x > 0.0),
-            view: view_options(variables.text("RUNEBENDER_VIEW").as_deref()),
+            view: ViewOptions {
+                thickness_reference: variables
+                    .text("RUNEBENDER_THICKNESS_REFERENCE")
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .filter(|x| x.is_finite() && *x > 0.0),
+                synchronous_analysis,
+                ..view_options(variables.text("RUNEBENDER_VIEW").as_deref())
+            },
             axis: variables
                 .text("RUNEBENDER_AXIS")
                 .map(|spec| {

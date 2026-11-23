@@ -192,6 +192,7 @@ impl GlyphOutlines {
 /// The compiled preview font read at one normalized location: every glyph's outline and
 /// advance, which take a pass over the whole binary to extract.
 pub(crate) struct CachedTextLocation {
+    kerning: Arc<TextKerningModel>,
     compiled: Arc<runebender::font::compiler::CompiledFont>,
     normalized: Vec<f64>,
     outlines: GlyphOutlines,
@@ -319,6 +320,11 @@ impl TextInputs {
         }
     }
 
+    pub(crate) fn for_editor(app: &crate::application::workspace::Workspace) -> Self {
+        let inputs = Self::for_glyph(&app.font, app.session.root_glyph());
+        inputs.located(&app.font, &app.axis_values, app.on_active_master())
+    }
+
     /// Read a master and remember the glyph whose editor tab is open.
     pub(crate) fn for_glyph(font: &FontModel, glyph_name: &str) -> Self {
         let mut inputs = Self::new(font);
@@ -332,7 +338,11 @@ impl TextInputs {
 
     /// Preview the live variable font at the sliders' user coordinates.
     /// Advances, kerning, substitutions and outlines come from the same binary.
-    pub(crate) fn with_location(mut self, font: &FontModel, values: &[f64]) -> Self {
+    pub(crate) fn with_location(self, font: &FontModel, values: &[f64]) -> Self {
+        self.located(font, values, false)
+    }
+
+    fn located(mut self, font: &FontModel, values: &[f64], editing_master: bool) -> Self {
         if font.glyphs.is_empty() {
             return self;
         }
@@ -344,7 +354,21 @@ impl TextInputs {
                 axis.user_to_normalized(values.get(index).copied().unwrap_or(axis.default))
             })
             .collect();
-        if let Ok(Some(compiled)) = font.preview_font() {
+        // An outline nudge invalidates the compiled font. Keep shaping with
+        // the previous binary during the rebuild so neighbors keep their origins.
+        // At a master the outlines themselves always come from the live source.
+        let compiled = match font.preview_font() {
+            Ok(Some(compiled)) => Some(compiled),
+            Ok(None) if editing_master => font
+                .text_location
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref()
+                .filter(|c| c.kerning == self.kerning)
+                .map(|c| c.compiled.clone()),
+            _ => None,
+        };
+        if let Some(compiled) = compiled {
             self.normalized = compiled
                 .axis_tags
                 .iter()
@@ -377,6 +401,7 @@ impl TextInputs {
                     inventory.set_advance(name.clone(), *advance);
                 }
                 *cache = Some(CachedTextLocation {
+                    kerning: self.kerning.clone(),
                     compiled: compiled.clone(),
                     normalized: self.normalized.clone(),
                     outlines,
@@ -386,7 +411,9 @@ impl TextInputs {
                 });
             }
             let located = cache.as_ref().expect("the location was just read");
-            self.outlines = located.outlines.clone();
+            if !editing_master {
+                self.outlines = located.outlines.clone();
+            }
             self.compiled = Some(compiled.bytes.clone());
             if let Some((active, _, width)) = &mut self.active_glyph
                 && let Some(advance) = located.advances.get(active.as_str())
@@ -679,9 +706,12 @@ impl TextState {
                     .as_ref()
                     .is_some_and(|range| range.start < cluster_end && range.end > item.index);
                 Some(PlacedSort {
+                    index: item.index,
                     outline: outline.clone(),
                     origin: Point::new(item.x, item.y),
                     advance: item.advance_width,
+                    nominal_width: item.nominal_width,
+                    spacing_before: item.spacing_before,
                     active: active == Some(item.index),
                     selected,
                 })
@@ -718,6 +748,26 @@ impl TextState {
             .iter()
             .find(|item| item.index == active)
             .map(|item| Point::new(item.x, item.y))
+    }
+
+    /// Prefer visible ink where two heavily kerned advance boxes overlap.
+    pub(crate) fn kern_hit(&self, at: Point) -> Option<usize> {
+        use masonry::kurbo::Shape;
+        let layout = self.buffer.layout(self.line_height);
+        for item in layout.items.iter().rev() {
+            let Some(name) = self.buffer.sort(item.index).and_then(|s| s.glyph_name()) else {
+                continue;
+            };
+            if self
+                .outline(name)
+                .is_some_and(|p| p.winding(Point::new(at.x - item.x, at.y - item.y)) != 0)
+            {
+                return Some(item.index);
+            }
+        }
+        self.buffer
+            .hit_test(at.x, at.y, self.line_height, self.ascender, self.descender)
+            .active_sort
     }
 
     /// A click: put the caret there, and report the sort under it.
@@ -758,6 +808,9 @@ impl TextState {
 
 /// One sort, ready to draw.
 pub(crate) struct PlacedSort {
+    pub nominal_width: f64,
+    pub spacing_before: f64,
+    pub index: usize,
     pub outline: Arc<BezPath>,
     pub origin: Point,
     pub advance: f64,
@@ -985,6 +1038,39 @@ mod tests {
             Some("alternate.001")
         );
         assert_eq!(state.buffer.active_sort(), Some(0));
+    }
+
+    #[cfg(feature = "integration-fonts")]
+    #[test]
+    fn nudging_reh_keeps_the_composed_word_in_place() {
+        use crate::application::workspace::Workspace;
+        let path = crate::integration_fonts::dir().join("VirtuaGrotesk.designspace");
+        let mut app = Workspace::open(&path).unwrap();
+        let name = "reh-ar.fina";
+        app.open_glyph(app.font.index_of(name).unwrap());
+        app.font
+            .project
+            .compiled_preview()
+            .expect("initial compiled word");
+        let inputs = TextInputs::for_editor(&app).with_text("فيرتوا غروتيسك");
+        assert!(inputs.compiled.is_some());
+        let mut text = TextState::new(&inputs);
+        let positions = |t: &TextState| t.placed().iter().map(|s| s.origin).collect::<Vec<_>>();
+        let before = positions(&text);
+        assert!(before.len() > 4);
+        let first = app.session.points()[0].point;
+        app.apply_op(|s| {
+            s.select_all();
+            s.nudge(8.0, 0.0)
+        });
+        assert_eq!(app.session.points()[0].point.x, first.x + 8.0);
+        let refreshed = TextInputs::for_editor(&app);
+        assert!(
+            refreshed.compiled.is_some(),
+            "a nudge must retain compiled positioning"
+        );
+        text.refresh(&refreshed);
+        assert_eq!(positions(&text), before);
     }
 
     #[cfg(feature = "integration-fonts")]

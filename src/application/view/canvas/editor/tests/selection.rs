@@ -8,6 +8,35 @@
 
 use super::*;
 
+#[test]
+fn clicking_a_segment_selects_its_points_and_reports_dimensions() {
+    use norad::PointType::{Line, OffCurve, QCurve};
+    let mut editor = widget();
+    editor.session = session_with(&[
+        (0., 0., Line),
+        (0., 300., Line),
+        (150., 450., OffCurve),
+        (300., 300., QCurve),
+        (300., 0., Line),
+    ]);
+    let mut harness =
+        TestHarness::create_with_size(default_property_set(), editor.prepare(), (786, 510));
+    for (position, count, width, height) in [
+        (Point::new(0., 150.), 2, 0., 300.),
+        (Point::new(150., 375.), 3, 300., 150.),
+    ] {
+        let at = harness.edit_root_widget(|r| r.widget.glyph_affine() * position);
+        harness.mouse_move(at);
+        harness.mouse_button_press(Some(PointerButton::Primary));
+        harness.mouse_button_release(Some(PointerButton::Primary));
+        harness.edit_root_widget(|r| {
+            assert_eq!(r.widget.session.selection.len(), count);
+            let bounds = r.widget.session.selection_bounds().unwrap();
+            assert_eq!((bounds.width(), bounds.height()), (width, height));
+        });
+    }
+}
+
 /// A right click opens the menu as a layer, and the editor remembers
 /// which layer so a second right click does not stack another one.
 #[test]

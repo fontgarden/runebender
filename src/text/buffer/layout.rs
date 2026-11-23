@@ -98,6 +98,7 @@ impl TextBuffer {
 
             for run in runs.iter() {
                 let mut previous: Option<&str> = None;
+                let mut previous_edge = None;
                 for &index in run.visual_order() {
                     // A character folded into a ligature has no glyph of
                     // its own: no item, no width, no kerning pair.
@@ -116,9 +117,28 @@ impl TextBuffer {
                     x += kern_between(self, previous, glyph_name, run.rtl);
                     // A mark is drawn where shaping put it, off the pen;
                     // the pen itself moves by the advance only.
+                    if let Some((boundary, delta)) = self.drag_gap
+                        && boundary == index
+                    {
+                        x += delta;
+                    }
                     let (dx, dy) = self.shaped_offset(index);
+                    let nominal_width = glyph_name
+                        .and_then(|name| self.glyph_inventory.widths.get(name))
+                        .copied()
+                        .unwrap_or(advance_width);
+                    // Marks can have GPOS offsets independent of pair spacing.
+                    let spacing_before = if nominal_width > 0.0 && dy == 0.0 {
+                        previous_edge.map_or(0.0, |edge: f64| x + dx - edge)
+                    } else {
+                        0.0
+                    };
+                    previous_edge =
+                        (nominal_width > 0.0 && dy == 0.0).then_some(x + dx + nominal_width);
                     items.push(TextLayoutItem {
                         index,
+                        nominal_width,
+                        spacing_before,
                         x: x + dx,
                         y: y + dy,
                         advance_width,
@@ -224,6 +244,8 @@ impl TextBuffer {
                         index,
                         x,
                         y: 0.0,
+                        nominal_width: advance_width,
+                        spacing_before: kern,
                         advance_width,
                     });
                     x += advance_width;
@@ -434,7 +456,18 @@ impl TextBuffer {
     /// stack.
     pub(super) fn rtl_line_start_x(&self) -> f64 {
         self.line_ranges()
-            .map(|(start, end)| (start..end).map(|i| self.sort_advance(i)).sum::<f64>())
+            .map(|(start, end)| {
+                (start..end)
+                    .filter(|&i| !self.sorts[i].absorbed)
+                    .map(|i| {
+                        // Anchor RTL lines using nominal widths. Shaped advances include
+                        // kerning, which would move the right edge after a font rebuild.
+                        self.sort_glyph_name(i)
+                            .and_then(|name| self.glyph_inventory.widths.get(name).copied())
+                            .unwrap_or_else(|| self.sort_advance(i))
+                    })
+                    .sum::<f64>()
+            })
             .fold(0.0, f64::max)
     }
 

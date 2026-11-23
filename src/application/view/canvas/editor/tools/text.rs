@@ -6,6 +6,94 @@
 use super::super::*;
 use masonry::core::KeyboardEvent;
 
+pub(in super::super) fn begin_kern(editor: &mut EditorWidget, at: Point) -> bool {
+    let Some(text) = editor.text.as_ref() else {
+        return false;
+    };
+    let Some(index) = text.kern_hit(at) else {
+        return false;
+    };
+    let Some((a, b, boundary, rtl, original)) = text.buffer.drag_pair(index) else {
+        return false;
+    };
+    let scope = editor
+        .field
+        .filter(|&f| {
+            matches!(f, MetricField::KernLeft | MetricField::KernRight)
+                && editor
+                    .kern_pair(f)
+                    .is_some_and(|(x, y, _)| (x, y) == (a, b))
+        })
+        .map_or_else(|| text.buffer.kern_scope(a, b), |_| editor.kern_groups);
+    let [ga, gb] = text.buffer.pair_groups(a, b);
+    editor.drag = Drag::Kern {
+        grabbed: index,
+        first: if scope[0] { ga.unwrap_or(a) } else { a }.into(),
+        second: if scope[1] { gb.unwrap_or(b) } else { b }.into(),
+        boundary,
+        start_x: at.x,
+        rtl,
+        original,
+        value: original,
+    };
+    editor.field = None;
+    true
+}
+
+pub(in super::super) fn move_kern(editor: &mut EditorWidget, x: f64) -> Option<EditorEvent> {
+    let Drag::Kern {
+        boundary,
+        start_x,
+        rtl,
+        original,
+        value,
+        ..
+    } = &mut editor.drag
+    else {
+        return None;
+    };
+    let previous = *value;
+    let step = runebender::outline::point_ops::DOT_GRID_SPACING;
+    let delta = if *rtl { *start_x - x } else { x - *start_x };
+    *value = if delta.abs() < step / 2.0 {
+        *original
+    } else {
+        ((*original + delta) / step).round() * step
+    };
+    if *value == previous {
+        return None;
+    }
+    let gap = Some((*boundary, *value - *original));
+    editor.text.as_mut()?.buffer.preview_drag_gap(gap);
+    Some(EditorEvent::PreviewKern(gap))
+}
+
+pub(in super::super) fn finish_kern(
+    editor: &mut EditorWidget,
+    cancelled: bool,
+) -> Option<EditorEvent> {
+    let Drag::Kern {
+        first,
+        second,
+        original,
+        value,
+        ..
+    } = std::mem::replace(&mut editor.drag, Drag::None)
+    else {
+        return None;
+    };
+    if (cancelled || value == original)
+        && let Some(text) = &mut editor.text
+    {
+        text.buffer.preview_drag_gap(None);
+    }
+    Some(if !cancelled && value != original {
+        EditorEvent::KernPair(first, second, value)
+    } else {
+        EditorEvent::PreviewKern(None)
+    })
+}
+
 /// Place the caret at a press of the text tool, and make the sort under it the glyph being
 /// edited.
 pub(in super::super) fn press(editor: &mut EditorWidget, ctx: &mut EventCtx<'_>, at: Point) {

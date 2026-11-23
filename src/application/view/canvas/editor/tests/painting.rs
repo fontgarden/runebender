@@ -8,6 +8,37 @@
 use super::*;
 use crate::application::design::{POINT_RING_WIDTH, point_marker_scale};
 
+#[test]
+fn comb_scale_and_side_stay_stable_across_a_handle_drag() {
+    let mut editor = widget();
+    assert!(editor.comb_samples().is_empty());
+    assert!(editor.comb_peak.is_none());
+    editor.session = smooth_curve_session();
+    let before = editor.comb_samples();
+    let peak = editor.comb_peak.unwrap();
+    for sample in before.iter().flatten() {
+        let length = sample.on.distance(sample.outer);
+        assert!((length - 25.9 * sample.kappa.abs() / peak).abs() < 1e-9);
+    }
+    editor.view.comb_flipped = true;
+    let flipped = editor.comb_samples();
+    for (a, b) in before.iter().flatten().zip(flipped.iter().flatten()) {
+        assert_eq!(a.on, b.on);
+        assert!(a.outer.midpoint(b.outer).distance(a.on) < 1e-9);
+    }
+    let handle = editor.session.points()[1].id;
+    editor.session.press_point(handle, false);
+    editor.session.begin_point_drag();
+    assert!(editor.session.drag_points_to((0.0, -175.0), true));
+    let dragged = editor.comb_samples();
+    assert_eq!(editor.comb_peak, Some(peak));
+    assert!(dragged[0][0].kappa.abs() > peak);
+    assert!(dragged[0][0].outer.distance(dragged[0][0].on) > 25.9);
+    assert_eq!(flipped[1][0].outer, dragged[1][0].outer);
+    editor.session.end_point_drag();
+    assert_eq!(editor.comb_samples()[0][0].outer, dragged[0][0].outer);
+}
+
 /// The cached dot field, moved to a pan offset, puts dots exactly where drawing each grid
 /// intersection through the view transform would, and leaves out the same ones.
 #[test]
@@ -97,7 +128,7 @@ fn point_window_repaints_the_grid_intersection_under_its_center() {
         Affine::IDENTITY,
         Point::new(8.0, 8.0),
         4.5,
-        false,
+        marks::GridWindow::Circle,
         8.0,
         2.0,
         false,
@@ -112,7 +143,7 @@ fn point_window_preserves_an_off_center_grid_dot() {
         Affine::IDENTITY,
         Point::new(10.0, 8.0),
         4.5,
-        false,
+        marks::GridWindow::Circle,
         8.0,
         2.0,
         false,
@@ -122,12 +153,28 @@ fn point_window_preserves_an_off_center_grid_dot() {
 }
 
 #[test]
+fn point_window_in_anchor_diamond_shows_only_real_grid_intersections() {
+    let marks = point_grid_marks(
+        Affine::IDENTITY,
+        Point::new(9.0, 9.0),
+        8.0,
+        marks::GridWindow::Diamond,
+        8.0,
+        1.0,
+        false,
+    );
+    assert_ne!(marks.winding(Point::new(8.0, 8.0)), 0);
+    assert_eq!(marks.winding(Point::new(9.0, 9.0)), 0);
+    assert_eq!(marks.winding(Point::new(16.0, 16.0)), 0);
+}
+
+#[test]
 fn point_window_clips_line_grid_to_the_marker() {
     let marks = point_grid_marks(
         Affine::IDENTITY,
         Point::new(8.0, 8.0),
         4.5,
-        false,
+        marks::GridWindow::Circle,
         8.0,
         2.0,
         true,

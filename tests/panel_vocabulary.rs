@@ -26,7 +26,7 @@ const BUDGET: &[(&str, usize)] = &[
     ("neural.rs", 6),
     ("preview.rs", 4),
     ("scripts.rs", 18),
-    ("sections.rs", 53),
+    ("sections.rs", 49),
     ("sketch.rs", 13),
     ("tabs.rs", 49),
 ];

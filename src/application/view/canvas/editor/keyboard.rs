@@ -10,6 +10,35 @@ impl EditorWidget {
     /// Handle a keyboard or text event.
     /// [`Widget::on_text_event`] calls this.
     pub(super) fn handle_text_event(&mut self, ctx: &mut EventCtx<'_>, event: &TextEvent) {
+        if self.tool == Tool::Text {
+            let alt = match event {
+                TextEvent::Keyboard(key) if key.key == Key::Named(NamedKey::Alt) => {
+                    key.state == KeyState::Down
+                }
+                TextEvent::Keyboard(key) => key.modifiers.alt(),
+                TextEvent::WindowFocusChange(false) => false,
+                _ => self.kern_alt_down,
+            };
+            if alt != self.kern_alt_down {
+                self.kern_alt_down = alt;
+                ctx.request_render();
+            }
+        }
+        if matches!(self.drag, Drag::Kern { .. }) {
+            if let TextEvent::Keyboard(key) = event
+                && key.state == KeyState::Down
+                && key.key == Key::Named(NamedKey::Escape)
+            {
+                if let Some(event) = text::finish_kern(self, true) {
+                    ctx.submit_action::<EditorEvent>(event);
+                }
+                ctx.release_pointer();
+                ctx.request_render();
+                ctx.request_cursor_icon_change();
+            }
+            ctx.set_handled();
+            return;
+        }
         if self.tool == Tool::Interpolation {
             self.interpolation_key(ctx, event);
             return;
@@ -55,7 +84,7 @@ impl EditorWidget {
         // A focused metric box takes the keys first. Everything below
         // this point would otherwise read a digit as a nudge or a tool.
         if self.field.is_some() && !cmd {
-            let (edited, handled) = self.metric_key(key);
+            let (edited, handled) = self.metric_key(ctx, key);
             if handled {
                 self.emit(ctx, edited);
                 ctx.set_handled();

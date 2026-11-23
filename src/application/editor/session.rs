@@ -1197,6 +1197,49 @@ impl Session {
         }
     }
 
+    pub(crate) fn constrain_point_drag(&mut self) {
+        if self.selection.len() != 1 {
+            return;
+        }
+        let id = *self.selection.iter().next().unwrap();
+        if let Some(drag) = &mut self.active_point_drag
+            && drag.changed
+            && !drag.independent
+            && let Some((_, origin)) = drag.origins.iter().find(|(point, _)| *point == id)
+            && drag
+                .transaction
+                .draft()
+                .view()
+                .contours()
+                .flat_map(|c| c.points())
+                .any(|p| p.id() == id && p.position() != *origin)
+        {
+            let _ = drag.transaction.draft_mut().maintain_g2_at(id);
+        }
+    }
+
+    /// Match the newly completed join when the pen has drawn its outgoing cubic.
+    pub(crate) fn constrain_pen_join(&mut self, contour: ContourId, closed: bool) {
+        let Some(tx) = &mut self.pending_canonical else {
+            return;
+        };
+        let Some(c) = tx.draft().view().contours().find(|c| c.id() == contour) else {
+            return;
+        };
+        let nodes: Vec<_> = c
+            .points()
+            .filter(|p| p.point_type() != LayerPointType::OffCurve)
+            .map(|p| p.id())
+            .collect();
+        if closed {
+            for id in [nodes.last(), nodes.first()].into_iter().flatten() {
+                let _ = tx.draft_mut().maintain_g2_at(*id);
+            }
+        } else if nodes.len() >= 3 {
+            let _ = tx.draft_mut().maintain_g2_at(nodes[nodes.len() - 2]);
+        }
+    }
+
     pub(crate) fn end_point_drag(&mut self) {
         if let Some(drag) = self.active_point_drag.take()
             && drag.changed
@@ -1612,7 +1655,7 @@ impl Session {
     }
 
     /// Close the active contour.
-    pub(crate) fn pen_close(&mut self) {
+    pub(crate) fn pen_close(&mut self, maintain_g2: bool) {
         let Some(contour) = self.active_contour.take() else {
             self.pen.clear();
             return;
@@ -1643,8 +1686,23 @@ impl Session {
                     .close_contour(contour, controls)
                     .is_ok()
             {
+                if maintain_g2 && first_incoming.is_some() {
+                    let first_id = transaction
+                        .draft()
+                        .view()
+                        .contours()
+                        .find(|c| c.id() == contour)
+                        .and_then(|c| c.points().next())
+                        .map(|p| p.id());
+                    if let Some(id) = first_id {
+                        let _ = transaction.draft_mut().set_point_smooth(id, true);
+                    }
+                }
                 self.pending_canonical = Some(transaction);
                 self.pending_canonical_label = Some("close pen contour");
+                if maintain_g2 {
+                    self.constrain_pen_join(contour, true);
+                }
             }
         }
         self.pen.clear();
@@ -2187,18 +2245,6 @@ impl Session {
         runebender::analysis::measure::colored_strokes(&self.paths())
     }
 
-    pub(crate) fn curvature_comb(&self) -> Vec<Vec<runebender::analysis::curve::CombSample>> {
-        let Some(layer) = self.current_layer() else {
-            return Vec::new();
-        };
-        let cubics = runebender::analysis::curve::cubics_from_layer(layer);
-        let maxk = runebender::analysis::curve::max_curvature(&cubics);
-        if maxk <= 1e-12 {
-            return Vec::new();
-        }
-        runebender::analysis::curve::curvature_comb(&cubics, 1.0, 74.0 / maxk, false, 16)
-    }
-
     pub(crate) fn set_mark(&mut self, label: Option<&str>) {
         let (label, color) = semantic_mark(label);
         let _ =
@@ -2710,6 +2756,30 @@ fn combined_component_path(
 }
 
 impl Workspace {
+    pub(crate) fn enter_editor_mode(&mut self, index: usize) {
+        if !matches!(self.mode, Mode::Editor(_)) {
+            self.collapsed.remove("Coordinates");
+            self.collapsed.remove("Curves");
+            self.collapsed.extend([
+                "Proof",
+                "Transformations",
+                "Path Operations",
+                "Editor Glyph",
+                "Background",
+                "Mark",
+                "Shaping",
+                "Related",
+                "Editor Layers",
+                "Editor Axes",
+                "Measure",
+                "Samples",
+                "Neural",
+                "Local AI Shapes",
+            ]);
+        }
+        self.mode = Mode::Editor(index);
+    }
+
     fn text_context(&self) -> TextContext {
         TextContext {
             editor_text: self.initial_text.clone(),
@@ -2855,7 +2925,7 @@ impl Workspace {
         let name = self.session.glyph_name.clone();
         if let Some(glyph) = self.font.index_of(&name) {
             self.selected = Some(glyph);
-            self.mode = Mode::Editor(glyph);
+            self.enter_editor_mode(glyph);
         }
         self.refresh_metric_bufs();
         self.refresh_coord_bufs();
@@ -2972,7 +3042,7 @@ impl Workspace {
                 self.active_tab = self.tabs.len() - 1;
             }
             self.selected = Some(index);
-            self.mode = Mode::Editor(index);
+            self.enter_editor_mode(index);
             if context_changed {
                 self.shapes_context_changed();
             }
@@ -3467,7 +3537,7 @@ impl Workspace {
                 self.active_tab = tab;
                 self.session = self.tabs[tab].session.clone();
                 self.selected = Some(glyph);
-                self.mode = Mode::Editor(glyph);
+                self.enter_editor_mode(glyph);
                 self.name_buf = name;
                 self.unicode_buf = self
                     .session
@@ -3903,7 +3973,7 @@ mod tests {
         );
         assert_eq!(session.active_contour, Some(contour));
 
-        session.pen_close();
+        session.pen_close(false);
         assert_eq!(
             workspace.sync_session_from(&mut session),
             SessionSyncOutcome::Changed

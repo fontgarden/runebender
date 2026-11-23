@@ -202,6 +202,78 @@ impl LayerEditDraft {
         Ok(changed)
     }
 
+    /// Preserve the edited handle and solve the opposite handle length at its smooth join.
+    /// A node edit keeps the outgoing handle. Only an ordinary cubic pair is eligible.
+    pub fn maintain_g2_at(&mut self, edited: PointId) -> Result<bool, DocumentEditError> {
+        use super::LayerPointType::{Curve, OffCurve};
+        let update = self
+            .view()
+            .contours()
+            .filter(|c| !c.is_hyper())
+            .find_map(|c| {
+                let points: Vec<_> = c.points().collect();
+                let count = points.len();
+                let hit = points.iter().position(|p| p.id() == edited)?;
+                for (i, node) in points.iter().enumerate() {
+                    if !node.is_smooth()
+                        || node.point_type() != Curve
+                        || count < 6
+                        || (!c.is_closed() && (i < 3 || i + 3 >= count))
+                    {
+                        continue;
+                    }
+                    let prev = (i + count - 1) % count;
+                    let next = (i + 1) % count;
+                    if hit != i && hit != prev && hit != next {
+                        continue;
+                    }
+                    let p = |offset: usize| points[(i + offset) % count];
+                    let left = p(count - 2);
+                    let right = p(2);
+                    if p(count - 3).point_type() == OffCurve
+                        || p(3).point_type() != Curve
+                        || [left, points[prev], points[next], right]
+                            .iter()
+                            .any(|p| p.point_type() != OffCurve)
+                    {
+                        continue;
+                    }
+                    let (fixed, moving, far_fixed, far_moving) = if hit == prev {
+                        (points[prev], points[next], left, right)
+                    } else {
+                        (points[next], points[prev], right, left)
+                    };
+                    let origin = node.position();
+                    let offset = fixed.position() - origin;
+                    let length = offset.hypot();
+                    if length < 1e-8 {
+                        return None;
+                    }
+                    let direction = offset / length;
+                    // Endpoint curvature is proportional to the signed perpendicular distance
+                    // of the far control divided by the square of the near handle length.
+                    let a = direction.cross(far_fixed.position() - origin);
+                    let b = direction.cross(far_moving.position() - origin);
+                    let opposite = if a.abs() < 1e-8 && b.abs() < 1e-8 {
+                        moving.position().distance(origin)
+                    } else if a * b > 0.0 {
+                        length * (b / a).sqrt()
+                    } else {
+                        return None;
+                    };
+                    let target = origin - direction * opposite;
+                    if target.is_finite() {
+                        return Some((moving.id(), target));
+                    }
+                }
+                None
+            });
+        match update {
+            Some((id, target)) => self.set_point_position(id, target),
+            None => Ok(false),
+        }
+    }
+
     /// Balance the handles of selected cubic segments.
     ///
     /// Selecting any point belonging to an explicit cubic segment puts that segment in scope.

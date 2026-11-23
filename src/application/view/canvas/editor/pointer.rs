@@ -7,6 +7,36 @@ use super::tools::{hand, label, measure, metaball, pen, select, shapes, sketch, 
 use super::*;
 
 impl EditorWidget {
+    fn update_kern_hover(&mut self, ctx: &mut EventCtx<'_>, at: Point, alt: bool) {
+        let design = self.session.viewport.screen_to_design(at);
+        let over_card = self
+            .metrics_panel_origin()
+            .is_some_and(|(x, y)| Rect::new(x, y, x + PANEL_WIDTH, y + PANEL_HEIGHT).contains(at));
+        let hint = self
+            .text
+            .as_ref()
+            .filter(|_| !over_card && self.interp.is_none())
+            .and_then(|t| {
+                let index = t.kern_hit(design)?;
+                Some((index, t.buffer.drag_pair(index)?))
+            })
+            .map(|(index, (a, b, _, rtl, _))| {
+                (index, {
+                    if rtl {
+                        format!("{b} · {a}")
+                    } else {
+                        format!("{a} · {b}")
+                    }
+                })
+            });
+        if self.kern_hover != hint || self.kern_alt_down != alt {
+            self.kern_alt_down = alt;
+            self.kern_hover = hint;
+            ctx.request_cursor_icon_change();
+            ctx.request_render();
+        }
+    }
+
     /// Handle a pointer event.
     /// [`Widget::on_pointer_event`] calls this.
     pub(super) fn handle_pointer_event(&mut self, ctx: &mut EventCtx<'_>, event: &PointerEvent) {
@@ -37,16 +67,32 @@ impl EditorWidget {
             if let Some(boxes) = self.metric_boxes()
                 && let Some((field, _)) = boxes.iter().find(|(_, rect)| rect.contains(at))
             {
-                let edited = self.commit_metric();
+                if self.toggle_kern_scope(*field) {
+                    ctx.request_render();
+                    ctx.set_handled();
+                    return;
+                }
+                let edited = self.commit_card_field(ctx);
                 self.focus_metric(*field);
                 ctx.request_focus();
                 self.emit(ctx, edited);
                 ctx.set_handled();
                 return;
             }
+            if self.tool == Tool::Text && state.modifiers.alt() {
+                let design = self.session.viewport.screen_to_design(at);
+                if text::begin_kern(self, design) {
+                    ctx.request_focus();
+                    ctx.capture_pointer();
+                    ctx.request_cursor_icon_change();
+                    ctx.request_render();
+                }
+                ctx.set_handled();
+                return;
+            }
             // A click anywhere else puts the value away.
             if self.field.is_some() {
-                let edited = self.commit_metric();
+                let edited = self.commit_card_field(ctx);
                 self.field = None;
                 self.emit(ctx, edited);
             }
@@ -156,6 +202,9 @@ impl EditorWidget {
             }
             PointerEvent::Move(PointerUpdate { current, .. }) => {
                 let at = ctx.local_position(current.position);
+                if self.tool == Tool::Text && matches!(self.drag, Drag::None) {
+                    self.update_kern_hover(ctx, at, current.modifiers.alt());
+                }
                 let glyph_design = self.screen_to_glyph_design(at);
                 let glyph_affine = self.glyph_affine();
                 shapes::hover(self, ctx, at);
@@ -163,6 +212,15 @@ impl EditorWidget {
                 pen::hover(self, ctx, at, glyph_design);
                 label::hover(self, ctx, glyph_design);
                 match self.drag {
+                    Drag::Kern { .. } => {
+                        if let Some(event) =
+                            text::move_kern(self, self.session.viewport.screen_to_design(at).x)
+                        {
+                            ctx.submit_action::<EditorEvent>(event);
+                        }
+                        ctx.request_render();
+                        ctx.set_handled();
+                    }
                     Drag::Sketch { .. } => sketch::drag(self, ctx, glyph_design),
                     Drag::Metaballs { .. } => metaball::drag(self, ctx, glyph_design),
                     Drag::Image { .. }
@@ -187,6 +245,29 @@ impl EditorWidget {
             event @ (PointerEvent::Up(_) | PointerEvent::Cancel(_)) => {
                 let cancelled = matches!(event, PointerEvent::Cancel(_));
                 match self.drag {
+                    Drag::Kern { .. } => {
+                        if let PointerEvent::Up(up) = event {
+                            if up.button != Some(PointerButton::Primary) {
+                                return;
+                            }
+                            let pos = self
+                                .session
+                                .viewport
+                                .screen_to_design(ctx.local_position(up.state.position));
+                            let _ = text::move_kern(self, pos.x);
+                            self.update_kern_hover(
+                                ctx,
+                                ctx.local_position(up.state.position),
+                                up.state.modifiers.alt(),
+                            );
+                        }
+                        ctx.request_cursor_icon_change();
+                        if let Some(event) = text::finish_kern(self, cancelled) {
+                            ctx.submit_action::<EditorEvent>(event);
+                        }
+                        ctx.request_render();
+                        ctx.set_handled();
+                    }
                     Drag::Sketch { .. } => sketch::release(self, ctx),
                     Drag::Metaballs { .. } => metaball::release(self, ctx, cancelled),
                     Drag::Points { .. }

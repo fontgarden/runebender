@@ -118,10 +118,14 @@ pub(crate) struct ViewOptions {
     pub grid_lines: bool,
     /// The curvature comb.
     pub comb: bool,
+    /// Mirror comb teeth across the outline.
+    pub comb_flipped: bool,
     /// Stroke thickness rungs across the ink, colored on a warm ramp.
     pub thickness: bool,
     /// A dot per on-curve node, colored by continuity level.
     pub continuity: bool,
+    /// Match curvature at the edited smooth cubic join on pointer release.
+    pub maintain_g2: bool,
     /// Tint the outline and handles by segment length.
     pub colorize: bool,
     /// Label handle lengths.
@@ -138,6 +142,10 @@ pub(crate) struct ViewOptions {
     pub popcount: bool,
     /// Show every component's points in place, ready to edit.
     pub components: bool,
+    /// A fixed stroke width for the thickness scale, so glyphs compare on one ramp.
+    pub thickness_reference: Option<f64>,
+    /// Measure thickness on the calling thread, as a one-frame capture needs.
+    pub synchronous_analysis: bool,
 }
 
 impl ViewOptions {
@@ -216,8 +224,11 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
             sketch: self.sketch.clone(),
             sketch_source: self.sketch_source,
             sketch_image: None,
-            thickness_image: None,
-            text_thickness: Default::default(),
+            comb_peak: None,
+            heat: std::cell::RefCell::new(thickness::HeatCache::for_view(
+                ctx,
+                self.view.synchronous_analysis,
+            )),
             grid_dots: std::cell::RefCell::default(),
             preview_mode: self.preview_mode,
             ghosts: self.ghosts.clone(),
@@ -240,9 +251,13 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
             view: self.view,
             field: None,
             field_buf: String::new(),
+            kern_groups: [false; 2],
+            kern_typed: false,
             ai_box: None,
             ai_hover: None,
             ai_ghost: None,
+            kern_hover: None,
+            kern_alt_down: false,
             cursor_blink_elapsed_ns: 0,
             cursor_visible: true,
         };
@@ -288,6 +303,8 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
         }
         if !Arc::ptr_eq(&self.session, &prev.session) {
             if self.session.canonical_address() != prev.session.canonical_address() {
+                element.widget.comb_peak = None;
+                element.widget.field = None;
                 element.widget.ai_box = None;
                 element.widget.ai_hover = None;
                 element.widget.ai_ghost = None;
@@ -309,6 +326,23 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
             }
             dirty = true;
         }
+        if self.tool != prev.tool
+            || self.sketch_source != prev.sketch_source
+            || self.session.canonical_address() != prev.session.canonical_address()
+            || self
+                .text
+                .as_ref()
+                .zip(prev.text.as_ref())
+                .is_some_and(|(a, b)| !a.same_context(b) || a.replaced_text(b))
+        {
+            element.widget.kern_hover = None;
+            if matches!(element.widget.drag, Drag::Kern { .. })
+                && let Some(event) = tools::text::finish_kern(element.widget, true)
+            {
+                element.ctx.submit_action::<EditorEvent>(event);
+            }
+            element.ctx.request_cursor_icon_change();
+        }
         if self.tool != prev.tool {
             element.widget.hoi_drag = None;
             element.widget.tool = self.tool;
@@ -327,6 +361,7 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
             dirty = true;
         }
         if self.sketch_source != prev.sketch_source {
+            element.widget.field = None;
             element.widget.sketch_source = self.sketch_source;
             dirty = true;
         }
@@ -355,6 +390,9 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
             dirty = true;
         }
         if self.view != prev.view {
+            if !self.view.comb {
+                element.widget.comb_peak = None;
+            }
             element.widget.view = self.view;
             dirty = true;
         }
@@ -412,7 +450,12 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
                 }
                 // Same tool, new master or edited glyph: keep what has
                 // been typed and re-read the metrics.
-                (Some(inputs), Some(state)) => state.refresh(inputs),
+                (Some(inputs), Some(state)) => {
+                    if !matches!(element.widget.drag, Drag::Kern { .. }) {
+                        state.buffer.preview_drag_gap(None);
+                    }
+                    state.refresh(inputs);
+                }
                 (Some(inputs), None) => {
                     element.widget.text = Some(
                         crate::application::editor::tools::text::TextState::new(inputs),
@@ -437,9 +480,15 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
         &self,
         (): &mut Self::ViewState,
         message: &mut MessageCtx,
-        element: Mut<'_, Self::Element>,
+        mut element: Mut<'_, Self::Element>,
         app: &mut Workspace,
     ) -> MessageResult<()> {
+        if let Some(field) = message.take_message::<thickness::Completed>() {
+            if element.widget.heat.get_mut().accept(*field) {
+                element.ctx.request_paint_only();
+            }
+            return MessageResult::Nop;
+        }
         match message.take_message::<EditorEvent>() {
             Some(event) => {
                 // The island is the live source of truth while editing. Pull its

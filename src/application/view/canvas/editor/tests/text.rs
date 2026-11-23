@@ -322,3 +322,129 @@ fn select_double_click_activates_the_composed_sort() {
         "the clicked sort becomes the editable one"
     );
 }
+
+#[test]
+fn option_drag_in_text_moves_teh_toward_reh_and_commits_one_snapped_group_pair() {
+    let mut editor = widget();
+    let mut text = crate::application::editor::tools::text::TextState::test_buffer();
+    text.buffer = runebender::text::buffer::TextBuffer::new();
+    text.buffer.insert_glyph("reh-ar.fina", Some('ر'), 496.);
+    text.buffer.insert_glyph("teh-ar.init", Some('ت'), 260.);
+    text.buffer.set_kerning_model(
+        serde_json::from_value(serde_json::json!({
+            "rightGroups":{"reh-ar.fina":"public.kern1.reh"},
+            "leftGroups":{"teh-ar.init":"public.kern2.teh"}
+        }))
+        .unwrap(),
+    );
+    editor.text = Some(text);
+    editor.tool = Tool::Text;
+    let mut harness =
+        TestHarness::create_with_size(default_property_set(), editor.prepare(), (786, 510));
+    let (at, zoom, old_x) = harness.edit_root_widget(|r| {
+        let t = r.widget.text.as_ref().unwrap();
+        let layout = t.buffer.layout(t.line_height);
+        let x = layout.items.iter().find(|i| i.index == 1).unwrap().x;
+        (
+            r.widget.session.viewport.affine() * Point::new(x + 130., 200.),
+            r.widget.session.viewport.zoom,
+            x,
+        )
+    });
+    harness.mouse_move(at);
+    assert!(harness.edit_root_widget(|r| {
+        r.widget
+            .kern_hover
+            .as_ref()
+            .map(|(i, name)| (*i, name.as_str()))
+            == Some((1, "teh-ar.init · reh-ar.fina"))
+    }));
+    harness.focus_on(Some(harness.root_id()));
+
+    for (state, expected) in [(KeyState::Down, true), (KeyState::Up, false)] {
+        harness.process_text_event(TextEvent::Keyboard(
+            masonry::core::keyboard::KeyboardEvent {
+                state,
+                key: Key::Named(NamedKey::Alt),
+                ..Default::default()
+            },
+        ));
+        assert_eq!(
+            harness.edit_root_widget(|r| r.widget.kern_alt_down),
+            expected
+        );
+    }
+    harness.process_pointer_event(PointerEvent::Down(PointerButtonEvent {
+        pointer: PRIMARY_MOUSE,
+        button: Some(PointerButton::Primary),
+        state: PointerState {
+            position: PhysicalPosition::new(at.x, at.y),
+            modifiers: masonry::core::keyboard::Modifiers::ALT,
+            ..Default::default()
+        },
+    }));
+    harness.mouse_move(Point::new(at.x + 10. * zoom, at.y));
+    assert!(matches!(
+        harness.pop_action::<EditorEvent>(),
+        Some((EditorEvent::PreviewKern(Some((0, -8.0))), _))
+    ));
+    harness.process_text_event(TextEvent::Keyboard(
+        masonry::core::keyboard::KeyboardEvent {
+            state: KeyState::Down,
+            key: Key::Named(NamedKey::Escape),
+            ..Default::default()
+        },
+    ));
+    assert!(harness.edit_root_widget(|r| matches!(r.widget.drag, Drag::None)));
+    assert!(matches!(
+        harness.pop_action::<EditorEvent>(),
+        Some((EditorEvent::PreviewKern(None), _))
+    ));
+    harness.process_pointer_event(PointerEvent::Down(PointerButtonEvent {
+        pointer: PRIMARY_MOUSE,
+        button: Some(PointerButton::Primary),
+        state: PointerState {
+            position: PhysicalPosition::new(at.x, at.y),
+            modifiers: masonry::core::keyboard::Modifiers::ALT,
+            ..Default::default()
+        },
+    }));
+    let end = Point::new(at.x + 13. * zoom, at.y);
+    harness.mouse_move(end);
+    let moved = harness.edit_root_widget(|r| {
+        let t = r.widget.text.as_ref().unwrap();
+        t.buffer
+            .layout(t.line_height)
+            .items
+            .into_iter()
+            .find(|i| i.index == 1)
+            .unwrap()
+            .x
+    });
+    assert_eq!(moved - old_x, 16.);
+    assert!(matches!(
+        harness.pop_action::<EditorEvent>(),
+        Some((EditorEvent::PreviewKern(Some((0, -16.0))), _))
+    ));
+    assert!(harness.pop_action::<EditorEvent>().is_none());
+    harness.process_pointer_event(PointerEvent::Up(PointerButtonEvent {
+        pointer: PRIMARY_MOUSE,
+        button: Some(PointerButton::Primary),
+        state: PointerState {
+            position: PhysicalPosition::new(end.x, end.y),
+            ..Default::default()
+        },
+    }));
+    harness.edit_root_widget(|r| {
+        let text = r.widget.text.as_ref().unwrap();
+        let layout = text.buffer.layout(text.line_height);
+        let reh = layout.items.iter().find(|i| i.index == 0).unwrap();
+        assert_eq!(reh.spacing_before, -16.);
+        assert_eq!(reh.nominal_width, 496.);
+        assert_eq!(layout.items.iter().find(|i| i.index == 1).unwrap().x, moved);
+    });
+    assert!(
+        matches!(harness.pop_action::<EditorEvent>(), Some((EditorEvent::KernPair(a,b,-16.),_)) if a=="public.kern1.reh" && b=="public.kern2.teh")
+    );
+    assert!(harness.pop_action::<EditorEvent>().is_none());
+}

@@ -129,23 +129,44 @@ pub fn thickness_field(outline: &BezPath, cells: usize) -> Option<ThicknessField
         return None;
     }
     let cells = cells.clamp(8, 2048) as f64;
-    field_at_density(outline, bounds, bounds.size().max_side() / cells)
+    field_at_density(outline, bounds, bounds.size().max_side() / cells, &|| false)
 }
 
 /// Sample in glyph-local coordinates at 512 cells per em in both the editor and proofs.
 pub fn glyph_thickness_field(outline: &BezPath, units_per_em: f64) -> Option<ThicknessField> {
+    sampled_glyph_thickness(outline, units_per_em, 512, &|| false)
+}
+
+/// Measure at a chosen density, stopping between scanlines when a newer edit supersedes it.
+pub fn sampled_glyph_thickness(
+    outline: &BezPath,
+    units_per_em: f64,
+    samples_per_em: u16,
+    cancelled: &impl Fn() -> bool,
+) -> Option<ThicknessField> {
     let bounds = outline.bounding_box();
-    if !units_per_em.is_finite()
+    if samples_per_em == 0
+        || !units_per_em.is_finite()
         || units_per_em <= 0.0
         || bounds.is_zero_area()
         || !bounds.is_finite()
     {
         return None;
     }
-    field_at_density(outline, bounds, units_per_em / 512.0)
+    field_at_density(
+        outline,
+        bounds,
+        units_per_em / f64::from(samples_per_em),
+        cancelled,
+    )
 }
 
-fn field_at_density(outline: &BezPath, bounds: Rect, cell: f64) -> Option<ThicknessField> {
+fn field_at_density(
+    outline: &BezPath,
+    bounds: Rect,
+    cell: f64,
+    cancelled: &impl Fn() -> bool,
+) -> Option<ThicknessField> {
     // Cell centers sit off integer coordinates, so a scanline never passes
     // exactly through a node, where a crossing count is ambiguous.
     let pad = cell * 1.5 + cell * 0.207;
@@ -176,8 +197,11 @@ fn field_at_density(outline: &BezPath, bounds: Rect, cell: f64) -> Option<Thickn
         return None;
     }
     let squared = distance_transform(&inside, width, height);
-    let segments: Vec<PathSeg> = outline.segments().collect();
-    let ridge = ridge(&squared, width, height, &grid, &segments);
+    let segments: Vec<_> = outline
+        .segments()
+        .map(|seg| (seg.bounding_box(), seg))
+        .collect();
+    let ridge = ridge(&squared, width, height, &grid, &segments, cancelled)?;
     let mut thickness = cover(&ridge, &inside, &grid);
     fill_uncovered(&mut thickness, &inside, &grid);
 
@@ -371,10 +395,14 @@ fn ridge(
     width: usize,
     height: usize,
     grid: &Grid,
-    segments: &[PathSeg],
-) -> Vec<Disc> {
+    segments: &[(Rect, PathSeg)],
+    cancelled: &impl Fn() -> bool,
+) -> Option<Vec<Disc>> {
     let mut discs = Vec::new();
     for j in 0..height {
+        if cancelled() {
+            return None;
+        }
         for i in 0..width {
             let r = squared[j * width + i].sqrt();
             if r <= 0.0 {
@@ -411,7 +439,7 @@ fn ridge(
             discs.push(disc);
         }
     }
-    discs
+    Some(discs)
 }
 
 /// Smallest angle, seen from a disc's center, between the outline points it
@@ -429,7 +457,12 @@ const MIN_SEPARATION_RADIANS: f64 = 100.0_f64.to_radians();
 /// The distance to the outline is locally maximal on the medial axis, so a
 /// pattern search climbing that function from the cell center lands on the
 /// axis to within a fraction of a cell, and the distance there is the radius.
-fn maximal_disc(start: Point, estimate: f64, cell: f64, segments: &[PathSeg]) -> (Disc, f64) {
+fn maximal_disc(
+    start: Point,
+    estimate: f64,
+    cell: f64,
+    segments: &[(Rect, PathSeg)],
+) -> (Disc, f64) {
     const LEVELS: u32 = 4;
     const MOVES_PER_LEVEL: usize = 8;
     const DIRECTIONS: [(f64, f64); 4] = [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)];
@@ -478,7 +511,7 @@ fn separation_angle(
     radius: f64,
     reach: f64,
     cell: f64,
-    segments: &[PathSeg],
+    segments: &[(Rect, PathSeg)],
 ) -> f64 {
     let window = Rect::from_center_size(center, (2.0 * reach, 2.0 * reach));
     let overlaps =
@@ -486,8 +519,8 @@ fn separation_angle(
     let tolerance = radius + cell * 0.3;
     let touches: Vec<kurbo::Vec2> = segments
         .iter()
-        .filter(|seg| overlaps(seg.bounding_box()))
-        .filter_map(|seg| {
+        .filter(|(bounds, _)| overlaps(*bounds))
+        .filter_map(|(_, seg)| {
             let nearest = seg.nearest(center, 1e-6);
             (nearest.distance_sq.sqrt() <= tolerance).then(|| seg.eval(nearest.t) - center)
         })
@@ -504,17 +537,24 @@ fn separation_angle(
 
 /// Exact distance from `point` to the outline, looking only at segments
 /// whose bounding box comes within `reach`.
-fn boundary_distance(point: Point, reach: f64, segments: &[PathSeg]) -> Option<f64> {
+fn boundary_distance(point: Point, reach: f64, segments: &[(Rect, PathSeg)]) -> Option<f64> {
     let window = Rect::from_center_size(point, (2.0 * reach, 2.0 * reach));
     // A plain overlap test: a horizontal or vertical line has a zero-area
     // bounding box, which `Rect::intersect` cannot tell from a miss.
     let overlaps =
         |b: Rect| b.x1 >= window.x0 && b.x0 <= window.x1 && b.y1 >= window.y0 && b.y0 <= window.y1;
-    segments
-        .iter()
-        .filter(|seg| overlaps(seg.bounding_box()))
-        .map(|seg| seg.nearest(point, 1e-6).distance_sq.sqrt())
-        .min_by(f64::total_cmp)
+    let mut best_sq = f64::INFINITY;
+    for (bounds, seg) in segments {
+        if !overlaps(*bounds) {
+            continue;
+        }
+        let dx = (bounds.x0 - point.x).max(point.x - bounds.x1).max(0.0);
+        let dy = (bounds.y0 - point.y).max(point.y - bounds.y1).max(0.0);
+        if dx * dx + dy * dy < best_sq {
+            best_sq = best_sq.min(seg.nearest(point, 1e-6).distance_sq);
+        }
+    }
+    best_sq.is_finite().then(|| best_sq.sqrt())
 }
 
 /// Integer centers in a closed interval, clipped to the raster.

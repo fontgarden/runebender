@@ -2265,3 +2265,21 @@ fn rtl_preview_layout_breaks_kerning_across_line_breaks_like_xilem() {
     assert_eq!(preview_x(&preview, 0), 500.0);
     assert_eq!(preview_x(&preview, 2), 0.0);
 }
+
+#[test]
+fn active_visual_kern_uses_logical_pair_for_the_neighbor_on_the_left_in_arabic() {
+    let mut buffer = TextBuffer::new();
+    buffer.insert_glyph("reh-ar.fina", Some('ر'), 496.0);
+    buffer.insert_glyph("teh-ar.init", Some('ت'), 260.0);
+    buffer.activate_sort(0);
+    assert_eq!(
+        buffer.active_visual_kern(true),
+        Some(("reh-ar.fina", "teh-ar.init", 0.0))
+    );
+    assert_eq!(buffer.active_visual_kern(false), None);
+    buffer.activate_sort(1);
+    assert_eq!(
+        buffer.active_visual_kern(false),
+        Some(("reh-ar.fina", "teh-ar.init", 0.0))
+    );
+}

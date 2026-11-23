@@ -251,16 +251,18 @@ pub(crate) const COORD_PICKER_GAP: f64 =
 pub(crate) const COORD_LABEL_WIDTH: f64 = 14.0;
 
 /// Floating metrics-card geometry, measured against the Gray reference capture.
-pub(crate) const METRICS_CARD_WIDTH: f64 = 320.0;
-pub(crate) const METRICS_CARD_HEIGHT: f64 = 58.0;
+pub(crate) const METRICS_CARD_WIDTH: f64 = 360.0;
+pub(crate) const METRICS_CARD_HEIGHT: f64 = 82.0;
 pub(crate) const METRICS_CARD_HEADER: f64 = 22.0;
 pub(crate) const METRICS_CARD_INSET: f64 = 8.0;
 pub(crate) const METRICS_CARD_BOTTOM: f64 = 12.0;
 pub(crate) const METRICS_FIELD_HEIGHT: f64 = 20.0;
-pub(crate) const METRICS_FIELD_WIDTH: f64 = 56.0;
+pub(crate) const METRICS_FIELD_WIDTH: f64 =
+    (METRICS_CARD_WIDTH - 2.0 * METRICS_CARD_INSET - 4.0 * METRICS_FIELD_GAP) / 5.0;
 pub(crate) const METRICS_FIELD_GAP: f64 = 6.0;
-/// Skip the left kerning-group field before the three editable metrics.
-pub(crate) const METRICS_FIELD_START: f64 = 70.0;
+/// Skip the left kerning field before the three editable metrics.
+pub(crate) const METRICS_FIELD_START: f64 =
+    METRICS_CARD_INSET + METRICS_FIELD_WIDTH + METRICS_FIELD_GAP;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Space {

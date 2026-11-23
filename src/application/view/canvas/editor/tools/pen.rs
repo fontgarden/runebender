@@ -21,7 +21,7 @@ pub(in super::super) fn press(editor: &mut EditorWidget, ctx: &mut EventCtx<'_>,
             HIT_RADIUS_PX / editor.session.viewport.zoom,
         );
     if near_first && editor.session.pen_is_active() {
-        editor.session.pen_close();
+        editor.session.pen_close(editor.view.maintain_g2);
         editor.drag = Drag::None;
         editor.emit(ctx, true);
     } else if on_segment {
@@ -143,6 +143,12 @@ pub(in super::super) fn release(
                 .cancel_pen_gesture(*point_count, *active_contour);
         } else if !dragging {
             editor.session.pen_corner(origin.x, origin.y);
+        }
+        if !cancelled
+            && editor.view.maintain_g2
+            && let Some(id) = editor.session.pen_checkpoint().1
+        {
+            editor.session.constrain_pen_join(id, false);
         }
         editor.drag = Drag::None;
         editor.emit(ctx, !cancelled);

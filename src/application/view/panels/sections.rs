@@ -113,7 +113,11 @@ pub(crate) fn layers_section(app: &Workspace) -> Option<impl WidgetView<Workspac
     });
     Some(recipes::section(
         app,
-        "Layers",
+        if matches!(app.mode, Mode::Editor(_)) {
+            "Editor Layers"
+        } else {
+            "Layers"
+        },
         "Layers",
         xcolumn(Region::List, (xcolumn(Region::List, rows), rename, footer)),
     ))
@@ -222,7 +226,10 @@ pub(crate) fn masters_section(app: &Workspace) -> Option<impl WidgetView<Workspa
 }
 
 /// Axes: one labeled slider per designspace axis, in the inspector.
-pub(crate) fn axes_section(app: &Workspace) -> Option<impl WidgetView<Workspace> + use<>> {
+pub(crate) fn axes_section(
+    app: &Workspace,
+    key: &'static str,
+) -> Option<impl WidgetView<Workspace> + use<>> {
     if app.font.axes.is_empty() {
         return None;
     }
@@ -300,7 +307,7 @@ pub(crate) fn axes_section(app: &Workspace) -> Option<impl WidgetView<Workspace>
     });
     Some(recipes::section(
         app,
-        "Axes",
+        key,
         "Axes",
         xcolumn(Region::Form, (xcolumn(Region::Form, rows), hint)),
     ))
@@ -733,40 +740,49 @@ pub(crate) fn coordinates_section(app: &Workspace) -> impl WidgetView<Workspace>
 pub(crate) fn curves_section(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     let pal = &app.palette;
     let view = app.view;
+    let curve_toggle = |name: &str, active: bool, on_click: fn(&mut Workspace)| {
+        recipes::toggle(pal, name.into(), active, on_click)
+    };
     recipes::section(
         app,
         "Curves",
         "Curves",
-        xrow(
-            Region::Inline,
+        xcolumn(
+            Region::Form,
             (
-                recipes::toggle(
-                    pal,
-                    "Curvature Comb".into(),
-                    view.comb,
-                    |app: &mut Workspace| {
-                        app.view.comb = !app.view.comb;
-                    },
-                )
-                .flex(1.0),
-                recipes::toggle(
-                    pal,
-                    "Thickness".into(),
-                    view.thickness,
-                    |app: &mut Workspace| {
-                        app.view.thickness = !app.view.thickness;
-                    },
-                )
-                .flex(1.0),
-                recipes::toggle(
-                    pal,
-                    "Continuity".into(),
-                    view.continuity,
-                    |app: &mut Workspace| {
-                        app.view.continuity = !app.view.continuity;
-                    },
-                )
-                .flex(1.0),
+                xrow(
+                    Region::Inline,
+                    (
+                        curve_toggle("Curvature Comb", view.comb, |app: &mut Workspace| {
+                            app.view.comb = !app.view.comb;
+                        })
+                        .flex(1.0),
+                        curve_toggle("Thickness", view.thickness, |app: &mut Workspace| {
+                            app.view.thickness = !app.view.thickness;
+                        })
+                        .flex(1.0),
+                    ),
+                ),
+                xrow(
+                    Region::Inline,
+                    (
+                        curve_toggle("Continuity", view.continuity, |app: &mut Workspace| {
+                            app.view.continuity = !app.view.continuity;
+                        })
+                        .flex(1.0),
+                        curve_toggle("Maintain G2", view.maintain_g2, |app: &mut Workspace| {
+                            app.view.maintain_g2 = !app.view.maintain_g2;
+                        })
+                        .flex(1.0),
+                    ),
+                ),
+                view.comb.then(|| {
+                    curve_toggle(
+                        "Flip Comb Side",
+                        view.comb_flipped,
+                        |app: &mut Workspace| app.view.comb_flipped = !app.view.comb_flipped,
+                    )
+                }),
             ),
         ),
     )

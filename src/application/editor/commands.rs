@@ -257,7 +257,7 @@ impl Workspace {
             }
         } else if was_editor && let Some(index) = self.font.index_of(&self.session.glyph_name) {
             self.selected = Some(index);
-            self.mode = Mode::Editor(index);
+            self.enter_editor_mode(index);
         }
     }
 

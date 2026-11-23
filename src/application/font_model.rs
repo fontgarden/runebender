@@ -459,8 +459,8 @@ impl FontModel {
             .map(|ax| match loc.and_then(|l| l.get(&ax.name)) {
                 // For a flat terminal axis map, the inverse can also return
                 // the start of the plateau. Show the master's endpoint.
-                Some(&value) if value == 1.0 => ax.max,
-                Some(&value) if value == -1.0 => ax.min,
+                Some(&1.0) => ax.max,
+                Some(&-1.0) => ax.min,
                 Some(value) => ax.normalized_to_user(*value),
                 None => ax.default,
             })

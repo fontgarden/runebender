@@ -375,7 +375,7 @@ impl Workspace {
         if matches!(self.mode, Mode::Editor(_))
             && let Some(index) = self.selected
         {
-            self.mode = Mode::Editor(index);
+            self.enter_editor_mode(index);
         }
         self.unicode_buf = active
             .first()
@@ -430,7 +430,7 @@ impl Workspace {
         if let Some(i) = self.font.index_of(new) {
             self.selected = Some(i);
             if matches!(self.mode, Mode::Editor(_)) {
-                self.mode = Mode::Editor(i);
+                self.enter_editor_mode(i);
                 if let Some(sess) = Session::new_from_model(&self.font, new) {
                     self.session = Arc::new(sess);
                 }

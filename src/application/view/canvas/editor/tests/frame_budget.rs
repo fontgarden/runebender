@@ -62,7 +62,7 @@ fn frame_budget_report() {
             cost("background", || sections::background_section(app));
             cost("shaping", || sections::shaping_section(app));
             cost("related", || editor_info::related_section(app));
-            cost("axes", || sections::axes_section(app));
+            cost("axes", || sections::axes_section(app, "Axes"));
             cost("measure", || sections::measure_section(app));
             cost("interpolation status", || app.interpolation_status());
             cost("preview request", || app.font.preview_font());

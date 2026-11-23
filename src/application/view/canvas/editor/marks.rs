@@ -103,12 +103,19 @@ pub(super) fn grid_alphas(zoom: f64) -> (f64, f64) {
     )
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum GridWindow {
+    Circle,
+    Square,
+    Diamond,
+}
+
 /// Build the part of one design-grid level visible through a point marker.
 pub(super) fn point_grid_marks(
     affine: Affine,
     center: Point,
     radius: f64,
-    square: bool,
+    window: GridWindow,
     spacing: f64,
     dot_size: f64,
     grid_lines: bool,
@@ -125,12 +132,10 @@ pub(super) fn point_grid_marks(
     let mut marks = kurbo::BezPath::new();
 
     if grid_lines {
-        let half_at = |distance: f64| {
-            if square {
-                radius
-            } else {
-                (radius * radius - distance * distance).max(0.0).sqrt()
-            }
+        let half_at = |distance: f64| match window {
+            GridWindow::Square => radius,
+            GridWindow::Diamond => radius - distance.abs(),
+            GridWindow::Circle => (radius * radius - distance * distance).max(0.0).sqrt(),
         };
         for x_index in xs.clone() {
             let x = (affine * Point::new(x_index as f64 * spacing, 0.0)).x;
@@ -154,10 +159,10 @@ pub(super) fn point_grid_marks(
                 let at = affine * Point::new(x_index as f64 * spacing, y_index as f64 * spacing);
                 let dx = at.x - center.x;
                 let dy = at.y - center.y;
-                let inside = if square {
-                    dx.abs() <= radius && dy.abs() <= radius
-                } else {
-                    dx * dx + dy * dy <= radius * radius
+                let inside = match window {
+                    GridWindow::Square => dx.abs() <= radius && dy.abs() <= radius,
+                    GridWindow::Diamond => dx.abs() + dy.abs() <= radius,
+                    GridWindow::Circle => dx * dx + dy * dy <= radius * radius,
                 };
                 if inside {
                     push_grid_dot(&mut marks, at, dot_size);
