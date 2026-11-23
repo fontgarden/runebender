@@ -209,22 +209,19 @@ impl Cubic {
 
     /// Incoming tangent direction at the end (`t=1`).
     fn tangent_end(&self) -> Vec2 {
-        let t = self.p3 - self.p2;
-        if t.hypot() > 1e-9 {
-            t
-        } else {
-            self.p3 - self.p0
-        }
+        // A retracted handle leaves the tangent to the next control point, then to the chord.
+        [self.p3 - self.p2, self.p3 - self.p1, self.p3 - self.p0]
+            .into_iter()
+            .find(|tangent| tangent.hypot() > 1e-9)
+            .unwrap_or(Vec2::ZERO)
     }
 
     /// Outgoing tangent direction at the start (`t=0`).
     fn tangent_start(&self) -> Vec2 {
-        let t = self.p1 - self.p0;
-        if t.hypot() > 1e-9 {
-            t
-        } else {
-            self.p3 - self.p0
-        }
+        [self.p1 - self.p0, self.p2 - self.p0, self.p3 - self.p0]
+            .into_iter()
+            .find(|tangent| tangent.hypot() > 1e-9)
+            .unwrap_or(Vec2::ZERO)
     }
 }
 
@@ -462,6 +459,11 @@ pub fn harmonize(
 /// `(p1, p2)`, or `None` at inflections and degenerate segments.
 pub fn balance(p0: Point, p1: Point, p2: Point, p3: Point) -> Option<(Point, Point)> {
     let s = line_intersect(p0, p1, p3, p2)?;
+    // On an S curve the handle lines meet behind a handle.
+    // A move toward that point would turn the handle around, so the segment is left alone.
+    if (s - p0).dot(p1 - p0) <= 0.0 || (s - p3).dot(p2 - p3) <= 0.0 {
+        return None;
+    }
     let sd = (s - p0).hypot();
     let ed = (s - p3).hypot();
     if sd <= 1e-9 || ed <= 1e-9 {
@@ -866,6 +868,42 @@ mod tests {
             after < before * 0.3,
             "harmonize should nearly equalize curvature: {before} -> {after}"
         );
+    }
+
+    /// With the last handle retracted onto the node, the end tangent runs from the other
+    /// handle, not along the chord, so a smooth join is not reported as a kink.
+    #[test]
+    fn a_retracted_handle_takes_its_tangent_from_the_next_control_point() {
+        let cubic = Cubic {
+            p0: Point::new(0.0, 0.0),
+            p1: Point::new(0.0, 60.0),
+            p2: Point::new(100.0, 100.0),
+            p3: Point::new(100.0, 100.0),
+            straight: false,
+            start_smooth: true,
+        };
+        assert_eq!(cubic.tangent_end(), Vec2::new(100.0, 40.0));
+        let reversed = Cubic {
+            p0: cubic.p3,
+            p1: cubic.p2,
+            p2: cubic.p1,
+            p3: cubic.p0,
+            ..cubic
+        };
+        assert_eq!(reversed.tangent_start(), Vec2::new(-100.0, -40.0));
+    }
+
+    /// The handle lines of an S curve meet behind the first handle.
+    /// Balance once returned that handle turned around, at (-30, -40).
+    #[test]
+    fn balance_leaves_an_s_curve_alone() {
+        let balanced = balance(
+            Point::new(0.0, 0.0),
+            Point::new(30.0, 40.0),
+            Point::new(60.0, -40.0),
+            Point::new(100.0, 0.0),
+        );
+        assert_eq!(balanced, None);
     }
 
     #[test]
