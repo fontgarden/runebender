@@ -79,6 +79,10 @@ use crate::application::design::{
 const HIT_RADIUS_PX: f64 = 8.0;
 const CURSOR_BLINK_HALF_CYCLE_NS: u64 = 500_000_000;
 const CURSOR_BLINK_CYCLE_NS: u64 = CURSOR_BLINK_HALF_CYCLE_NS * 2;
+/// The caret stops its blink this long after the last input and stays solid.
+/// Each animation frame redraws the whole window, so an idle Text tool must not request them
+/// without end. The upstream `TextArea` uses the same ten seconds.
+const CURSOR_BLINK_TIMEOUT_NS: u64 = 10_000_000_000;
 
 fn cursor_visible_at(elapsed_ns: u64) -> bool {
     elapsed_ns.rem_euclid(CURSOR_BLINK_CYCLE_NS) <= CURSOR_BLINK_HALF_CYCLE_NS
@@ -446,6 +450,12 @@ impl Widget for EditorWidget {
         _props: &mut PropertiesMut<'_>,
         event: &TextEvent,
     ) {
+        if matches!(event, TextEvent::WindowFocusChange(true)) && self.tool == Tool::Text {
+            self.cursor_blink_elapsed_ns = 0;
+            self.cursor_visible = true;
+            ctx.request_anim_frame();
+            ctx.request_paint_only();
+        }
         self.handle_text_event(ctx, event);
     }
 
@@ -475,6 +485,12 @@ impl Widget for EditorWidget {
             ctx.request_render();
             ctx.request_cursor_icon_change();
         }
+        if matches!(event, Update::FocusChanged(true)) && self.tool == Tool::Text {
+            self.cursor_blink_elapsed_ns = 0;
+            self.cursor_visible = true;
+            ctx.request_anim_frame();
+            ctx.request_paint_only();
+        }
         if matches!(event, Update::HoveredChanged(false)) && self.kern_hover.take().is_some() {
             ctx.request_render();
         }
@@ -490,10 +506,19 @@ impl Widget for EditorWidget {
             return;
         }
 
-        self.cursor_blink_elapsed_ns = self
-            .cursor_blink_elapsed_ns
-            .saturating_add(interval)
-            .rem_euclid(CURSOR_BLINK_CYCLE_NS);
+        // Without focus, or after the timeout, the caret stays solid and no frame is requested.
+        // Input and a return of focus set the elapsed time to zero and request a frame again.
+        let blinking = ctx.is_window_focused()
+            && ctx.is_focus_target()
+            && self.cursor_blink_elapsed_ns < CURSOR_BLINK_TIMEOUT_NS;
+        if !blinking {
+            if !self.cursor_visible {
+                self.cursor_visible = true;
+                ctx.request_paint_only();
+            }
+            return;
+        }
+        self.cursor_blink_elapsed_ns = self.cursor_blink_elapsed_ns.saturating_add(interval);
         // Keep the exact half-cycle boundary visible. Headless proof renders
         // after a 500 ms settle frame, while a real display crosses the
         // boundary on its following frame.

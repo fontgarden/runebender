@@ -34,6 +34,42 @@ fn text_cursor_animation_hides_then_resets_on_input() {
     );
 }
 
+/// An animation frame redraws the whole window, so the caret must not blink without end.
+/// After ten seconds with no input it stays solid, and input starts the blink again.
+#[test]
+fn text_cursor_stops_its_blink_after_the_timeout_and_restarts_on_input() {
+    use masonry::core::keyboard::{Code, KeyboardEvent};
+
+    let mut editor = widget();
+    editor.tool = Tool::Text;
+    editor.text = Some(crate::application::editor::tools::text::TextState::test_buffer());
+    let mut harness =
+        TestHarness::create_with_size(default_property_set(), editor.prepare(), (600, 400));
+    harness.focus_on(Some(harness.root_id()));
+
+    for _ in 0..43 {
+        harness.animate_ms(250);
+    }
+    assert!(harness.edit_root_widget(|root| root.widget.cursor_visible));
+    let stopped = harness.edit_root_widget(|root| root.widget.cursor_blink_elapsed_ns);
+    harness.animate_ms(700);
+    assert!(harness.edit_root_widget(|root| root.widget.cursor_visible));
+    assert_eq!(
+        harness.edit_root_widget(|root| root.widget.cursor_blink_elapsed_ns),
+        stopped,
+        "no frame runs after the timeout"
+    );
+
+    harness.process_text_event(TextEvent::Keyboard(KeyboardEvent {
+        state: KeyState::Down,
+        key: Key::Named(NamedKey::ArrowLeft),
+        code: Code::ArrowLeft,
+        ..KeyboardEvent::default()
+    }));
+    harness.animate_ms(501);
+    assert!(!harness.edit_root_widget(|root| root.widget.cursor_visible));
+}
+
 #[test]
 fn outline_tools_use_the_active_sorts_origin() {
     let mut editor = widget();
