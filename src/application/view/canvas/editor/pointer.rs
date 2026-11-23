@@ -291,7 +291,9 @@ impl EditorWidget {
             PointerEvent::Scroll(PointerScrollEvent { delta, state, .. }) => {
                 let at = ctx.local_position(state.position);
                 let dy = match delta {
-                    ScrollDelta::PixelDelta(p) => p.y,
+                    // A pixel delta is in device pixels, so one gesture zooms the same
+                    // amount at each display scale.
+                    ScrollDelta::PixelDelta(p) => p.y / ctx.scale_factor(),
                     ScrollDelta::LineDelta(_, y) => f64::from(*y) * 20.0,
                     _ => 0.0,
                 };

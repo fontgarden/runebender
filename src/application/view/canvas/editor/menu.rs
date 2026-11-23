@@ -142,7 +142,9 @@ impl EditorWidget {
         );
         let menu = NewWidget::new(menu);
         self.menu = Some(menu.id());
-        ctx.create_layer(LayerType::Other, menu, ctx.to_window(at));
+        // Attached, so Masonry removes the menu with this canvas. A plain layer stayed on
+        // screen with no way to close it when the canvas left the tree first.
+        ctx.create_attached_layer(LayerType::Other, menu, ctx.to_window(at));
     }
 
     /// Apply a context-menu choice. Called from the menu layer, which is

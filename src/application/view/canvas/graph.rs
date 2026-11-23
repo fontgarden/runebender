@@ -499,7 +499,9 @@ impl GraphWidget {
         );
         let menu = NewWidget::new(menu);
         self.menu = Some(menu.id());
-        ctx.create_layer(LayerType::Other, menu, ctx.to_window(local));
+        // Attached, so Masonry removes the menu with this canvas. A plain layer stayed on
+        // screen with no way to close it when the canvas left the tree first.
+        ctx.create_attached_layer(LayerType::Other, menu, ctx.to_window(local));
     }
 
     /// The first input of a node that takes `kind`, by the node's type.
@@ -804,6 +806,10 @@ impl Widget for GraphWidget {
                 transform * Point::new(content.x1, content.y1),
             );
             let child_size = Size::new(screen.width().max(1.0), screen.height().max(1.0));
+            // Masonry forbids the layout of a child that this pass has stashed.
+            if stashed {
+                continue;
+            }
             if let Some(editor) = self.code_editors.get_mut(&node.id) {
                 ctx.run_layout(editor, child_size);
                 ctx.place_child(editor, screen.origin());
@@ -1410,7 +1416,9 @@ impl Widget for GraphWidget {
             PointerEvent::Scroll(PointerScrollEvent { delta, state, .. }) => {
                 let at = ctx.local_position(state.position);
                 let dy = match delta {
-                    ScrollDelta::PixelDelta(p) => p.y,
+                    // A pixel delta is in device pixels, so one gesture zooms the same
+                    // amount at each display scale.
+                    ScrollDelta::PixelDelta(p) => p.y / ctx.scale_factor(),
                     ScrollDelta::LineDelta(_, y) => f64::from(*y) * 20.0,
                     _ => 0.0,
                 };
