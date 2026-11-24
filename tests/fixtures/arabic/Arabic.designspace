@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<designspace format="5.0">
+  <axes>
+    <axis name="Weight" tag="wght" minimum="400" default="400" maximum="700"/>
+  </axes>
+  <sources>
+    <source filename="Arabic-Regular.ufo" familyname="Runebender Arabic Fixture" stylename="Regular">
+      <location><dimension name="Weight" xvalue="400"/></location>
+    </source>
+    <source filename="Arabic-Bold.ufo" familyname="Runebender Arabic Fixture" stylename="Bold">
+      <location><dimension name="Weight" xvalue="700"/></location>
+    </source>
+  </sources>
+  <instances>
+    <instance name="Regular" stylename="Regular"><location><dimension name="Weight" xvalue="400"/></location></instance>
+    <instance name="Bold" stylename="Bold"><location><dimension name="Weight" xvalue="700"/></location></instance>
+  </instances>
+</designspace>

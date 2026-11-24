@@ -1,0 +1,27 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<glyph name="heh-ar" format="2">
+  <advance width="480" />
+  <unicode hex="0647" />
+  <anchor name="top" x="240" y="440" />
+  <anchor name="bottom" x="240" y="-140" />
+  <outline>
+    <contour>
+      <point x="60" y="0" type="line" />
+      <point x="60" y="120" type="line" />
+      <point x="420" y="120" type="line" />
+      <point x="420" y="0" type="line" />
+    </contour>
+    <contour>
+      <point x="80" y="0" type="line" />
+      <point x="80" y="380" type="line" />
+      <point x="400" y="380" type="line" />
+      <point x="400" y="0" type="line" />
+    </contour>
+    <contour>
+      <point x="280" y="120" type="line" />
+      <point x="280" y="260" type="line" />
+      <point x="200" y="260" type="line" />
+      <point x="200" y="120" type="line" />
+    </contour>
+  </outline>
+</glyph>

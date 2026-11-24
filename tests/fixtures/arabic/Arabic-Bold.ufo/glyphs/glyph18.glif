@@ -1,0 +1,24 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<glyph name="beh-ar.init" format="2">
+  <advance width="380" />
+  <anchor name="top" x="160" y="320" />
+  <anchor name="bottom" x="160" y="-260" />
+  <outline>
+    <contour>
+      <point x="0" y="0" type="line" />
+      <point x="0" y="120" type="line" />
+      <point x="160" y="120" type="line" />
+      <point x="160" y="220" type="line" />
+      <point x="280" y="220" type="line" />
+      <point x="280" y="120" type="line" />
+      <point x="320" y="120" type="line" />
+      <point x="320" y="0" type="line" />
+    </contour>
+    <contour>
+      <point x="100" y="-210" type="line" />
+      <point x="100" y="-90" type="line" />
+      <point x="220" y="-90" type="line" />
+      <point x="220" y="-210" type="line" />
+    </contour>
+  </outline>
+</glyph>

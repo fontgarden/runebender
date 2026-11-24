@@ -1,0 +1,29 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<glyph name="beh-ar" format="2">
+  <advance width="520" />
+  <unicode hex="0628" />
+  <anchor name="top" x="260" y="320" />
+  <anchor name="bottom" x="260" y="-260" />
+  <outline>
+    <contour>
+      <point x="60" y="0" type="line" />
+      <point x="60" y="80" type="line" />
+      <point x="100" y="80" type="line" />
+      <point x="100" y="220" type="line" />
+      <point x="180" y="220" type="line" />
+      <point x="180" y="80" type="line" />
+      <point x="340" y="80" type="line" />
+      <point x="340" y="220" type="line" />
+      <point x="420" y="220" type="line" />
+      <point x="420" y="80" type="line" />
+      <point x="460" y="80" type="line" />
+      <point x="460" y="0" type="line" />
+    </contour>
+    <contour>
+      <point x="220" y="-190" type="line" />
+      <point x="220" y="-110" type="line" />
+      <point x="300" y="-110" type="line" />
+      <point x="300" y="-190" type="line" />
+    </contour>
+  </outline>
+</glyph>

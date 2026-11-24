@@ -1,0 +1,35 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<glyph name="yeh-ar" format="2">
+  <advance width="600" />
+  <unicode hex="064A" />
+  <anchor name="top" x="300" y="320" />
+  <anchor name="bottom" x="300" y="-260" />
+  <outline>
+    <contour>
+      <point x="60" y="0" type="line" />
+      <point x="60" y="120" type="line" />
+      <point x="100" y="120" type="line" />
+      <point x="100" y="220" type="line" />
+      <point x="220" y="220" type="line" />
+      <point x="220" y="120" type="line" />
+      <point x="380" y="120" type="line" />
+      <point x="380" y="220" type="line" />
+      <point x="500" y="220" type="line" />
+      <point x="500" y="120" type="line" />
+      <point x="540" y="120" type="line" />
+      <point x="540" y="0" type="line" />
+    </contour>
+    <contour>
+      <point x="120" y="-210" type="line" />
+      <point x="120" y="-90" type="line" />
+      <point x="240" y="-90" type="line" />
+      <point x="240" y="-210" type="line" />
+    </contour>
+    <contour>
+      <point x="360" y="-210" type="line" />
+      <point x="360" y="-90" type="line" />
+      <point x="480" y="-90" type="line" />
+      <point x="480" y="-210" type="line" />
+    </contour>
+  </outline>
+</glyph>

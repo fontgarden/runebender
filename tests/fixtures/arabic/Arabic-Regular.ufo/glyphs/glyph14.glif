@@ -1,0 +1,15 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<glyph name="reh-ar" format="2">
+  <advance width="360" />
+  <unicode hex="0631" />
+  <anchor name="top" x="260" y="320" />
+  <anchor name="bottom" x="140" y="-340" />
+  <outline>
+    <contour>
+      <point x="220" y="220" type="line" />
+      <point x="300" y="220" type="line" />
+      <point x="140" y="-260" type="line" />
+      <point x="60" y="-260" type="line" />
+    </contour>
+  </outline>
+</glyph>

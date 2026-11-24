@@ -1,0 +1,23 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<glyph name="alefHamzaabove-ar" format="2">
+  <advance width="200" />
+  <unicode hex="0623" />
+  <anchor name="top" x="100" y="960" />
+  <anchor name="bottom" x="100" y="-140" />
+  <outline>
+    <contour>
+      <point x="60" y="0" type="line" />
+      <point x="60" y="700" type="line" />
+      <point x="140" y="700" type="line" />
+      <point x="140" y="0" type="line" />
+    </contour>
+    <contour>
+      <point x="40" y="800" type="line" />
+      <point x="40" y="848" type="line" />
+      <point x="140" y="920" type="line" />
+      <point x="184" y="920" type="line" />
+      <point x="184" y="880" type="line" />
+      <point x="88" y="800" type="line" />
+    </contour>
+  </outline>
+</glyph>

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>public.kern1.A</key>
+	<array>
+		<string>A</string>
+	</array>
+	<key>public.kern1.reh</key>
+	<array>
+		<string>reh-ar</string>
+		<string>reh-ar.fina</string>
+	</array>
+	<key>public.kern2.V</key>
+	<array>
+		<string>V</string>
+	</array>
+	<key>public.kern2.alef</key>
+	<array>
+		<string>alef-ar</string>
+		<string>alefHamzaabove-ar</string>
+	</array>
+</dict>
+</plist>

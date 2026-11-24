@@ -193,7 +193,7 @@ Each directory under `src` has one row.
 | `src/outline` | One file for each group of geometry operations. |
 | `src/outline/metaballs` | The fit of metaball boundaries to cubic contours. |
 | `src/outline/path` | The bezier and hyperbezier path types, their points and their segments. |
-| `src/testing` | Fixture font paths for the unit tests of the library. |
+| `src/testing` | Fixture font paths for the unit tests of the library: `tests/fixtures/core` and `tests/fixtures/arabic`. |
 | `src/text` | Shaping, feature code, joining rules and proof samples. |
 | `src/text/buffer` | The text buffer: bidirectional runs, kerning, layout and shaping. |
 | `src/ui` | One file for each type of interface data. |

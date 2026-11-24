@@ -1,0 +1,71 @@
+languagesystem DFLT dflt;
+languagesystem arab dflt;
+languagesystem latn dflt;
+
+@dual = [beh-ar seen-ar lam-ar meem-ar heh-ar yeh-ar];
+@dual.init = [beh-ar.init seen-ar.init lam-ar.init meem-ar.init heh-ar.init yeh-ar.init];
+@dual.medi = [beh-ar.medi seen-ar.medi lam-ar.medi meem-ar.medi heh-ar.medi yeh-ar.medi];
+@joining = [alef-ar reh-ar beh-ar seen-ar lam-ar meem-ar heh-ar yeh-ar];
+@joining.fina = [alef-ar.fina reh-ar.fina beh-ar.fina seen-ar.fina lam-ar.fina meem-ar.fina
+    heh-ar.fina yeh-ar.fina];
+
+feature ccmp {
+    lookup ccmp_alef_hamza {
+        sub alefHamzaabove-ar by alef-ar hamzaabove-ar;
+    } ccmp_alef_hamza;
+} ccmp;
+
+feature init {
+    lookup init_forms {
+        sub @dual by @dual.init;
+    } init_forms;
+} init;
+
+feature medi {
+    lookup medi_forms {
+        sub @dual by @dual.medi;
+    } medi_forms;
+} medi;
+
+feature fina {
+    lookup fina_forms {
+        sub @joining by @joining.fina;
+    } fina_forms;
+} fina;
+
+feature rlig {
+    lookup rlig_lam_alef {
+        lookupflag IgnoreMarks;
+        sub lam-ar.init alef-ar.fina by lam_alef-ar;
+        sub lam-ar.medi alef-ar.fina by lam_alef-ar.fina;
+    } rlig_lam_alef;
+} rlig;
+
+feature curs {
+    # Automatic Code
+} curs;
+
+feature kern {
+    # Automatic Code
+    # A fatha on reh needs more room before the next letter.
+    lookup kern_reh_fatha {
+        pos [reh-ar reh-ar.fina]' <40 0 40 0> fatha-ar;
+    } kern_reh_fatha;
+    # This pair applies across any marks between reh and heh.
+    lookup kern_reh_heh {
+        lookupflag IgnoreMarks;
+        pos reh-ar heh-ar <-30 0 -30 0>;
+    } kern_reh_heh;
+} kern;
+
+feature mark {
+    # Automatic Code
+    # Lower kasra below the two dots of yeh, after the generated attachment.
+    lookup kasra_below_yeh {
+        pos [yeh-ar yeh-ar.init yeh-ar.medi yeh-ar.fina] kasra-ar' <0 -80 0 0>;
+    } kasra_below_yeh;
+} mark;
+
+feature mkmk {
+    # Automatic Code
+} mkmk;

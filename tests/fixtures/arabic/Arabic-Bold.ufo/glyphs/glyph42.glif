@@ -1,0 +1,24 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<glyph name="lam_alef-ar.fina" format="2">
+  <advance width="600" />
+  <anchor name="top_1" x="420" y="760" />
+  <anchor name="top_2" x="160" y="760" />
+  <anchor name="bottom_1" x="420" y="-140" />
+  <anchor name="bottom_2" x="160" y="-140" />
+  <outline>
+    <contour>
+      <point x="60" y="0" type="line" />
+      <point x="60" y="120" type="line" />
+      <point x="100" y="120" type="line" />
+      <point x="100" y="700" type="line" />
+      <point x="220" y="700" type="line" />
+      <point x="220" y="120" type="line" />
+      <point x="360" y="120" type="line" />
+      <point x="360" y="700" type="line" />
+      <point x="480" y="700" type="line" />
+      <point x="480" y="120" type="line" />
+      <point x="600" y="120" type="line" />
+      <point x="600" y="0" type="line" />
+    </contour>
+  </outline>
+</glyph>

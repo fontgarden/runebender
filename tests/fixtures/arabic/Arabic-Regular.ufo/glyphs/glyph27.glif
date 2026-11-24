@@ -1,0 +1,18 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<glyph name="lam-ar.medi" format="2">
+  <advance width="220" />
+  <anchor name="top" x="140" y="760" />
+  <anchor name="bottom" x="140" y="-140" />
+  <outline>
+    <contour>
+      <point x="0" y="0" type="line" />
+      <point x="0" y="80" type="line" />
+      <point x="100" y="80" type="line" />
+      <point x="100" y="700" type="line" />
+      <point x="180" y="700" type="line" />
+      <point x="180" y="80" type="line" />
+      <point x="220" y="80" type="line" />
+      <point x="220" y="0" type="line" />
+    </contour>
+  </outline>
+</glyph>

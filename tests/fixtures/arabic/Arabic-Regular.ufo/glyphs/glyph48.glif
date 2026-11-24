@@ -1,0 +1,16 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<glyph name="hamzaabove-ar" format="2">
+  <advance width="0" />
+  <unicode hex="0654" />
+  <anchor name="_top" x="0" y="0" />
+  <outline>
+    <contour>
+      <point x="-60" y="40" type="line" />
+      <point x="-60" y="88" type="line" />
+      <point x="40" y="160" type="line" />
+      <point x="84" y="160" type="line" />
+      <point x="84" y="120" type="line" />
+      <point x="-12" y="40" type="line" />
+    </contour>
+  </outline>
+</glyph>

@@ -39,6 +39,7 @@ cargo install --locked --git https://github.com/eliheuer/designbot \
 ```
 
 Ordinary unit tests use repository-owned synthetic fixtures and do not require a font checkout.
+`tests/fixtures/core` holds a small Latin font, and `tests/fixtures/arabic` holds an Arabic font for joining, marks, cursive attachment and right-to-left kerning; each folder has a `generate.py` that writes it.
 Tests behind `--features integration-fonts` additionally use the pinned Virtua Grotesk fixture checkout used by CI.
 Keep it outside this repository, or use an existing checkout at the same revision:
 

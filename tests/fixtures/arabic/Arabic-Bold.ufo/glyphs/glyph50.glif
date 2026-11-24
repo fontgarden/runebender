@@ -1,0 +1,22 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<glyph name="noon-ar" format="2">
+  <advance width="540" />
+  <unicode hex="0646" />
+  <anchor name="top" x="270" y="400" />
+  <anchor name="bottom" x="270" y="-140" />
+  <outline>
+    <contour>
+      <point x="60" y="0" type="line" />
+      <point x="60" y="120" type="line" />
+      <point x="480" y="120" type="line" />
+      <point x="480" y="0" type="line" />
+      <point x="270" y="-40" type="line" />
+    </contour>
+    <contour>
+      <point x="210" y="240" type="line" />
+      <point x="210" y="360" type="line" />
+      <point x="330" y="360" type="line" />
+      <point x="330" y="240" type="line" />
+    </contour>
+  </outline>
+</glyph>

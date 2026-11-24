@@ -1,0 +1,19 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<glyph name="lam-ar" format="2">
+  <advance width="500" />
+  <unicode hex="0644" />
+  <anchor name="top" x="340" y="760" />
+  <anchor name="bottom" x="340" y="-140" />
+  <outline>
+    <contour>
+      <point x="60" y="0" type="line" />
+      <point x="60" y="120" type="line" />
+      <point x="280" y="120" type="line" />
+      <point x="280" y="700" type="line" />
+      <point x="400" y="700" type="line" />
+      <point x="400" y="120" type="line" />
+      <point x="440" y="120" type="line" />
+      <point x="440" y="0" type="line" />
+    </contour>
+  </outline>
+</glyph>

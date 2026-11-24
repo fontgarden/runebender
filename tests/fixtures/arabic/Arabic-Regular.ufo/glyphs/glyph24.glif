@@ -1,0 +1,27 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<glyph name="seen-ar.fina" format="2">
+  <advance width="600" />
+  <anchor name="entry" x="600" y="0" />
+  <anchor name="top" x="410" y="320" />
+  <anchor name="bottom" x="410" y="-140" />
+  <outline>
+    <contour>
+      <point x="60" y="0" type="line" />
+      <point x="60" y="80" type="line" />
+      <point x="260" y="80" type="line" />
+      <point x="260" y="260" type="line" />
+      <point x="340" y="260" type="line" />
+      <point x="340" y="80" type="line" />
+      <point x="370" y="80" type="line" />
+      <point x="370" y="260" type="line" />
+      <point x="450" y="260" type="line" />
+      <point x="450" y="80" type="line" />
+      <point x="480" y="80" type="line" />
+      <point x="480" y="260" type="line" />
+      <point x="560" y="260" type="line" />
+      <point x="560" y="80" type="line" />
+      <point x="600" y="80" type="line" />
+      <point x="600" y="0" type="line" />
+    </contour>
+  </outline>
+</glyph>

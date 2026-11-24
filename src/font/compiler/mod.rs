@@ -6,6 +6,8 @@
 //! Preview and export share Babelfont's fontc source. No saved UFO, subprocess,
 //! Python environment or repository build script participates in this pipeline.
 
+#[cfg(test)]
+mod arabic_fixture_tests;
 mod hoi_export;
 mod metadata;
 pub use hoi_export::{HoiBakeOptions, HoiBakeReport};

@@ -4,6 +4,7 @@
 //! Repository-owned core fixtures and explicitly enabled full-font integration fixtures.
 //!
 //! `tests/fixtures/core/generate.py` defines the original synthetic core font.
+//! `tests/fixtures/arabic/generate.py` defines the original synthetic Arabic font.
 //! Core tests never inspect `RUNEBENDER_TEST_FONTS` or an adjacent checkout.
 
 use std::path::PathBuf;
@@ -22,6 +23,18 @@ pub(crate) fn regular_ufo() -> PathBuf {
 
 pub(crate) fn designspace() -> PathBuf {
     dir().join("Core.designspace")
+}
+
+pub(crate) fn arabic_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/arabic")
+}
+
+pub(crate) fn arabic_regular_ufo() -> PathBuf {
+    arabic_dir().join("Arabic-Regular.ufo")
+}
+
+pub(crate) fn arabic_designspace() -> PathBuf {
+    arabic_dir().join("Arabic.designspace")
 }
 
 #[cfg(feature = "integration-fonts")]
