@@ -77,6 +77,8 @@ pub(crate) struct FontModel {
     /// The compiled preview's outlines and advances at the location last asked for.
     pub(crate) text_location:
         std::sync::Mutex<Option<crate::application::editor::tools::text::CachedTextLocation>>,
+    /// The layout tables of the active master, built from live values; see [`Self::live_layout`].
+    live_layout: std::sync::Mutex<LiveLayoutCache>,
     /// Inspector readouts that walk the whole font, kept until the document changes.
     readouts: std::sync::Mutex<Readouts>,
     /// Whether [`Self::preview_font`] compiles on the calling thread or on a worker thread.
@@ -222,6 +224,48 @@ impl FontModel {
         }
     }
 
+    /// The shaping font of the active master, built on the calling thread from live values.
+    ///
+    /// The tables are a function of the feature code and of the advances, anchors, kerning
+    /// and groups of the master, so the same font state always gives the same layout, with
+    /// no background compile and no other master involved.
+    /// They are rebuilt only when the layout revision or the active master changes; moving
+    /// contour points changes neither.
+    /// When the feature code does not compile, `font` is the last one that did and `error`
+    /// says why; see `docs/ARABIC-TEXT-LAYOUT-PLAN.md`.
+    pub(crate) fn live_layout(&self) -> LiveLayout {
+        let key = (self.project.layout_revision(), self.active());
+        let mut cache = self
+            .live_layout
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if cache.key != Some(key) {
+            cache.key = Some(key);
+            let built = self
+                .project
+                .source_id(self.active())
+                .ok_or_else(|| "the active source is not loaded".to_string())
+                .and_then(|source| {
+                    runebender::text::layout_tables::LayoutInputs::from_project(
+                        &self.project,
+                        source,
+                    )
+                })
+                .and_then(|inputs| cache.tables.build(&inputs));
+            match built {
+                Ok(font) => {
+                    cache.font = Some(Arc::new(font.into_bytes()));
+                    cache.error = None;
+                }
+                Err(error) => cache.error = Some(error),
+            }
+        }
+        LiveLayout {
+            font: cache.font.clone(),
+            error: cache.error.clone(),
+        }
+    }
+
     /// Whether these user-space axis values are the location of the active master.
     pub(crate) fn at_active_master(&self, values: &[f64]) -> bool {
         match self.project.master_locations().get(self.active()) {
@@ -264,6 +308,7 @@ impl FontModel {
             edit_layers: HashMap::new(),
             text_inputs: std::sync::Mutex::new(None),
             text_location: std::sync::Mutex::new(None),
+            live_layout: std::sync::Mutex::default(),
             readouts: std::sync::Mutex::new(Readouts::default()),
             preview_mode: CompileMode::current(),
         };
@@ -1361,4 +1406,23 @@ mod tests {
 
         std::fs::remove_dir_all(dir).expect("the fixture is removed");
     }
+}
+
+/// What [`FontModel::live_layout`] returns.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LiveLayout {
+    /// The shaping font, or the last one that could be built.
+    pub(crate) font: Option<Arc<Vec<u8>>>,
+    /// Why the current font state could not be built.
+    pub(crate) error: Option<String>,
+}
+
+/// The last build of the live layout and the state it was built from.
+#[derive(Debug, Default)]
+struct LiveLayoutCache {
+    /// The layout revision and the active master of the last build attempt.
+    key: Option<(u64, usize)>,
+    tables: runebender::text::layout_tables::LayoutTables,
+    font: Option<Arc<Vec<u8>>>,
+    error: Option<String>,
 }

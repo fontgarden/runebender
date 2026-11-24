@@ -357,6 +357,16 @@ impl TextInputs {
                 axis.user_to_normalized(values.get(index).copied().unwrap_or(axis.default))
             })
             .collect();
+        // At a master the layout tables come from the live values of that master, built in
+        // this call. The advances in the inventory and the outlines are already live.
+        if font.at_active_master(values) {
+            if let Some(tables) = font.live_layout().font {
+                self.compiled = Some(tables);
+            }
+            return self;
+        }
+        // Between masters the variable layout font still supplies positions, until each glyph
+        // is interpolated alone.
         let mut cache = font
             .text_location
             .lock()
@@ -1110,6 +1120,7 @@ mod tests {
             .project
             .compiled_layout()
             .expect("the layout compiles");
+        let live_before = app.font.live_layout().font;
         // Moving contour points does not rebuild the layout font.
         // Anchors are not selected: moving one changes mark positions, which is layout.
         app.apply_op(|s| {
@@ -1125,7 +1136,18 @@ mod tests {
         let after = app.font.project.compiled_layout().unwrap();
         assert!(Arc::ptr_eq(&layout, &after));
         let refreshed = TextInputs::for_editor(&app);
-        assert!(refreshed.compiled.is_some());
+        // At a master the line is shaped by the live layout tables, which the complete
+        // compile cannot stop and which a point edit does not rebuild.
+        let live = app.font.live_layout();
+        assert!(live.error.is_none());
+        assert!(Arc::ptr_eq(
+            refreshed.compiled.as_ref().expect("live layout tables"),
+            live.font.as_ref().expect("live layout tables"),
+        ));
+        assert!(Arc::ptr_eq(
+            live_before.as_ref().expect("live layout tables"),
+            live.font.as_ref().expect("live layout tables"),
+        ));
         text.refresh(&refreshed);
         assert_eq!(positions(&text), before);
     }

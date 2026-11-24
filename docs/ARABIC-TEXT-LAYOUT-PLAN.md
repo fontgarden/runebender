@@ -315,6 +315,8 @@ Phases 1 to 4 are the new system; phases 5 to 7 build on it.
 ### Phase 3: one path in the editor
 
 - [ ] 3.1 The Text tool, the proof strip, the specimen and the Proof panel section use the new engine.
+      Partly done 2026-11-23: at a master, `FontModel::live_layout` builds the tables on the calling thread and the text inputs use them.
+      Between masters the variable layout font of `6ca726a` is still used, until phase 2.
 - [ ] 3.2 Remove from the editing path: the compiled preview font, `layout_font` and the layout compile cache of `6ca726a`, the `text_location` cache, the joining-rules fallback, and the post-shaping kerning lookup.
 - [ ] 3.3 Rebuild triggers: feature code, glyph set, classes, and layout values of glyphs that the text can produce.
       A point edit rebuilds nothing.
@@ -353,7 +355,7 @@ Phases 1 to 4 are the new system; phases 5 to 7 build on it.
 
 ### Phase 7: fixtures, documents, upstream
 
-- [ ] 7.1 A repository-owned Arabic fixture with joining, marks, a ligature with component anchors, cursive attachment, right-to-left kerning, and one deliberately incompatible glyph.
+- [x] 7.1 A repository-owned Arabic fixture with joining, marks, a ligature with component anchors, cursive attachment, right-to-left kerning, and one deliberately incompatible glyph.
 - [ ] 7.2 Optional local tests against Amiri and Raqq when their sources are present.
 - [ ] 7.3 Update `docs/ARCHITECTURE.md`, the changelog, the website architecture page and the known-limitations page.
 - [ ] 7.4 Record upstream needs in `docs/upstream/`: a `harfrust` hook that can change positions, public kerning and mark writers in `fontbe`, incremental compile in fontc.

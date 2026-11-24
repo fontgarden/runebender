@@ -20,7 +20,11 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
 
 ### Changed
 
-- Text is shaped by a layout font: the live font compiled without outlines.
+- At a master, text is shaped with layout tables built from the live advances, anchors, kerning and feature code of that master, in the same step as the edit.
+  The kerning, mark and cursive attachment lookups come from the feature writers of fontc and go at the `# Automatic Code` comments of the feature file, so their order is that of the exported font.
+  No background compile takes part, and a glyph that does not interpolate, or an anchor that one master lacks, does not affect the text.
+  Marks attach only by the anchors a glyph has itself, as in the exported font.
+- Between masters, text is shaped by a layout font: the live font compiled without outlines.
   It is rebuilt only after an edit that can change layout, such as an advance, anchor, code point, kerning or feature edit.
   Moving or deleting points no longer rebuilds it, so the text line around the edited glyph stays in place.
   A glyph whose contours do not interpolate stops only the interpolated preview, not text layout.

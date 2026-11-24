@@ -148,6 +148,10 @@ impl ShapingFont {
     pub fn glyph_order(&self) -> &[String] {
         &self.names
     }
+    /// The font as OpenType bytes: the layout tables, advances, character map and glyph names.
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
 
     /// Compile a font for shaping.
     ///
@@ -265,6 +269,13 @@ impl ShapingFont {
         if let Some(gdef) = compilation.gdef.as_ref() {
             builder.add_table(gdef).map_err(|e| e.to_string())?;
         }
+
+        // The glyph names go into the font, so a reader of the bytes alone gets them back.
+        builder
+            .add_table(&write_fonts::tables::post::Post::new_v2(
+                names.iter().map(String::as_str),
+            ))
+            .map_err(|e| e.to_string())?;
 
         Ok(Self {
             bytes: builder.build(),

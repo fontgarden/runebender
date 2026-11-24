@@ -1712,6 +1712,14 @@ impl Project {
         Ok(changed)
     }
 
+    /// A revision that changes only when an edit can change text layout.
+    ///
+    /// Layout reads advances, code points, anchors, components, kerning, groups, features and
+    /// the glyph set. An edit of contour points keeps the value.
+    pub fn layout_revision(&self) -> u64 {
+        self.variable.layout_revision()
+    }
+
     /// Current canonical document revision used by derived compiler data.
     pub fn document_revision(&self) -> u64 {
         self.variable.revision

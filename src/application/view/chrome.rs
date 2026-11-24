@@ -331,10 +331,17 @@ pub(crate) fn status(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     let text = if (app.has_text_session || !app.preview_text.is_empty())
         // Text is shaped by the layout font; the complete preview matters only between masters
         // and has its own status under the axis sliders.
-        && let Some(status) = match app.font.layout_font() {
-            Ok(Some(_)) => None,
-            Ok(None) => Some("Layout compiling…".to_string()),
-            Err(error) => Some(format!("Layout not compiled: {error}")),
+        && let Some(status) = if app.on_active_master() {
+            app.font
+                .live_layout()
+                .error
+                .map(|error| format!("Layout from the last features that compiled: {error}"))
+        } else {
+            match app.font.layout_font() {
+                Ok(Some(_)) => None,
+                Ok(None) => Some("Layout compiling…".to_string()),
+                Err(error) => Some(format!("Layout not compiled: {error}")),
+            }
         } {
         format!("{text}   {status}")
     } else if app.note.is_empty() {
