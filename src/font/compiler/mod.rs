@@ -509,8 +509,46 @@ impl Project {
         feature_text: Option<&str>,
     ) -> Result<babelfont::Font, String> {
         let mut font = self.source_snapshot_with_features(feature_text)?;
+        self.propagate_component_anchors(&mut font);
         self.bake_hoi_snapshot(&mut font, HoiBakeOptions::default())?;
         Ok(font)
+    }
+
+    /// Give each composite without anchors the anchors of its components.
+    ///
+    /// fontc reads only the anchors a glyph has itself for UFO sources, so a letter built from
+    /// a base and a dot would take no marks in the compiled font.
+    /// The editor and the text line use [`effective_document_anchors`]; the compiled font
+    /// gets the same anchors here, so both attach marks in the same way.
+    ///
+    /// [`effective_document_anchors`]: super::composites::effective_document_anchors
+    fn propagate_component_anchors(&self, font: &mut babelfont::Font) {
+        for source in self.document_sources() {
+            let layer_id = source.default_layer();
+            let key = super::babelfont::layer_key(&layer_id);
+            for glyph in &mut font.glyphs.0 {
+                let Some(view) = self.document_layer(&glyph.name, &layer_id) else {
+                    continue;
+                };
+                if view.anchors().next().is_some() || view.components().next().is_none() {
+                    continue;
+                }
+                let anchors = super::composites::effective_document_anchors(view, |name| {
+                    self.document_layer(name, &layer_id)
+                });
+                if let Some(layer) = glyph.get_layer_mut(&key) {
+                    layer.anchors = anchors
+                        .into_iter()
+                        .map(|(name, point)| babelfont::Anchor {
+                            x: point.x,
+                            y: point.y,
+                            name,
+                            ..babelfont::Anchor::default()
+                        })
+                        .collect();
+                }
+            }
+        }
     }
 
     fn source_snapshot_with_features(

@@ -365,14 +365,15 @@ Phases 1 to 4 are the new system; phases 5 to 7 build on it.
 - 2026-11-23: fontc does not take anchors from components for UFO sources.
   The current live path of the editor does.
   In Virtua Grotesk, `beh-ar.init` and `noon-ar.fina` are composites with no anchors of their own, so the exported font does not attach a kasra to them, while the editor showed it attached.
-  Decision needed: propagate anchors through components in the export too, as Glyphs does, or show in the editor what the export does.
+  Decided 2026-11-23, to keep the behavior designers had: the compiler snapshot gives a composite without anchors the anchors of its components, as Glyphs does, and the live tables use the same rule.
+  The export and the editor now both attach the kasra.
 
 ## 9. Decisions for the owner
 
 1. Export uses the generated lookups of the editor, or fontc keeps its own and the checker compares (item 4.4).
 2. Upgrade `harfrust` now or after phase 3 (item 0.3).
 3. The order of phase 6 items.
-4. Anchors from components: in the export too, or in neither (section 8).
+4. Anchors from components: decided, in both (section 8).
 
 ## 10. Sources
 

@@ -14,8 +14,8 @@
 //! The values are written at one "default" location of a font with no axes.
 //! No outline, no variation data and no other master is read, so a glyph that does not
 //! interpolate cannot stop the build.
-//! Anchors are each glyph's own anchors: fontc does not take anchors from components for UFO
-//! sources.
+//! A composite without anchors takes the anchors of its components, as the compiler snapshot
+//! gives them to fontc, so the editor and the export attach marks in the same way.
 //!
 //! [`LayoutTables`] keeps three results between builds, each keyed on the inputs it reads:
 //! the first pass over the feature file (parse, validation and GSUB), the mark lookups and the
@@ -86,7 +86,7 @@ pub struct LayoutGlyph {
     pub codepoints: Vec<u32>,
     /// Advance width in font units.
     pub advance: f64,
-    /// The glyph's own anchors in source order: name, x, y.
+    /// The anchors the glyph offers, its own or those of its components: name, x, y.
     pub anchors: Vec<(String, f64, f64)>,
     /// The GDEF class, when the source gives or implies one.
     pub category: Option<LayoutCategory>,
@@ -117,7 +117,7 @@ impl LayoutInputs {
             .document_sources()
             .find(|view| view.id() == source)
             .ok_or("the source is not loaded")?;
-        let layer = view.default_layer();
+        let source_layer = view.default_layer();
         let info = project
             .document_font_info(source)
             .ok_or("the source has no font info")?;
@@ -130,7 +130,7 @@ impl LayoutInputs {
         let mut glyphs = Vec::with_capacity(names.len());
         for name in names {
             let glyph_metadata = project.document_source_glyph_metadata(source, name);
-            let Some(layer) = project.document_layer(name, &layer) else {
+            let Some(layer) = project.document_layer(name, &source_layer) else {
                 if name == ".notdef" {
                     glyphs.push(LayoutGlyph {
                         name: name.to_string(),
@@ -161,13 +161,14 @@ impl LayoutInputs {
                 name: name.to_string(),
                 codepoints: layer.codepoints().map(u32::from).collect(),
                 advance: layer.width(),
-                anchors: layer
-                    .anchors()
-                    .map(|anchor| {
-                        let at = anchor.position();
-                        (anchor.name().to_string(), at.x, at.y)
-                    })
-                    .collect(),
+                // A composite without anchors takes those of its components, as the
+                // compiler snapshot gives them to fontc.
+                anchors: crate::font::composites::effective_document_anchors(layer, |name| {
+                    project.document_layer(name, &source_layer)
+                })
+                .into_iter()
+                .map(|(name, at)| (name, at.x, at.y))
+                .collect(),
                 category: Some(category),
             });
         }

@@ -202,19 +202,10 @@ mod tests {
                     .map(|layer| layer.codepoints().map(u32::from).collect())
                     .unwrap_or_default(),
             });
-            // fontc does not take anchors from components for UFO sources, so the comparison
-            // reads only the anchors a glyph has itself.
-            let list: Vec<AnchorValue> = view
-                .map(|layer| {
-                    layer
-                        .anchors()
-                        .map(|anchor| {
-                            let at = anchor.position();
-                            (anchor.name().to_string(), at.x, at.y)
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
+            // A composite without anchors takes those of its components, in the editor and
+            // in the compiler snapshot.
+            let list =
+                crate::text::features::anchors_project(&project, source, name).unwrap_or_default();
             if !list.is_empty() {
                 anchors.insert(name.clone(), list);
             }
@@ -251,5 +242,12 @@ mod tests {
         ] {
             assert_eq!(rows(&live, text, rtl), rows(&fontc, text, rtl), "{text}");
         }
+        // `beh-ar.init` is a composite with no anchors of its own; the kasra attaches by the
+        // anchor of its component, in the live tables and in the compiled font.
+        let kasra = rows(&fontc, "بِس", true)
+            .into_iter()
+            .find(|row| row.0 == "kasra-ar")
+            .expect("a kasra");
+        assert!(kasra.2 != 0.0 || kasra.3 != 0.0, "{kasra:?}");
     }
 }
