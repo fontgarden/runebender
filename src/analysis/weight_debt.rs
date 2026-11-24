@@ -153,23 +153,22 @@ pub fn lighter_master(project: &Project, active: SourceId) -> Option<SourceId> {
         .map(|(_, id)| id)
 }
 
+/// One master: a project and the source in it.
+///
+/// The two masters of a report can be sources of one project or of two projects.
+pub type Master<'a> = (&'a Project, SourceId);
+
 /// Every drawn glyph that is identical in both masters, with the drawn
 /// pairs that score a method, by script.
-pub fn report(project: &Project, light: SourceId, heavy: SourceId) -> Result<DebtReport, String> {
-    let light_layer = project
-        .document_source(light)
-        .ok_or("the lighter source does not exist")?
-        .default_layer();
-    let heavy_layer = project
-        .document_source(heavy)
-        .ok_or("the heavier source does not exist")?
-        .default_layer();
+pub fn report(light: Master<'_>, heavy: Master<'_>) -> Result<DebtReport, String> {
+    let light_layer = default_layer(light.0, light.1).ok_or("the lighter source does not exist")?;
+    let heavy_layer = default_layer(heavy.0, heavy.1).ok_or("the heavier source does not exist")?;
     let mut groups: BTreeMap<Script, DebtGroup> = BTreeMap::new();
-    for entry in project.document_source_glyph_entries(heavy)? {
+    for entry in heavy.0.document_source_glyph_entries(heavy.1)? {
         let name = entry.name();
         let (Some(light_glyph), Some(heavy_glyph)) = (
-            project.document_layer(name, &light_layer),
-            project.document_layer(name, &heavy_layer),
+            light.0.document_layer(name, &light_layer),
+            heavy.0.document_layer(name, &heavy_layer),
         ) else {
             continue;
         };
@@ -184,7 +183,7 @@ pub fn report(project: &Project, light: SourceId, heavy: SourceId) -> Result<Deb
         });
         if canonical_outline(light_glyph) == canonical_outline(heavy_glyph) {
             // A frozen copy is deliberate, not owed.
-            if !matches!(entry.mark_label(), Some("green" | "purple")) {
+            if entry.mark_label() != Some("green") {
                 group.pending.push(name.to_owned());
             }
         } else if compatible(light_glyph, heavy_glyph) {
@@ -192,8 +191,8 @@ pub fn report(project: &Project, light: SourceId, heavy: SourceId) -> Result<Deb
         }
     }
     Ok(DebtReport {
-        light,
-        heavy,
+        light: light.1,
+        heavy: heavy.1,
         groups: groups.into_values().collect(),
     })
 }
@@ -215,33 +214,75 @@ pub struct OffsetFit {
     pub wins: usize,
 }
 
-/// Learn an offset from `drawn` glyphs and score it on the same glyphs.
+/// The error of an offset on one glyph drawn in both masters.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GlyphScore {
+    /// The glyph.
+    pub glyph: String,
+    /// Mean absolute coordinate error of the offset, in font units.
+    pub error: f64,
+    /// The same error for shifting every point by the mean move.
+    pub baseline_error: f64,
+}
+
+/// How a given offset fares on glyphs drawn in both masters.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OffsetScore {
+    /// Mean of the per-glyph errors of the offset.
+    pub mean_error: f64,
+    /// Mean of the per-glyph errors of the mean shift.
+    pub baseline_error: f64,
+    /// Glyphs where the offset beats that shift.
+    pub wins: usize,
+    /// One score per glyph, in the order the glyphs were given.
+    pub glyphs: Vec<GlyphScore>,
+}
+
+/// The named glyphs that both masters have with the same structure and at least one point,
+/// in the order given.
+fn compatible_pairs<'a>(
+    light: Master<'a>,
+    heavy: Master<'a>,
+    names: &'a [String],
+) -> Option<Vec<(&'a str, LayerView<'a>, LayerView<'a>)>> {
+    let light_layer = default_layer(light.0, light.1)?;
+    let heavy_layer = default_layer(heavy.0, heavy.1)?;
+    Some(
+        names
+            .iter()
+            .filter_map(|name| {
+                Some((
+                    name.as_str(),
+                    light.0.document_layer(name, &light_layer)?,
+                    heavy.0.document_layer(name, &heavy_layer)?,
+                ))
+            })
+            .filter(|(_, light, heavy)| compatible(*light, *heavy))
+            .filter(|(_, light, _)| {
+                light
+                    .contours()
+                    .any(|contour| contour.points().next().is_some())
+            })
+            .collect(),
+    )
+}
+
+/// Score `offset` on the named glyphs that both masters have with the same structure.
 ///
-/// The offset has two parameters, so scoring it on what it learned
-/// from flatters it little. The baseline shifts every point by the
-/// mean move, which is what a method must beat to be worth running.
-pub fn fit_offset(
-    project: &Project,
-    light: SourceId,
-    heavy: SourceId,
-    drawn: &[String],
-) -> Option<OffsetFit> {
-    let light_layer = project.document_source(light)?.default_layer();
-    let heavy_layer = project.document_source(heavy)?.default_layer();
-    let pairs: Vec<_> = drawn
-        .iter()
-        .filter_map(|name| {
-            Some((
-                project.document_layer(name, &light_layer)?,
-                project.document_layer(name, &heavy_layer)?,
-            ))
-        })
-        .filter(|(light, heavy)| compatible(*light, *heavy))
-        .collect();
-    let offset = embolden::learn_layer_offset(&pairs)?;
-    let advance_delta = embolden::learn_layer_advance_delta(&pairs).unwrap_or(0.0);
+/// Glyphs without points are skipped.
+///
+/// The baseline shifts every point by the mean move over the scored glyphs, which is what a
+/// method must beat to be worth running.
+/// `None` when no named glyph has a point to score.
+pub fn score_offset(
+    light: Master<'_>,
+    heavy: Master<'_>,
+    names: &[String],
+    offset: Offset,
+) -> Option<OffsetScore> {
+    let pairs = compatible_pairs(light, heavy, names)?;
     let (mut sum_dx, mut sum_dy, mut count) = (0.0, 0.0, 0_usize);
-    for (light, heavy) in &pairs {
+    for (_, light, heavy) in &pairs {
         for (a, b) in flat_points(*light).into_iter().zip(flat_points(*heavy)) {
             sum_dx += b.x - a.x;
             sum_dy += b.y - a.y;
@@ -253,7 +294,8 @@ pub fn fit_offset(
     }
     let mean = Point::new(sum_dx / count as f64, sum_dy / count as f64);
     let (mut offset_error, mut baseline_error, mut wins) = (0.0, 0.0, 0_usize);
-    for (light, heavy) in &pairs {
+    let mut glyphs = Vec::with_capacity(pairs.len());
+    for (name, light, heavy) in &pairs {
         let truth = flat_points(*heavy);
         let predicted = embolden::layer_point_moves(*light, offset, 0.0);
         let shifted: Vec<_> = flat_points(*light)
@@ -264,23 +306,48 @@ pub fn fit_offset(
             guess
                 .iter()
                 .zip(&truth)
-                .map(|(g, t)| ((g.x - t.x).abs() + (g.y - t.y).abs()) / 2.0)
+                .map(|(g, t)| (g.x - t.x).abs() + (g.y - t.y).abs())
                 .sum::<f64>()
-                / truth.len().max(1) as f64
+                / (truth.len().max(1) as f64 * 2.0)
         };
         let (o, b) = (error_of(&predicted), error_of(&shifted));
         offset_error += o;
         baseline_error += b;
         wins += usize::from(o < b);
+        glyphs.push(GlyphScore {
+            glyph: (*name).to_owned(),
+            error: o,
+            baseline_error: b,
+        });
     }
-    let scored = pairs.len();
+    let scored = glyphs.len() as f64;
+    Some(OffsetScore {
+        mean_error: offset_error / scored,
+        baseline_error: baseline_error / scored,
+        wins,
+        glyphs,
+    })
+}
+
+/// Learn an offset from `drawn` glyphs and score it on the same glyphs.
+///
+/// The offset has two parameters, so scoring it on what it learned
+/// from flatters it little.
+pub fn fit_offset(light: Master<'_>, heavy: Master<'_>, drawn: &[String]) -> Option<OffsetFit> {
+    let pairs: Vec<_> = compatible_pairs(light, heavy, drawn)?
+        .into_iter()
+        .map(|(_, light, heavy)| (light, heavy))
+        .collect();
+    let offset = embolden::learn_layer_offset(&pairs)?;
+    let advance_delta = embolden::learn_layer_advance_delta(&pairs).unwrap_or(0.0);
+    let score = score_offset(light, heavy, drawn, offset)?;
     Some(OffsetFit {
         offset,
         advance_delta,
-        scored,
-        mean_error: offset_error / scored as f64,
-        baseline_error: baseline_error / scored as f64,
-        wins,
+        scored: score.glyphs.len(),
+        mean_error: score.mean_error,
+        baseline_error: score.baseline_error,
+        wins: score.wins,
     })
 }
 
@@ -311,7 +378,8 @@ pub fn compatible(first: LayerView<'_>, second: LayerView<'_>) -> bool {
             .all(|(a, b)| a.len() == b.len() && a.iter().zip(b).all(|(p, q)| p.1 == q.1))
 }
 
-fn flat_points(layer: LayerView<'_>) -> Vec<Point> {
+/// Every point of a layer, in contour order.
+pub fn flat_points(layer: LayerView<'_>) -> Vec<Point> {
     layer
         .contours()
         .flat_map(|contour| contour.points().map(|point| point.position()))
@@ -328,8 +396,46 @@ mod tests {
     use super::*;
     use crate::testing::fonts;
 
+    /// The two core masters, each loaded as its own project.
+    fn core_masters() -> (Project, Project) {
+        let regular = Project::load(&fonts::regular_ufo()).expect("the regular master loads");
+        let bold =
+            Project::load(&fonts::dir().join("Core-Bold.ufo")).expect("the bold master loads");
+        (regular, bold)
+    }
+
+    #[test]
+    fn masters_in_two_projects_report_debt_and_score_an_offset() {
+        let (regular, bold) = core_masters();
+        let light = (&regular, regular.source_id(0).expect("one source"));
+        let heavy = (&bold, bold.source_id(0).expect("one source"));
+        let report = report(light, heavy).expect("both sources exist");
+        let mut pending: Vec<_> = report
+            .groups
+            .iter()
+            .flat_map(|group| group.pending.iter().map(String::as_str))
+            .collect();
+        pending.sort_unstable();
+        assert_eq!(pending, ["gravecomb", "period", "ringcomb"]);
+        let drawn: Vec<String> = report
+            .groups
+            .iter()
+            .flat_map(|group| group.drawn.iter().cloned())
+            .collect();
+        let fit = fit_offset(light, heavy, &drawn).expect("drawn pairs fit");
+        assert_eq!(fit.scored, drawn.len());
+        let score = score_offset(light, heavy, &drawn, fit.offset).expect("drawn pairs score");
+        assert_eq!(score.glyphs.len(), drawn.len());
+        assert_eq!(score.mean_error, fit.mean_error);
+        assert!(score.wins <= drawn.len());
+        // A glyph that only one master has is not scored.
+        let missing = score_offset(light, heavy, &["nosuchglyph".to_owned()], fit.offset);
+        assert!(missing.is_none());
+    }
+
+    #[cfg(feature = "integration-fonts")]
     fn virtua() -> (Project, SourceId, SourceId) {
-        let project = Project::load(&fonts::designspace()).expect("the designspace loads");
+        let project = Project::load(&fonts::virtua_designspace()).expect("the designspace loads");
         let ids: Vec<_> = project.document_sources().map(|s| s.id()).collect();
         assert_eq!(ids.len(), 2, "Virtua has two masters");
         let heavy = ids
@@ -353,6 +459,7 @@ mod tests {
         assert_eq!(Script::of("E_004", None), Script::Other);
     }
 
+    #[cfg(feature = "integration-fonts")]
     #[test]
     fn the_lightest_master_has_nothing_lighter() {
         let (project, light, heavy) = virtua();
@@ -360,10 +467,11 @@ mod tests {
         assert_eq!(lighter_master(&project, heavy), Some(light));
     }
 
+    #[cfg(feature = "integration-fonts")]
     #[test]
     fn debt_is_what_still_matches_the_lighter_master() {
         let (project, light, heavy) = virtua();
-        let report = report(&project, light, heavy).unwrap();
+        let report = report((&project, light), (&project, heavy)).unwrap();
         let light_layer = default_layer(&project, light).unwrap();
         let heavy_layer = default_layer(&project, heavy).unwrap();
         for group in &report.groups {
@@ -385,16 +493,18 @@ mod tests {
         assert!(report.groups.iter().any(|g| !g.drawn.is_empty()));
     }
 
+    #[cfg(feature = "integration-fonts")]
     #[test]
     fn a_fitted_offset_reports_its_error_beside_the_baseline() {
         let (project, light, heavy) = virtua();
-        let report = report(&project, light, heavy).unwrap();
+        let report = report((&project, light), (&project, heavy)).unwrap();
         let latin = report
             .groups
             .iter()
             .find(|g| g.script == Script::Latin)
             .expect("Latin is drawn");
-        let fit = fit_offset(&project, light, heavy, &latin.drawn).expect("Latin pairs fit");
+        let fit = fit_offset((&project, light), (&project, heavy), &latin.drawn)
+            .expect("Latin pairs fit");
         assert_eq!(fit.scored, latin.drawn.len());
         assert!(fit.offset.x > 0.0, "Bold stems grow: {:?}", fit.offset);
         assert!(fit.mean_error.is_finite() && fit.baseline_error.is_finite());

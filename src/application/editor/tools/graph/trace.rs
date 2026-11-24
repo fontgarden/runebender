@@ -15,7 +15,7 @@ use std::time::Duration;
 use base64::Engine as _;
 use runebender::automation::agent::ToolCall;
 use runebender::automation::agent_edit::{
-    AgentEditOperation, AgentEditRequest, AgentLayerEdits, AgentLayerGuard,
+    AgentEditOperation, AgentEditRequest, AgentLayerEdits, AgentLayerGuard, EditAuthorization,
 };
 use runebender::automation::agent_graph::results::{
     GraphTraceBackend, GraphTracePhase, GraphTraceReleaseResult, GraphTraceStartResult,
@@ -371,7 +371,7 @@ impl Workspace {
             expected_document_epoch: trace.intent.epoch.clone(),
             actor: "brush-panel".into(),
             operation_key: format!("use-draft-{}", trace.handle),
-            authorization: "user-approved".into(),
+            authorization: EditAuthorization::UserApproved,
             source: trace.intent.source,
             history_name: format!("Use brush draft for {}", trace.intent.target.glyph),
             reads: trace
@@ -514,8 +514,14 @@ impl Workspace {
                 let next_handle = handle
                     .checked_add(1)
                     .ok_or("trace handle space exhausted")?;
-                if state.trace_receipts.len() >= 64 {
-                    return Err("trace retry retention is full; open a new graph session".into());
+                // Only the retained trace can be active; every other receipt is finished.
+                let active = state.trace.as_ref().map(|trace| trace.handle);
+                if state
+                    .trace_receipts
+                    .make_room(|_, (_, handle)| active != Some(*handle))
+                    .is_err()
+                {
+                    return Err("every retained trace retry belongs to an active trace".into());
                 }
                 let worker_backend = match request.local_sketch {
                     Some(settings) => TraceWorkBackend::LocalSketch {
@@ -788,7 +794,7 @@ fn publish_trace(
         expected_document_epoch: intent.epoch.clone(),
         actor: intent.actor.clone(),
         operation_key: intent.operation_key.clone(),
-        authorization: "preview-only".into(),
+        authorization: EditAuthorization::PreviewOnly,
         source: intent.source,
         history_name: history_name.into(),
         reads: Vec::new(),

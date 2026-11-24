@@ -33,7 +33,8 @@ fn fixture() -> (Project, GlyphLayerAddress) {
     let project = Project::from_source(SourceInput::from_font(
         font,
         PathBuf::from("ComponentAlignment.ufo"),
-    ));
+    ))
+    .expect("valid source fixture");
     let address = GlyphLayerAddress {
         glyph: "composite".into(),
         layer: project

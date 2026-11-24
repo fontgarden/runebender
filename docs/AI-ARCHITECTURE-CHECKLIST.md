@@ -148,6 +148,7 @@ Trusted local Python is not an OS sandbox; do not imply otherwise.
   acf8a36 separates execution versions 1 and 2 from unchanged authoring/file schema version 1 for the current live.font/live.python/live.proof family.
   Omitted execution_version preserves the four-node comparison, its capture encoding, version IDs, successful report text, proof hash form and branch image selectors.
   Version 2 explicitly opts into DAG results and node selectors; unsupported versions/topologies reject before dispatch.
+  Later, execution version 1 was removed: version 2 is the default when the field is absent, and a request for version 1 is rejected.
   Existing saved graph round trips and legacy MCP fixtures pass; future external node and extension manifest evolution remains part of D3/G1.
 
 ### E. Make tools discoverable and extensible
@@ -200,10 +201,10 @@ Keep small typed Rust APIs at these boundaries; transport schemas and registries
 | Agent identity, exact retries and cancellation | `automation/agent_session.rs`, `automation/agent_cancellation.rs`, `application/platform/live_edits.rs` | Automation owns bounded receipts and request contracts; host owns document epochs and grants; neither substitutes for canonical stale-state checks. |
 | Proof capture and rendering | `font/compiler/proof.rs`, `font/compiler/proof_jobs.rs` | Compiler owns immutable font/proof inputs and rendering; host owns scheduling and presentation; running compiler cancellation remains explicitly unsupported unless implementation changes. |
 | Recipe input and candidate validation | `automation/script_recipe.rs`, `application/platform/script_jobs.rs` | Automation owns the versioned recipe contract; host supplies bounded execution; recipes return candidates and never receive mutable Project access. |
-| Graph editing, planning and retained run state | `workflows/nodes.rs`, `workflows/nodes_session.rs`, `application/editor/tools/nodes/execution.rs` | Workflows owns graph contracts and pure planning; host dispatches worker jobs and accepts results against captured lineage. |
-| Disk graph execution and external workers | `workflows/nodes_run.rs`, `application/editor/tools/local_ai.rs` | Share process supervision and immutable capture conventions; keep filesystem publication explicit and preserve headless operation. |
+| Graph editing, planning and retained run state | `workflows/graph.rs`, `workflows/graph_session.rs`, `application/editor/tools/graph/execution.rs` | Workflows owns graph contracts and pure planning; host dispatches worker jobs and accepts results against captured lineage. |
+| Disk graph execution and external workers | `workflows/graph_run.rs`, `application/editor/tools/local_ai.rs` | Share process supervision and immutable capture conventions; keep filesystem publication explicit and preserve headless operation. |
 | CLI, MCP and assistant tool descriptions | `automation/agent*.rs`, `automation/live.rs`, `application/cli/mcp.rs` | One consumed automation descriptor supplies versioned input/output metadata and effects; each transport preserves its framing and compatibility behavior. |
-| Interactive tool lifecycle | `application/workspace.rs`, `application/editor/session.rs`, `application/view/canvas/editor.rs`, `application/widgets/tool_group.rs` | Application owns gestures and preview state; reusable shape construction calls typed engine operations; UI metadata comes from the consumed registry. |
+| Interactive tool lifecycle | `application/workspace.rs`, `application/editor/session.rs`, `application/view/canvas/editor/`, `application/widgets/tool_group.rs` | Application owns gestures and preview state; reusable shape construction calls typed engine operations; UI metadata comes from the consumed registry. |
 | Assistant and model providers | `application/editor/tools/chat.rs`, `application/editor/tools/local_ai.rs` | Keep assistant conversations separate from model-worker jobs; host adapters own credentials, process/network calls and sendable context; results share validated artifact/proposal routes. |
 
 The initial shared-operation slices remove the live workflow's call into the JSON transport dispatcher and provide result/effect descriptors consumed by CLI discovery and MCP.
@@ -566,11 +567,11 @@ Each transform reads its parent's staged overlay and retains an immutable candid
 Successful sibling branches continue when a transform or proof fails, and every blocked dependent receives a structured dependency_failed result.
 Each proof uses its own captured recipe and exact parent content hash through the existing shared compiler worker.
 A terminal partially_failed run retains its successful proofs and candidates; Apply requires an explicit transform selector when more than one proven result is eligible.
-Native canvas selection maps a proof to its input transform; native Run requests execution version 2, while omitted MCP versions preserve legacy comparison behavior.
+Native canvas selection maps a proof to its input transform; native Run requests execution version 2, and an MCP request without a version also runs version 2.
 The host binds selected-result Apply receipts to graph identity, chosen node, request and complete candidate content, then commits the exact retained transaction with one ordinary undo step.
 Completed historical artifacts may be inspected with stale metadata; late stale or cancelled work cannot publish new outputs or apply.
 Cancellation and invalid terminal completion immediately release owned proof jobs, including proofs completed earlier in the same run.
-Version 1 retains fail-fast script behavior; independent failure recovery is explicitly version 2 behavior.
+Version 1, with fail-fast script behavior, was removed later; every run recovers from independent failures.
 Authoring/file schema version 1 remains unchanged and no save/reopen migration is required for existing graph files.
 
 Verification for acf8a36:

@@ -6,10 +6,10 @@
 
 use crate::application::design::recipes;
 use crate::application::design::{Region, TextSize, column as xcolumn};
+use crate::application::view::label;
 use crate::application::workspace::Workspace;
 use xilem::WidgetView;
 use xilem::style::Style as _;
-use xilem::view::label;
 
 pub(crate) fn panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     let pal = &app.palette;

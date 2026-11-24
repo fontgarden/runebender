@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! The canvases: the glyph grid, the glyph editor, the graph, and the
 //! proof view that takes the editor's place.

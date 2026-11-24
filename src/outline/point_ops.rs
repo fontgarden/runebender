@@ -13,18 +13,12 @@
 //!    opposite handle is mirrored through the smooth point (its length
 //!    is preserved), and when the opposite side is an on-curve point
 //!    the dragged handle is projected onto that tangent line instead.
-//! 3. Every moved point lands on the 2-unit design grid.
+//! 3. Every moved point lands on the grid explicitly supplied by its edit context.
 //!
 //! Alt/Option editing passes `independent`, which turns rule 1 off:
 //! the selected points move alone.
 
 use std::collections::{HashMap, HashSet};
-
-#[cfg(test)]
-use norad::{ContourPoint, Glyph, PointType};
-
-#[cfg(test)]
-use crate::outline::glyph_ops::PointId;
 
 /// Representation-neutral point input for canonical and compatibility drags.
 #[derive(Clone, Copy, Debug)]
@@ -43,30 +37,6 @@ pub const DOT_GRID_SPACING: f64 = 8.0;
 /// The default design grid: whole font units.
 pub const DEFAULT_GRID_SPACING: f64 = 1.0;
 
-/// The grid every moved point snaps to, in font units, as `f64` bits. Zero turns snapping off.
-///
-/// One setting for the whole process, read by every edit that snaps; an application sets it
-/// once from its configuration.
-static GRID_SPACING: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(DEFAULT_GRID_SPACING.to_bits());
-
-/// The design grid every moved point snaps to, in font units; zero means no snapping.
-pub fn grid_spacing() -> f64 {
-    f64::from_bits(GRID_SPACING.load(std::sync::atomic::Ordering::Relaxed))
-}
-
-/// Set the design grid. A negative or nonfinite spacing is ignored.
-pub fn set_grid_spacing(spacing: f64) {
-    if spacing.is_finite() && spacing >= 0.0 {
-        GRID_SPACING.store(spacing.to_bits(), std::sync::atomic::Ordering::Relaxed);
-    }
-}
-
-/// Snap one coordinate to the design grid, or leave it when snapping is off.
-pub fn snap_coord(value: f64) -> f64 {
-    snap_to_spacing(value, grid_spacing())
-}
-
 /// Snap one coordinate to the nearest multiple of `spacing`, or leave it when `spacing` is not
 /// positive.
 pub fn snap_to_spacing(value: f64, spacing: f64) -> f64 {
@@ -76,18 +46,8 @@ pub fn snap_to_spacing(value: f64, spacing: f64) -> f64 {
     (value / spacing).round() * spacing
 }
 
-fn snap_pt(p: kurbo::Point) -> kurbo::Point {
-    kurbo::Point::new(snap_coord(p.x), snap_coord(p.y))
-}
-
-#[cfg(test)]
-fn is_off(p: &ContourPoint) -> bool {
-    p.typ == PointType::OffCurve
-}
-
-#[cfg(test)]
-fn pos(p: &ContourPoint) -> kurbo::Point {
-    kurbo::Point::new(p.x, p.y)
+fn snap_pt(p: kurbo::Point, spacing: f64) -> kurbo::Point {
+    kurbo::Point::new(snap_to_spacing(p.x, spacing), snap_to_spacing(p.y, spacing))
 }
 
 /// The index `d` places from `index` around a contour of `len`
@@ -114,18 +74,6 @@ pub(crate) fn step_index(index: usize, len: usize, closed: bool, d: isize) -> Op
     }
 }
 
-/// `step_index` on a contour known to be closed and non-empty.
-#[cfg(test)]
-pub(crate) fn wrap_index(index: usize, len: usize, d: isize) -> usize {
-    step_index(index, len, true, d).unwrap_or(0)
-}
-
-/// A closed contour is one that does not open with a `move` point.
-#[cfg(test)]
-fn contour_is_closed(points: &[ContourPoint]) -> bool {
-    points.first().is_none_or(|p| p.typ != PointType::Move)
-}
-
 /// The opposite handle mirrored through `anchor`, keeping its own
 /// length.
 ///
@@ -134,6 +82,7 @@ fn mirrored_smooth_handle(
     moved: kurbo::Point,
     anchor: kurbo::Point,
     opposite: kurbo::Point,
+    spacing: f64,
 ) -> Option<kurbo::Point> {
     let v = moved - anchor;
     let len = v.hypot();
@@ -144,7 +93,7 @@ fn mirrored_smooth_handle(
     if opposite_len < 1e-9 {
         return None;
     }
-    Some(snap_pt(anchor - (v / len) * opposite_len))
+    Some(snap_pt(anchor - (v / len) * opposite_len, spacing))
 }
 
 /// The dragged handle projected onto the tangent through an
@@ -157,6 +106,7 @@ fn projected_smooth_handle(
     moved: kurbo::Point,
     anchor: kurbo::Point,
     line_point: kurbo::Point,
+    spacing: f64,
 ) -> Option<kurbo::Point> {
     let tangent = anchor - line_point;
     let tangent_len = tangent.hypot();
@@ -168,53 +118,9 @@ fn projected_smooth_handle(
     let distance = (d.x * unit.x + d.y * unit.y).abs();
     let projected = anchor + unit * distance;
     if tangent.x.abs() < 1e-9 || tangent.y.abs() < 1e-9 {
-        Some(snap_pt(projected))
+        Some(snap_pt(projected, spacing))
     } else {
         Some(projected)
-    }
-}
-
-/// Handle updates a moved off-curve point forces on its smooth
-/// neighbours.
-///
-/// This is `append_smooth_handle_updates` in the web editor.
-#[cfg(test)]
-fn smooth_handle_updates(
-    points: &[ContourPoint],
-    selected_here: &HashSet<usize>,
-    closed: bool,
-    index: usize,
-    updates: &mut Vec<(usize, kurbo::Point)>,
-) {
-    let len = points.len();
-    for d in [-1_isize, 1] {
-        let Some(on_index) = step_index(index, len, closed, d) else {
-            continue;
-        };
-        if is_off(&points[on_index]) || !points[on_index].smooth {
-            continue;
-        }
-        let Some(opposite) = step_index(on_index, len, closed, d) else {
-            continue;
-        };
-        if selected_here.contains(&opposite) {
-            continue;
-        }
-        if is_off(&points[opposite]) {
-            if let Some(p) = mirrored_smooth_handle(
-                pos(&points[index]),
-                pos(&points[on_index]),
-                pos(&points[opposite]),
-            ) {
-                updates.push((opposite, p));
-            }
-        } else if let Some(p) = projected_smooth_handle(
-            pos(&points[index]),
-            pos(&points[on_index]),
-            pos(&points[opposite]),
-        ) {
-            updates.push((index, p));
-        }
     }
 }
 
@@ -297,6 +203,7 @@ pub(crate) fn translated_positions(
     delta: (f64, f64),
     closed: bool,
     independent: bool,
+    spacing: f64,
 ) -> Vec<(usize, kurbo::Point)> {
     let mut result = points.to_vec();
     let moved = moved_indices(points, selected, closed, independent);
@@ -305,7 +212,7 @@ pub(crate) fn translated_positions(
             .get(&index)
             .copied()
             .unwrap_or(points[index].position);
-        result[index].position = snap_pt(base + kurbo::Vec2::new(delta.0, delta.1));
+        result[index].position = snap_pt(base + kurbo::Vec2::new(delta.0, delta.1), spacing);
     }
     let mut smooth_updates = Vec::new();
     for &index in &moved {
@@ -338,6 +245,7 @@ pub(crate) fn translated_positions(
                     result[index].position,
                     result[anchor_index].position,
                     opposite_position,
+                    spacing,
                 )
                 .map(|position| (opposite, position))
             } else {
@@ -345,6 +253,7 @@ pub(crate) fn translated_positions(
                     result[index].position,
                     result[anchor_index].position,
                     result[opposite].position,
+                    spacing,
                 )
                 .map(|position| (index, position))
             };
@@ -365,353 +274,205 @@ pub(crate) fn translated_positions(
         .collect()
 }
 
-/// Capture every point position needed to replay total-delta drag events.
-#[cfg(test)]
-pub fn drag_origins(
-    glyph: &Glyph,
-    selected: &HashSet<PointId>,
-    independent: bool,
-) -> HashMap<PointId, (f64, f64)> {
-    let mut origins = HashMap::new();
-    for (contour_index, contour) in glyph.contours.iter().enumerate() {
-        let selected_here: HashSet<_> = selected
-            .iter()
-            .filter(|(candidate, _)| *candidate == contour_index)
-            .map(|(_, point)| *point)
-            .filter(|point| *point < contour.points.len())
-            .collect();
-        if selected_here.is_empty() {
-            continue;
-        }
-        let states: Vec<_> = contour
-            .points
-            .iter()
-            .map(|point| PointState {
-                position: pos(point),
-                off_curve: is_off(point),
-                smooth: point.smooth,
-            })
-            .collect();
-        for index in affected_indices(
-            &states,
-            &selected_here,
-            contour_is_closed(&contour.points),
-            independent,
-        ) {
-            origins.insert(
-                (contour_index, index),
-                (contour.points[index].x, contour.points[index].y),
-            );
-        }
-    }
-    origins
-}
-
-/// Move the selected points by `delta`.
-///
-/// `originals` gives every directly or smoothly affected position captured by
-/// [`drag_origins`]. A nonempty incomplete map rejects the operation. A keyboard
-/// nudge can pass an empty map.
-///
-/// Returns true when any coordinate changed.
-#[cfg(test)]
-pub fn translate_points(
-    glyph: &mut Glyph,
-    selected: &HashSet<PointId>,
-    originals: &HashMap<PointId, (f64, f64)>,
-    delta: (f64, f64),
-    independent: bool,
-) -> bool {
-    if selected.is_empty() {
-        return false;
-    }
-    if !originals.is_empty() {
-        for (contour_index, contour) in glyph.contours.iter().enumerate() {
-            let selected_here: HashSet<_> = selected
-                .iter()
-                .filter(|(candidate, _)| *candidate == contour_index)
-                .map(|(_, point)| *point)
-                .filter(|point| *point < contour.points.len())
-                .collect();
-            if selected_here.is_empty() {
-                continue;
-            }
-            let states: Vec<_> = contour
-                .points
-                .iter()
-                .map(|point| PointState {
-                    position: pos(point),
-                    off_curve: is_off(point),
-                    smooth: point.smooth,
-                })
-                .collect();
-            if affected_indices(
-                &states,
-                &selected_here,
-                contour_is_closed(&contour.points),
-                independent,
-            )
-            .into_iter()
-            .any(|index| !originals.contains_key(&(contour_index, index)))
-            {
-                return false;
-            }
-        }
-    }
-    let mut changed = false;
-    for (ci, contour) in glyph.contours.iter_mut().enumerate() {
-        let selected_here: HashSet<usize> = selected
-            .iter()
-            .filter(|(c, _)| *c == ci)
-            .map(|(_, i)| *i)
-            .filter(|i| *i < contour.points.len())
-            .collect();
-        if selected_here.is_empty() {
-            continue;
-        }
-        let states: Vec<_> = contour
-            .points
-            .iter()
-            .map(|point| PointState {
-                position: pos(point),
-                off_curve: is_off(point),
-                smooth: point.smooth,
-            })
-            .collect();
-        let originals: HashMap<_, _> = originals
-            .iter()
-            .filter(|((contour, _), _)| *contour == ci)
-            .map(|((_, index), &(x, y))| (*index, kurbo::Point::new(x, y)))
-            .collect();
-        for (index, p) in translated_positions(
-            &states,
-            &selected_here,
-            &originals,
-            delta,
-            contour_is_closed(&contour.points),
-            independent,
-        ) {
-            let point = &mut contour.points[index];
-            if point.x != p.x || point.y != p.y {
-                point.x = p.x;
-                point.y = p.y;
-                changed = true;
-            }
-        }
-    }
-    changed
-}
-
-/// Snap the selected off-curve points onto the design grid, then
-/// re-aim the smooth tangents they belong to. The web select tool runs
-/// this when a drag ends, so handles never settle between gridlines.
-#[cfg(test)]
-pub fn snap_selected_offcurves(glyph: &mut Glyph, selected: &HashSet<PointId>) -> bool {
-    if selected.is_empty() {
-        return false;
-    }
-    let mut changed = false;
-    for (ci, contour) in glyph.contours.iter_mut().enumerate() {
-        let selected_here: HashSet<usize> = selected
-            .iter()
-            .filter(|(c, _)| *c == ci)
-            .map(|(_, i)| *i)
-            .filter(|i| *i < contour.points.len())
-            .collect();
-        if selected_here.is_empty() {
-            continue;
-        }
-        let closed = contour_is_closed(&contour.points);
-        let mut snapped_any = false;
-        for &index in &selected_here {
-            if !is_off(&contour.points[index]) {
-                continue;
-            }
-            let p = snap_pt(pos(&contour.points[index]));
-            let point = &mut contour.points[index];
-            if point.x != p.x || point.y != p.y {
-                point.x = p.x;
-                point.y = p.y;
-                changed = true;
-                snapped_any = true;
-            }
-        }
-        if !snapped_any {
-            continue;
-        }
-        let mut updates: Vec<(usize, kurbo::Point)> = Vec::new();
-        for &index in &selected_here {
-            if is_off(&contour.points[index]) {
-                smooth_handle_updates(&contour.points, &selected_here, closed, index, &mut updates);
-            }
-        }
-        for (index, p) in updates {
-            let point = &mut contour.points[index];
-            if point.x != p.x || point.y != p.y {
-                point.x = p.x;
-                point.y = p.y;
-                changed = true;
-            }
-        }
-    }
-    changed
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use norad::Contour;
 
     /// A closed contour: corner, handle, handle, smooth on-curve,
     /// handle, handle. Enough shape to test tangents.
-    fn curve_glyph() -> Glyph {
-        let p = |x: f64, y: f64, typ: PointType, smooth: bool| {
-            ContourPoint::new(x, y, typ, smooth, None, None)
+    fn curve_points() -> Vec<PointState> {
+        let p = |x: f64, y: f64, off_curve: bool, smooth: bool| PointState {
+            position: kurbo::Point::new(x, y),
+            off_curve,
+            smooth,
         };
-        let points = vec![
-            p(0.0, 0.0, PointType::Curve, false),
-            p(20.0, 0.0, PointType::OffCurve, false),
-            p(100.0, 20.0, PointType::OffCurve, false),
-            p(100.0, 100.0, PointType::Curve, true),
-            p(100.0, 180.0, PointType::OffCurve, false),
-            p(20.0, 200.0, PointType::OffCurve, false),
-            p(0.0, 200.0, PointType::Curve, false),
-            p(-20.0, 100.0, PointType::OffCurve, false),
-            p(-20.0, 50.0, PointType::OffCurve, false),
-        ];
-        let mut glyph = Glyph::new("test");
-        glyph.contours.push(Contour::new(points, None));
-        glyph
+        vec![
+            p(0.0, 0.0, false, false),
+            p(20.0, 0.0, true, false),
+            p(100.0, 20.0, true, false),
+            p(100.0, 100.0, false, true),
+            p(100.0, 180.0, true, false),
+            p(20.0, 200.0, true, false),
+            p(0.0, 200.0, false, false),
+            p(-20.0, 100.0, true, false),
+            p(-20.0, 50.0, true, false),
+        ]
     }
 
-    fn at(glyph: &Glyph, index: usize) -> (f64, f64) {
-        let p = &glyph.contours[0].points[index];
-        (p.x, p.y)
+    fn at(points: &[PointState], index: usize) -> (f64, f64) {
+        (points[index].position.x, points[index].position.y)
+    }
+
+    fn selection(indices: &[usize]) -> HashSet<usize> {
+        indices.iter().copied().collect()
+    }
+
+    /// The positions a persistent drag captures before its first event.
+    fn drag_origins(
+        points: &[PointState],
+        selected: &HashSet<usize>,
+        independent: bool,
+    ) -> HashMap<usize, kurbo::Point> {
+        affected_indices(points, selected, true, independent)
+            .into_iter()
+            .map(|index| (index, points[index].position))
+            .collect()
+    }
+
+    /// Apply one drag event to a closed contour on the default design grid.
+    fn translate(
+        points: &mut [PointState],
+        selected: &HashSet<usize>,
+        originals: &HashMap<usize, kurbo::Point>,
+        delta: (f64, f64),
+        independent: bool,
+    ) -> bool {
+        let moves = translated_positions(
+            points,
+            selected,
+            originals,
+            delta,
+            true,
+            independent,
+            DEFAULT_GRID_SPACING,
+        );
+        for &(index, position) in &moves {
+            points[index].position = position;
+        }
+        !moves.is_empty()
+    }
+
+    fn positions(points: &[PointState]) -> Vec<kurbo::Point> {
+        points.iter().map(|point| point.position).collect()
     }
 
     #[test]
     fn on_curve_point_carries_its_handles() {
-        let mut glyph = curve_glyph();
-        let selected: HashSet<PointId> = [(0, 3)].into_iter().collect();
-        assert!(translate_points(
-            &mut glyph,
-            &selected,
+        let mut points = curve_points();
+        assert!(translate(
+            &mut points,
+            &selection(&[3]),
             &HashMap::new(),
             (10.0, 0.0),
             false
         ));
-        assert_eq!(at(&glyph, 3), (110.0, 100.0));
+        assert_eq!(at(&points, 3), (110.0, 100.0));
         // Both adjacent handles moved with it.
-        assert_eq!(at(&glyph, 2), (110.0, 20.0));
-        assert_eq!(at(&glyph, 4), (110.0, 180.0));
+        assert_eq!(at(&points, 2), (110.0, 20.0));
+        assert_eq!(at(&points, 4), (110.0, 180.0));
         // A point two steps away stayed put.
-        assert_eq!(at(&glyph, 1), (20.0, 0.0));
+        assert_eq!(at(&points, 1), (20.0, 0.0));
     }
 
     #[test]
     fn independent_leaves_handles_behind() {
-        let mut glyph = curve_glyph();
-        let selected: HashSet<PointId> = [(0, 3)].into_iter().collect();
-        translate_points(&mut glyph, &selected, &HashMap::new(), (10.0, 0.0), true);
-        assert_eq!(at(&glyph, 3), (110.0, 100.0));
-        assert_eq!(at(&glyph, 2), (100.0, 20.0));
-        assert_eq!(at(&glyph, 4), (100.0, 180.0));
+        let mut points = curve_points();
+        translate(
+            &mut points,
+            &selection(&[3]),
+            &HashMap::new(),
+            (10.0, 0.0),
+            true,
+        );
+        assert_eq!(at(&points, 3), (110.0, 100.0));
+        assert_eq!(at(&points, 2), (100.0, 20.0));
+        assert_eq!(at(&points, 4), (100.0, 180.0));
     }
 
     #[test]
     fn dragging_a_handle_mirrors_the_smooth_opposite() {
-        let mut glyph = curve_glyph();
+        let mut points = curve_points();
         // Point 4 is the handle after the smooth on-curve 3; its
         // opposite is point 2, 80 units away on the other side.
-        let selected: HashSet<PointId> = [(0, 4)].into_iter().collect();
-        translate_points(&mut glyph, &selected, &HashMap::new(), (0.0, 20.0), false);
-        assert_eq!(at(&glyph, 4), (100.0, 200.0));
+        translate(
+            &mut points,
+            &selection(&[4]),
+            &HashMap::new(),
+            (0.0, 20.0),
+            false,
+        );
+        assert_eq!(at(&points, 4), (100.0, 200.0));
         // The opposite handle stays collinear through (100, 100) and
         // keeps its own length.
-        assert_eq!(at(&glyph, 2), (100.0, 20.0));
+        assert_eq!(at(&points, 2), (100.0, 20.0));
     }
 
     #[test]
     fn positions_land_on_the_design_grid() {
-        let mut glyph = curve_glyph();
-        let selected: HashSet<PointId> = [(0, 0)].into_iter().collect();
-        translate_points(&mut glyph, &selected, &HashMap::new(), (3.4, 2.6), true);
-        assert_eq!(at(&glyph, 0), (3.0, 3.0));
+        let mut points = curve_points();
+        translate(
+            &mut points,
+            &selection(&[0]),
+            &HashMap::new(),
+            (3.4, 2.6),
+            true,
+        );
+        assert_eq!(at(&points, 0), (3.0, 3.0));
     }
 
     #[test]
     fn originals_anchor_a_long_drag() {
-        let mut glyph = curve_glyph();
-        let selected: HashSet<PointId> = [(0, 0)].into_iter().collect();
-        let originals: HashMap<PointId, (f64, f64)> = [((0, 0), (0.0, 0.0))].into_iter().collect();
+        let mut points = curve_points();
+        let selected = selection(&[0]);
+        let originals = [(0, kurbo::Point::ZERO)].into_iter().collect();
         // Two drag events from the same start: the second wins outright
         // instead of stacking on the first.
-        translate_points(&mut glyph, &selected, &originals, (10.0, 0.0), true);
-        translate_points(&mut glyph, &selected, &originals, (20.0, 0.0), true);
-        assert_eq!(at(&glyph, 0), (20.0, 0.0));
+        translate(&mut points, &selected, &originals, (10.0, 0.0), true);
+        translate(&mut points, &selected, &originals, (20.0, 0.0), true);
+        assert_eq!(at(&points, 0), (20.0, 0.0));
     }
 
     #[test]
     fn captured_origins_anchor_carried_handles_across_snapping_thresholds() {
-        let mut original = curve_glyph();
-        original.contours[0].points[2].x = 101.0;
-        original.contours[0].points[4].x = 101.0;
-        let selected: HashSet<PointId> = [(0, 3)].into_iter().collect();
+        let mut original = curve_points();
+        original[2].position.x = 101.0;
+        original[4].position.x = 101.0;
+        let selected = selection(&[3]);
         let originals = drag_origins(&original, &selected, false);
         assert_eq!(originals.len(), 3);
         let mut one_event = original.clone();
-        translate_points(&mut one_event, &selected, &originals, (2.0, 0.0), false);
+        translate(&mut one_event, &selected, &originals, (2.0, 0.0), false);
         let mut two_events = original;
-        translate_points(&mut two_events, &selected, &originals, (1.0, 0.0), false);
-        translate_points(&mut two_events, &selected, &originals, (2.0, 0.0), false);
-        assert_eq!(two_events, one_event);
+        translate(&mut two_events, &selected, &originals, (1.0, 0.0), false);
+        translate(&mut two_events, &selected, &originals, (2.0, 0.0), false);
+        assert_eq!(positions(&two_events), positions(&one_event));
         assert_eq!(at(&two_events, 2), (103.0, 20.0));
         assert_eq!(at(&two_events, 3), (102.0, 100.0));
         assert_eq!(at(&two_events, 4), (103.0, 180.0));
     }
 
     #[test]
-    fn persistent_drag_rejects_incomplete_origins() {
-        let mut glyph = curve_glyph();
-        let before = glyph.clone();
-        let selected: HashSet<PointId> = [(0, 3)].into_iter().collect();
-        let incomplete = [((0, 3), (100.0, 100.0))].into_iter().collect();
-        assert!(!translate_points(
-            &mut glyph,
-            &selected,
-            &incomplete,
-            (2.0, 0.0),
-            false,
-        ));
-        assert_eq!(glyph, before);
+    fn a_persistent_drag_needs_every_carried_origin() {
+        // The canonical edit rejects a drag whose origins omit any of these indices.
+        let mut affected = affected_indices(&curve_points(), &selection(&[3]), true, false);
+        affected.sort_unstable();
+        assert_eq!(affected, [2, 3, 4]);
     }
 
     #[test]
     fn captured_origins_anchor_smooth_opposites_across_drag_events() {
-        let mut original = curve_glyph();
-        original.contours[0].points[2].x = 101.0;
-        original.contours[0].points[2].y = 19.0;
-        original.contours[0].points[4].x = 101.0;
-        original.contours[0].points[4].y = 181.0;
-        let selected: HashSet<PointId> = [(0, 4)].into_iter().collect();
+        let mut original = curve_points();
+        original[2].position = kurbo::Point::new(101.0, 19.0);
+        original[4].position = kurbo::Point::new(101.0, 181.0);
+        let selected = selection(&[4]);
         let originals = drag_origins(&original, &selected, false);
         assert_eq!(originals.len(), 2);
         let mut one_event = original.clone();
-        translate_points(&mut one_event, &selected, &originals, (3.0, 1.0), false);
+        translate(&mut one_event, &selected, &originals, (3.0, 1.0), false);
         let mut two_events = original;
-        translate_points(&mut two_events, &selected, &originals, (1.0, 0.0), false);
-        translate_points(&mut two_events, &selected, &originals, (3.0, 1.0), false);
-        assert_eq!(two_events, one_event);
+        translate(&mut two_events, &selected, &originals, (1.0, 0.0), false);
+        translate(&mut two_events, &selected, &originals, (3.0, 1.0), false);
+        assert_eq!(positions(&two_events), positions(&one_event));
     }
 
     #[test]
     fn unrelated_selected_handle_does_not_carry_a_smooth_opposite() {
-        let original = curve_glyph();
-        let primary: HashSet<PointId> = [(0, 4)].into_iter().collect();
-        let multiple: HashSet<PointId> = [(0, 1), (0, 4)].into_iter().collect();
+        let original = curve_points();
+        let primary = selection(&[4]);
+        let multiple = selection(&[1, 4]);
         let mut primary_result = original.clone();
         let primary_origins = drag_origins(&primary_result, &primary, false);
-        translate_points(
+        translate(
             &mut primary_result,
             &primary,
             &primary_origins,
@@ -720,7 +481,7 @@ mod tests {
         );
         let mut multiple_result = original;
         let multiple_origins = drag_origins(&multiple_result, &multiple, false);
-        translate_points(
+        translate(
             &mut multiple_result,
             &multiple,
             &multiple_origins,
@@ -728,16 +489,5 @@ mod tests {
             false,
         );
         assert_eq!(at(&multiple_result, 2), at(&primary_result, 2));
-    }
-
-    #[test]
-    fn snapping_offcurves_moves_only_handles() {
-        let mut glyph = curve_glyph();
-        glyph.contours[0].points[1].x = 21.4;
-        glyph.contours[0].points[0].x = 1.4;
-        let selected: HashSet<PointId> = [(0, 0), (0, 1)].into_iter().collect();
-        assert!(snap_selected_offcurves(&mut glyph, &selected));
-        assert_eq!(at(&glyph, 1), (21.0, 0.0));
-        assert_eq!(at(&glyph, 0), (1.4, 0.0));
     }
 }

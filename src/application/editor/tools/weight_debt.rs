@@ -8,7 +8,7 @@
 //! no-model offset. This module owns the cache, the batch, the font-ml
 //! measurement that scores the model the same way, and the commands.
 //! Every draft is a proposal: the user installs or discards it in the
-//! panel, and marks what was installed orange in one more step, so the
+//! panel, and marks what was installed purple in one more step, so the
 //! Undo install bookkeeping stays exact.
 
 use std::collections::BTreeMap;
@@ -55,10 +55,6 @@ pub(crate) struct DebtEvalJob {
     pub(crate) document_id: u64,
     pub(crate) heavy_path: PathBuf,
 }
-
-/// The pump's message: the eval thread has something.
-#[derive(Debug)]
-pub(crate) struct DebtEvalProgress;
 
 /// The report and what was learned from it, cached by document state.
 #[derive(Debug)]
@@ -120,17 +116,17 @@ impl Workspace {
         {
             return Some(cached.clone());
         }
-        let report = weight_debt::report(project, light, heavy).ok()?;
+        let report = weight_debt::report((project, light), (project, heavy)).ok()?;
         let everything: Vec<String> = report
             .groups
             .iter()
             .flat_map(|group| group.drawn.iter().cloned())
             .collect();
-        let shared = weight_debt::fit_offset(project, light, heavy, &everything);
+        let shared = weight_debt::fit_offset((project, light), (project, heavy), &everything);
         let mut fits = BTreeMap::new();
         for group in &report.groups {
             let own = (group.drawn.len() >= OWN_FIT_MINIMUM)
-                .then(|| weight_debt::fit_offset(project, light, heavy, &group.drawn))
+                .then(|| weight_debt::fit_offset((project, light), (project, heavy), &group.drawn))
                 .flatten();
             match (own, shared) {
                 (Some(fit), _) => {
@@ -188,7 +184,7 @@ impl Workspace {
                 Some(PointMoves {
                     glyph: name.clone(),
                     positions: embolden::layer_point_moves(view, fit.offset, MACHINE_GRID),
-                    width: Some(embolden::snap_to_grid(
+                    width: Some(runebender::outline::point_ops::snap_to_spacing(
                         view.width() + fit.advance_delta,
                         MACHINE_GRID,
                     )),
@@ -368,8 +364,8 @@ impl Workspace {
         }
     }
 
-    /// Mark every installed, unmarked draft orange: a machine drawing
-    /// worth keeping that needs a human's eyes. One transaction per
+    /// Mark every installed, unmarked draft purple: a machine drawing
+    /// the designer has not reviewed. One transaction per
     /// glyph, after Undo install has had its chance.
     pub(crate) fn mark_debt_drafts(&mut self) {
         let names = std::mem::take(&mut self.debt.unmarked);
@@ -379,7 +375,7 @@ impl Workspace {
         let Some(layer) = weight_debt::default_layer(&self.font.project, source) else {
             return;
         };
-        let (label, color) = semantic_mark(Some("orange"));
+        let (label, color) = semantic_mark(Some("purple"));
         let mut changed = Vec::new();
         for name in names {
             let address = GlyphLayerAddress {
@@ -412,7 +408,7 @@ impl Workspace {
             self.cells = Arc::new(cells_of(&self.font, &self.palette));
         }
         self.modified = true;
-        self.note = format!("Marked {} drafts orange", changed.len());
+        self.note = format!("Marked {} drafts purple", changed.len());
     }
 }
 
@@ -543,6 +539,7 @@ mod tests {
         assert!(!scores.contains_key(&Script::Other));
     }
 
+    #[cfg(feature = "integration-fonts")]
     fn copy_tree(source: &Path, destination: &Path) {
         std::fs::create_dir_all(destination).expect("the destination directory is created");
         for entry in std::fs::read_dir(source).expect("the source directory is readable") {
@@ -556,16 +553,10 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "integration-fonts")]
     /// A disposable copy of the Virtua sources, open on the Bold master.
     fn virtua_on_bold() -> Workspace {
-        let source = match std::env::var_os("RUNEBENDER_TEST_FONTS") {
-            Some(dir) => PathBuf::from(dir),
-            None => Path::new(env!("CARGO_MANIFEST_DIR")).join("../virtua-grotesk/sources"),
-        };
-        assert!(
-            source.join("VirtuaGrotesk.designspace").is_file(),
-            "clone Virtua Grotesk beside this repository, or set RUNEBENDER_TEST_FONTS"
-        );
+        let source = crate::integration_fonts::dir();
         let root = std::env::temp_dir().join(format!(
             "runebender-xilem-weight-debt-{}-{}",
             std::process::id(),
@@ -587,6 +578,7 @@ mod tests {
         workspace
     }
 
+    #[cfg(feature = "integration-fonts")]
     #[test]
     fn the_lightest_master_shows_no_debt_and_the_heavier_one_does() {
         let mut workspace = virtua_on_bold();
@@ -600,6 +592,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "integration-fonts")]
     #[test]
     fn an_offset_batch_becomes_a_proposal_that_installs_on_the_machine_grid() {
         let mut workspace = virtua_on_bold();
@@ -669,7 +662,7 @@ mod tests {
             .into_iter()
             .find(|entry| entry.name() == first)
             .unwrap();
-        assert_eq!(entry.mark_label(), Some("orange"));
+        assert_eq!(entry.mark_label(), Some("purple"));
         // The debt shrank by what was installed.
         let again = workspace.weight_debt().unwrap();
         assert!(

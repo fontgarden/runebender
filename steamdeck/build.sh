@@ -18,10 +18,10 @@ distrobox enter "$BOX" -- bash -lc '
     sudo apt-get update -qq
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq build-essential pkg-config curl git \
       libfontconfig-dev libwayland-dev libxkbcommon-dev libx11-dev libxcb1-dev libvulkan1 \
-      libssl-dev libglib2.0-dev libgtk-3-dev libxdo-dev
+      libssl-dev libglib2.0-dev libgtk-3-dev libxdo-dev libasound2-dev
   else
     sudo pacman -Syu --noconfirm --needed base-devel pkgconf fontconfig wayland libxkbcommon \
-      libx11 libxcb vulkan-icd-loader vulkan-headers mesa openssl glib2 gtk3 xdotool git curl
+      libx11 libxcb vulkan-icd-loader vulkan-headers mesa openssl glib2 gtk3 xdotool alsa-lib git curl
   fi
   if [ ! -x "$HOME/.cargo/bin/rustup" ]; then
     curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none

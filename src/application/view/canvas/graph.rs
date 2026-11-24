@@ -19,8 +19,8 @@ use masonry::core::keyboard::{Key, KeyState, NamedKey};
 use masonry::core::{
     AccessCtx, ChildrenIds, CursorIcon, EventCtx, LayerType, LayoutCtx, MeasureCtx, NewWidget,
     PaintCtx, PointerButton, PointerButtonEvent, PointerEvent, PointerScrollEvent, PointerUpdate,
-    PropertiesMut, PropertiesRef, PropertySet, QueryCtx, RegisterCtx, ScrollDelta, TextEvent,
-    Widget, WidgetId, WidgetPod,
+    PropertiesMut, PropertiesRef, QueryCtx, RegisterCtx, ScrollDelta, TextEvent, Widget, WidgetId,
+    WidgetPod,
 };
 use masonry::imaging::Painter;
 use masonry::kurbo::{
@@ -29,8 +29,7 @@ use masonry::kurbo::{
 };
 use masonry::layout::{LenReq, Length};
 use masonry::peniko::{Blob, ImageAlphaType, ImageData, ImageFormat};
-use masonry::properties::ContentColor;
-use masonry::widgets::{Image as MasonryImage, Portal, TextAction};
+use masonry::widgets::{Image as MasonryImage, TextAction};
 use runebender::ui::editing::viewport::ViewPort;
 use runebender::ui::graph::{self as nl, Hit, NodeBox, NodeContentMap, NodeRegion};
 use runebender::workflows::graph::{Kind, NodeGraph, Registry};
@@ -39,12 +38,12 @@ use xilem::Color;
 use xilem::core::{MessageCtx, MessageResult, Mut, View, ViewId, ViewMarker, ViewPathTracker};
 use xilem::{Pod, ViewCtx};
 
-use crate::application::design::theme::Palette;
+use crate::application::design::theme::{CodeColors, Palette};
 use crate::application::design::{ControlSize, ControlStyle, Space, TextSize, areas};
 use crate::application::editor::tools::graph::RowState;
+use crate::application::widgets::code_editor::CodeEditor;
 use crate::application::widgets::context_menu::{ContextMenu, MenuAction, MenuRow, MenuTarget};
 use crate::application::widgets::icon_paint;
-use crate::application::widgets::source_text_area::SourceTextArea;
 use crate::application::widgets::text_label::{self, Anchor};
 use crate::application::workspace::Workspace;
 
@@ -160,7 +159,7 @@ pub(crate) struct GraphWidget {
     palette: Arc<Palette>,
     rows: Arc<BTreeMap<u32, RowState>>,
     content: Arc<NodeContentMap>,
-    code_editors: BTreeMap<u32, WidgetPod<Portal<SourceTextArea>>>,
+    code_editors: BTreeMap<u32, WidgetPod<CodeEditor>>,
     code_area_ids: BTreeMap<u32, WidgetId>,
     preview_images: BTreeMap<u32, WidgetPod<SpecimenPreview>>,
     boxes: Vec<NodeBox>,
@@ -186,22 +185,19 @@ pub(crate) struct GraphWidget {
     code_font_size: f32,
 }
 
-fn code_editor(text: &str, text_color: Color) -> (WidgetPod<Portal<SourceTextArea>>, WidgetId) {
-    let source = NewWidget::new(SourceTextArea::new(text).with_text_size(TextSize::Caption.px()))
-        .with_props({
-            let mut props = PropertySet::new();
-            props.insert(ContentColor { color: text_color });
-            props
-        });
-    let area_id = source.id();
-    let portal = Portal::new(source).content_must_fill(true);
-    // Scrollbars show only while the pointer is over the code, so a node reads as a page of code.
-    let portal = NewWidget::new(portal).with_props({
-        let mut props = PropertySet::new();
-        props.insert(masonry::properties::AutoHideScrollBar(true));
-        props
-    });
-    (portal.to_pod(), area_id)
+fn code_editor(
+    text: &str,
+    syntax: runebender::ui::syntax::Syntax,
+    colors: CodeColors,
+) -> (WidgetPod<CodeEditor>, WidgetId) {
+    let editor = NewWidget::new(CodeEditor::new(
+        text,
+        syntax,
+        TextSize::Caption.px(),
+        colors,
+    ));
+    let id = editor.id();
+    (editor.to_pod(), id)
 }
 
 fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
@@ -330,19 +326,19 @@ impl Widget for SpecimenPreview {
 }
 
 type ContentChildren = (
-    BTreeMap<u32, WidgetPod<Portal<SourceTextArea>>>,
+    BTreeMap<u32, WidgetPod<CodeEditor>>,
     BTreeMap<u32, WidgetId>,
     BTreeMap<u32, WidgetPod<SpecimenPreview>>,
 );
 
-fn content_children(content: &NodeContentMap, text_color: Color) -> ContentChildren {
+fn content_children(content: &NodeContentMap, colors: CodeColors) -> ContentChildren {
     let mut editors = BTreeMap::new();
     let mut area_ids = BTreeMap::new();
     let mut images = BTreeMap::new();
     for (&node, content) in &content.by_node {
         match content {
             nl::NodeContent::Script(script) => {
-                let (editor, area_id) = code_editor(&script.text, text_color);
+                let (editor, area_id) = code_editor(&script.text, script.syntax, colors);
                 editors.insert(node, editor);
                 area_ids.insert(node, area_id);
             }
@@ -503,7 +499,9 @@ impl GraphWidget {
         );
         let menu = NewWidget::new(menu);
         self.menu = Some(menu.id());
-        ctx.create_layer(LayerType::Other, menu, ctx.to_window(local));
+        // Attached, so Masonry removes the menu with this canvas. A plain layer stayed on
+        // screen with no way to close it when the canvas left the tree first.
+        ctx.create_attached_layer(LayerType::Other, menu, ctx.to_window(local));
     }
 
     /// The first input of a node that takes `kind`, by the node's type.
@@ -793,9 +791,8 @@ impl Widget for GraphWidget {
         if (self.code_font_size - code_font_size).abs() > f32::EPSILON {
             self.code_font_size = code_font_size;
             for editor in self.code_editors.values_mut() {
-                ctx.mutate_child_later(editor, move |mut portal| {
-                    let mut source = Portal::child_mut(&mut portal);
-                    SourceTextArea::set_text_size(&mut source, code_font_size);
+                ctx.mutate_child_later(editor, move |mut editor| {
+                    CodeEditor::set_text_size(&mut editor, code_font_size);
                 });
             }
         }
@@ -809,6 +806,10 @@ impl Widget for GraphWidget {
                 transform * Point::new(content.x1, content.y1),
             );
             let child_size = Size::new(screen.width().max(1.0), screen.height().max(1.0));
+            // Masonry forbids the layout of a child that this pass has stashed.
+            if stashed {
+                continue;
+            }
             if let Some(editor) = self.code_editors.get_mut(&node.id) {
                 ctx.run_layout(editor, child_size);
                 ctx.place_child(editor, screen.origin());
@@ -1415,7 +1416,9 @@ impl Widget for GraphWidget {
             PointerEvent::Scroll(PointerScrollEvent { delta, state, .. }) => {
                 let at = ctx.local_position(state.position);
                 let dy = match delta {
-                    ScrollDelta::PixelDelta(p) => p.y,
+                    // A pixel delta is in device pixels, so one gesture zooms the same
+                    // amount at each display scale.
+                    ScrollDelta::PixelDelta(p) => p.y / ctx.scale_factor(),
                     ScrollDelta::LineDelta(_, y) => f64::from(*y) * 20.0,
                     _ => 0.0,
                 };
@@ -1568,7 +1571,7 @@ impl<F: Fn(&mut Workspace, GraphEvent) + 'static> View<Workspace, (), ViewCtx> f
 
     fn build(&self, ctx: &mut ViewCtx, _: &mut Workspace) -> (Self::Element, Self::ViewState) {
         let (code_editors, code_area_ids, preview_images) =
-            content_children(&self.content, self.palette.text);
+            content_children(&self.content, self.palette.code());
         for (&node, &area_id) in &code_area_ids {
             ctx.with_id(ViewId::new(u64::from(node)), |ctx| {
                 ctx.record_action_source(area_id);
@@ -1672,9 +1675,11 @@ impl<F: Fn(&mut Workspace, GraphEvent) + 'static> View<Workspace, (), ViewCtx> f
                 for (_, editor) in std::mem::take(&mut element.widget.code_editors) {
                     element.ctx.remove_child(editor);
                 }
-                let (editors, area_ids, _) = content_children(&self.content, self.palette.text);
+                let (editors, area_ids, _) = content_children(&self.content, self.palette.code());
                 element.widget.code_editors = editors;
                 element.widget.code_area_ids = area_ids;
+                // New editors start at the unscaled size; the next layout sets the zoomed one.
+                element.widget.code_font_size = 0.0;
                 for (&node, &area_id) in &element.widget.code_area_ids {
                     ctx.with_id(ViewId::new(u64::from(node)), |ctx| {
                         ctx.record_action_source(area_id);
@@ -1692,8 +1697,7 @@ impl<F: Fn(&mut Workspace, GraphEvent) + 'static> View<Workspace, (), ViewCtx> f
                         .get_mut(&node)
                         .expect("script node has an editor child");
                     let mut editor = element.ctx.get_mut(editor);
-                    let mut source = Portal::child_mut(&mut editor);
-                    SourceTextArea::replace_external_content(&mut source, &script.text);
+                    CodeEditor::replace_external_content(&mut editor, &script.text, script.syntax);
                 }
             }
             if projected_images(&self.content) != projected_images(&prev.content) {
@@ -1701,7 +1705,7 @@ impl<F: Fn(&mut Workspace, GraphEvent) + 'static> View<Workspace, (), ViewCtx> f
                     element.ctx.remove_child(image);
                 }
                 element.widget.preview_images =
-                    content_children(&self.content, self.palette.text).2;
+                    content_children(&self.content, self.palette.code()).2;
                 element.ctx.children_changed();
             }
             element.widget.relayout();
@@ -1709,11 +1713,10 @@ impl<F: Fn(&mut Workspace, GraphEvent) + 'static> View<Workspace, (), ViewCtx> f
             dirty = true;
         }
         if !Arc::ptr_eq(&self.palette, &prev.palette) {
-            let text_color = self.palette.text;
+            let colors = self.palette.code();
             for editor in element.widget.code_editors.values_mut() {
                 let mut editor = element.ctx.get_mut(editor);
-                let mut source = Portal::child_mut(&mut editor);
-                source.insert_prop(ContentColor { color: text_color });
+                CodeEditor::set_colors(&mut editor, colors);
             }
             element.widget.palette = self.palette.clone();
             dirty = true;
@@ -1812,6 +1815,7 @@ mod tests {
                         node.id,
                         NodeContent::Script(ScriptContent {
                             text: "print('A')\n".into(),
+                            syntax: runebender::ui::syntax::Syntax::Python,
                             content_hash: "script".into(),
                             state: ContentState::Current,
                             size: [240.0, 112.0],
@@ -1840,7 +1844,7 @@ mod tests {
         let content = Arc::new(content);
         let palette = Arc::new(Palette::load("gray"));
         let (code_editors, code_area_ids, preview_images) =
-            content_children(&content, palette.text);
+            content_children(&content, palette.code());
         let editor_ids = code_area_ids.clone();
         let mut widget = GraphWidget {
             graph,
@@ -1901,7 +1905,7 @@ mod tests {
             harness.pop_action::<GraphEvent>(),
             Some((GraphEvent::Selected(Some(3)), _))
         ));
-        harness.process_text_event(TextEvent::Ime(Ime::Commit("#".into())));
+        harness.process_text_event(TextEvent::Ime(Ime::Commit("i#".into())));
         assert!(matches!(
             harness.pop_action::<TextAction>(),
             Some((TextAction::Changed(text), _)) if text.contains('#')
@@ -1983,7 +1987,7 @@ mod tests {
             harness.pop_action::<GraphEvent>(),
             Some((GraphEvent::Selected(Some(node)), _)) if node == second_node
         ));
-        harness.process_text_event(TextEvent::Ime(Ime::Commit("# second".into())));
+        harness.process_text_event(TextEvent::Ime(Ime::Commit("i# second".into())));
         let Some((TextAction::Changed(text), source)) = harness.pop_action::<TextAction>() else {
             panic!("second editor did not emit TextAction");
         };

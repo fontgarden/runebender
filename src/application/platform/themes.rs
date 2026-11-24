@@ -76,6 +76,7 @@ impl ThemeCatalog {
         use std::path::PathBuf;
 
         let config_root = std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|root| !root.is_empty())
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")));
         if let Some(root) = config_root {

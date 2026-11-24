@@ -21,12 +21,13 @@ use crate::application::design::{
 };
 use crate::application::design::{column, row};
 use crate::application::view::{label, text_input};
+use crate::application::widgets::keyed_canvas::keyed_canvas;
 use masonry::layout::{Dim, Length};
 use masonry::properties::Dimensions;
 use xilem::WidgetView;
 use xilem::style::Style;
 use xilem::view::FlexExt as _;
-use xilem::view::{FlexSpacer, canvas, sized_box};
+use xilem::view::{FlexSpacer, sized_box};
 
 use crate::application::design::theme::Palette;
 use crate::application::workspace::Workspace;
@@ -209,6 +210,58 @@ where
     panel_group(&app.palette, section(app, key, title, body))
 }
 
+/// A folding section of list rows, for the left panel's categories, scripts and filters.
+///
+/// The row faces reach [`SIDEBAR_ROW_INSET`](crate::application::design::SIDEBAR_ROW_INSET)
+/// past the panel's content column on both sides.
+/// The header's marker and title, and every row's marker, name and count, stay on that column,
+/// so no row is indented under its header.
+pub(crate) fn list_section<V>(
+    app: &Workspace,
+    key: &'static str,
+    title: &str,
+    rows: Vec<V>,
+) -> impl WidgetView<Workspace> + use<V>
+where
+    V: WidgetView<Workspace> + 'static,
+{
+    use crate::application::design::{PANEL_SECTION_INSET, SIDEBAR_ROW_INSET};
+    let pal = &app.palette;
+    let open = !app.collapsed.contains(key);
+    let header = sized_box(section_toggle_height(
+        pal,
+        title,
+        open,
+        ControlSize::Row.px(),
+        move |app: &mut Workspace| {
+            if !app.collapsed.remove(key) {
+                app.collapsed.insert(key);
+            }
+        },
+    ))
+    .padding(masonry::properties::Padding::horizontal(Length::px(
+        SIDEBAR_ROW_INSET,
+    )));
+    column(
+        Region::List,
+        (
+            sized_box(
+                column(
+                    Region::Section,
+                    (header, open.then(|| column(Region::List, rows))),
+                )
+                .gap(crate::application::design::PANEL_SECTION_BODY_GAP),
+            )
+            .padding(masonry::properties::Padding::from_vh(
+                PANEL_SECTION_INSET.length(),
+                Length::px(PANEL_SECTION_INSET.px() - SIDEBAR_ROW_INSET),
+            )),
+            hairline(pal),
+        ),
+    )
+    .gap(Space::None)
+}
+
 /// A read-only label/value row: name left, value right, one row tall.
 pub(crate) fn kv(pal: &Palette, name: String, value: String) -> impl WidgetView<Workspace> + use<> {
     let (muted, text) = (pal.text_muted, pal.text);
@@ -271,6 +324,7 @@ where
             control,
         ),
     )
+    .gap(crate::application::design::PANEL_SECTION_INSET)
 }
 
 /// A labeled text field: caption over a control-height input.
@@ -317,7 +371,7 @@ where
         .corner_radius(Length::px(pal.control_radius))
 }
 
-/// The three kinds of entry in a conversation. Each is a card with the
+/// The four kinds of entry in a conversation. Each is a card with the
 /// field's keyline, so the transcript and the field it grows from read as
 /// one family; only the surface tells them apart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -520,7 +574,7 @@ pub(crate) enum Marker {
 
 /// A row marker painted from the editable icon UFO.
 pub(crate) fn marker(marker: Marker, color: xilem::Color) -> impl WidgetView<Workspace> + use<> {
-    sized_box(canvas(move |_: &mut Workspace, _, scene, size| {
+    sized_box(keyed_canvas((marker, color), move |_, scene, size| {
         use masonry::imaging::Painter;
         let name = match marker {
             Marker::None => return,
@@ -710,7 +764,16 @@ where
     let selected_ring = pal.outline;
     let clear_ink = pal.editor_control_ink();
     let line = pal.stroke;
-    let face = sized_box(canvas(move |_: &mut Workspace, _, scene, size| {
+    let key = (
+        color,
+        selected,
+        clear,
+        outline,
+        selected_ring,
+        clear_ink,
+        line,
+    );
+    let face = sized_box(keyed_canvas(key, move |_, scene, size| {
         use masonry::imaging::Painter;
         use masonry::kurbo::{Circle, Rect, Stroke as Pen};
         let mut painter = Painter::new(scene);
@@ -774,4 +837,6 @@ where
 }
 
 pub(crate) mod rows;
-pub(crate) use rows::{Group, Row, Tile, chip, click, picker, section_of, section_with_details};
+pub(crate) use rows::{
+    Group, Row, Tile, body_of, chip, click, picker, section_of, section_with_details,
+};

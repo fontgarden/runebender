@@ -19,6 +19,8 @@
 //!
 //! # Known gaps
 //!
+//! - Backup layers of a master are read as UFO layers of the same name. Not read: the
+//!   background of a layer.
 //! - Not read: brace and bracket layers, smart components, OpenType
 //!   features, classes and prefixes, color labels, hints, guides,
 //!   instances, right-to-left and vertical kerning, and most custom
@@ -112,12 +114,6 @@ fn convert(font: GlyphsFont) -> Result<ConversionResult, String> {
                 "<dict>\n  <key>creator</key>\n  <string>org.runebender.glyphs-import</string>\n  <key>formatVersion</key>\n  <integer>3</integer>\n</dict>",
             ),
         });
-        files.push(ConvertedFile {
-            path: format!("{ufo_dir}/layercontents.plist"),
-            text: plist_doc(
-                "<array>\n  <array>\n    <string>public.default</string>\n    <string>glyphs</string>\n  </array>\n</array>",
-            ),
-        });
 
         files.push(ConvertedFile {
             path: format!("{ufo_dir}/fontinfo.plist"),
@@ -127,6 +123,7 @@ fn convert(font: GlyphsFont) -> Result<ConversionResult, String> {
         // Glyphs for this master's main layer.
         let mut existing = HashSet::new();
         let mut contents = String::new();
+        let mut imported = Vec::new();
         for glyph in &font.glyphs {
             let Some(layer) = glyph
                 .layers
@@ -138,6 +135,7 @@ fn convert(font: GlyphsFont) -> Result<ConversionResult, String> {
             };
             match layer_to_glif(font, glyph, layer) {
                 Ok(xml) => {
+                    imported.push(glyph.name.as_str());
                     let file_name =
                         norad::user_name_to_file_name(&glyph.name, "", ".glif", |candidate| {
                             !existing.contains(candidate)
@@ -157,9 +155,84 @@ fn convert(font: GlyphsFont) -> Result<ConversionResult, String> {
                 Err(e) => warnings.push(format!("{} ({master_name}): {e}", glyph.name)),
             }
         }
+        let mut lib = plist::Dictionary::new();
+        super::metadata::lib_keys::write_foreign_glyphs(
+            &mut lib,
+            imported,
+            font.glyphs.iter().map(|glyph| glyph.name.as_str()),
+        );
+        let mut bytes = Vec::new();
+        plist::to_writer_xml(&mut bytes, &lib).map_err(|error| error.to_string())?;
+        files.push(ConvertedFile {
+            path: format!("{ufo_dir}/lib.plist"),
+            text: String::from_utf8(bytes).map_err(|error| error.to_string())?,
+        });
         files.push(ConvertedFile {
             path: format!("{ufo_dir}/glyphs/contents.plist"),
             text: plist_doc(&format!("<dict>\n{contents}</dict>")),
+        });
+
+        // Backup layers of this master become UFO layers of the same name, one folder each.
+        let mut backups: BTreeMap<&str, Vec<(&str, String)>> = BTreeMap::new();
+        for glyph in &font.glyphs {
+            for layer in glyph
+                .layers
+                .iter()
+                .filter(|l| is_backup_layer(l, &master.id))
+            {
+                let name = layer.name.as_deref().unwrap_or_default();
+                match layer_to_glif(font, glyph, layer) {
+                    Ok(xml) => backups.entry(name).or_default().push((&glyph.name, xml)),
+                    Err(e) => {
+                        warnings.push(format!("{} ({master_name}, layer {name}): {e}", glyph.name));
+                    }
+                }
+            }
+        }
+        let mut layer_rows = String::from(
+            "  <array>\n    <string>public.default</string>\n    <string>glyphs</string>\n  </array>\n",
+        );
+        let mut layer_dirs = HashSet::from(["glyphs".to_owned()]);
+        for (layer_name, glyphs) in backups {
+            let dir = norad::user_name_to_file_name(layer_name, "glyphs.", "", |candidate| {
+                !layer_dirs.contains(candidate)
+            })
+            .to_string_lossy()
+            .to_string();
+            layer_dirs.insert(dir.clone());
+            layer_rows.push_str(&format!(
+                "  <array>\n    <string>{}</string>\n    <string>{}</string>\n  </array>\n",
+                xml_escape(layer_name),
+                xml_escape(&dir)
+            ));
+            let mut existing = HashSet::new();
+            let mut contents = String::new();
+            for (glyph_name, xml) in glyphs {
+                let file_name =
+                    norad::user_name_to_file_name(glyph_name, "", ".glif", |candidate| {
+                        !existing.contains(candidate)
+                    })
+                    .to_string_lossy()
+                    .to_string();
+                existing.insert(file_name.clone());
+                contents.push_str(&format!(
+                    "  <key>{}</key>\n  <string>{}</string>\n",
+                    xml_escape(glyph_name),
+                    xml_escape(&file_name)
+                ));
+                files.push(ConvertedFile {
+                    path: format!("{ufo_dir}/{dir}/{file_name}"),
+                    text: xml,
+                });
+            }
+            files.push(ConvertedFile {
+                path: format!("{ufo_dir}/{dir}/contents.plist"),
+                text: plist_doc(&format!("<dict>\n{contents}</dict>")),
+            });
+        }
+        files.push(ConvertedFile {
+            path: format!("{ufo_dir}/layercontents.plist"),
+            text: plist_doc(&format!("<array>\n{layer_rows}</array>")),
         });
 
         // Kerning groups + per-master kerning (LTR only for now).
@@ -286,6 +359,19 @@ fn fontinfo_plist(
     }
     body.push_str("</dict>");
     plist_doc(&body)
+}
+
+/// Whether `layer` is a plain backup layer of `master`: a named layer associated with the
+/// master that is not its master layer and has no special role. Brace layers (`{…}`), bracket
+/// layers (`[…]`) and layers with attributes, such as color layers, are not backup layers.
+pub(crate) fn is_backup_layer(layer: &glyphslib::glyphs3::Layer, master: &str) -> bool {
+    layer.associated_master_id.as_deref() == Some(master)
+        && layer.layer_id != master
+        && layer.attr.is_empty()
+        && layer.name.as_deref().is_some_and(|name| {
+            let name = name.trim();
+            !name.is_empty() && !name.starts_with('{') && !name.starts_with('[')
+        })
 }
 
 fn layer_to_glif(
@@ -572,7 +658,13 @@ fn xml_escape(s: &str) -> String {
 }
 
 fn fmt_f32(v: f32) -> String {
-    fmt_f64(v as f64)
+    if v.fract() == 0.0 {
+        fmt_f64(f64::from(v))
+    } else {
+        // The shortest text that reads back as the same f32. Widening first would print
+        // digits that the Designspace reader rejects as not round-tripping.
+        format!("{v}")
+    }
 }
 
 fn fmt_f64(v: f64) -> String {

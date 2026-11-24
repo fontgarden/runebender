@@ -1,43 +1,62 @@
-# The gate every change passes: formatted, clippy-clean, documented,
-# and built and tested on Linux and macOS. The Linux job installs the
-# libraries winit, Vello, and the native file dialog link against.
+# Pinned minimum Rust gates production, auxiliary targets, and the reusable engine.
+# Current stable gets a Linux compatibility check, not a second platform matrix.
+# Scheduled runs only refresh security advisory checks.
 name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 7 * * 1"
+
+permissions:
+  contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   CARGO_BUILD_JOBS: 2
   CARGO_TERM_COLOR: always
-  RUST_STABLE_VER: "1.96"
+  # Keep this aligned with rust-toolchain.toml and package.rust-version.
+  RUST_MIN_VER: "1.96"
 
 jobs:
   quality:
     name: formatting and repository hygiene
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.RUST_STABLE_VER }}
+          toolchain: ${{ env.RUST_MIN_VER }}
           components: rustfmt
       - name: cargo fmt
         run: cargo fmt --all --check
+      - name: Browser adapter formatting
+        run: rustfmt --check --edition 2024 web/compat/src/lib.rs
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: taplo@0.10.0,typos-cli@1.52.1
+      - name: TOML formatting
+        run: taplo fmt --check
+      - name: Spelling in source and documentation
+        run: typos
       - name: Release publication gates
         run: |
           python3 scripts/test_release.py
           python3 scripts/test_sparkle.py
+          python3 -m unittest discover -s web -p 'test_prepare.py'
       - name: Copyright headers
         run: bash .github/scripts/copyright.sh
 
   build:
-    name: ${{ matrix.os }}
+    name: minimum Rust / ${{ matrix.os }}
+    if: github.event_name != 'schedule'
     runs-on: ${{ matrix.os }}
     env:
       RUSTFLAGS: -D warnings
@@ -65,27 +84,50 @@ jobs:
             libglib2.0-dev libgtk-3-dev libxdo-dev libasound2-dev
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.RUST_STABLE_VER }}
+          toolchain: ${{ env.RUST_MIN_VER }}
           components: clippy
           targets: wasm32-unknown-unknown
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
+      # The browser workspace has no loadable manifest until the adapter is prepared,
+      # so the cache step runs after it, and macOS caches the root workspace only.
+      - name: Prepare browser adapter
+        if: runner.os == 'Linux'
+        run: python3 web/prepare.py
       - uses: Swatinem/rust-cache@v2
-      - name: clippy
-        run: cargo clippy --workspace --all-targets --locked
+        if: runner.os == 'Linux'
+        with:
+          workspaces: |
+            . -> target
+            web -> target
+      - uses: Swatinem/rust-cache@v2
+        if: runner.os != 'Linux'
+        with:
+          workspaces: . -> target
+      - name: Production clippy
+        run: cargo clippy --workspace --lib --bins --locked -- -D warnings
+      - name: Auxiliary clippy
+        run: |
+          cargo clippy --workspace --tests --examples --benches --locked -- -D warnings
+          cargo clippy --workspace --tests --examples --benches --features integration-fonts --locked -- -D warnings
+      - name: Engine without application features
+        run: |
+          cargo check --lib --no-default-features --locked
+          cargo clippy --lib --no-default-features --locked -- -D warnings
       - name: Check native macOS updater
         if: runner.os == 'macOS'
         run: |
           SPARKLE_FRAMEWORK_PATH="$(python3 scripts/sparkle.py)" \
-            cargo clippy --workspace --all-targets --features macos-updater --locked -- -D warnings
-      - name: Prepare browser adapter
-        if: runner.os == 'Linux'
-        run: python3 web/prepare.py
+            cargo clippy --workspace --lib --bins --features macos-updater --locked -- -D warnings
+          SPARKLE_FRAMEWORK_PATH="$(python3 scripts/sparkle.py)" \
+            cargo clippy --workspace --tests --examples --benches --features macos-updater,integration-fonts --locked -- -D warnings
       - name: Browser clippy
         if: runner.os == 'Linux'
         env:
-          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS: -C target-feature=+simd128
+          # RUSTFLAGS replaces target-specific flags, so the SIMD feature that web/build.sh
+          # ships must be repeated here beside the job's warning policy.
+          RUSTFLAGS: -D warnings -C target-feature=+simd128
         run: >-
           cargo clippy --manifest-path web/Cargo.toml --locked
           --target wasm32-unknown-unknown --no-deps -- -D warnings
@@ -96,18 +138,104 @@ jobs:
           cargo install --locked --git https://github.com/eliheuer/designbot
           --rev d723b6b891c9a9c7e5d79790738134bc2d0ce765
           --bin designbot designbot-cli
-      - name: test
+      - name: Self-contained engine unit tests without application features
+        run: env -u RUNEBENDER_TEST_FONTS cargo test --lib --no-default-features --locked -- --test-threads=1
+      - name: Tests including pinned external font fixtures
         shell: bash
         run: |
           if [[ "$RUNNER_OS" == "macOS" ]]; then
             framework_path="$(python3 scripts/sparkle.py)"
             SPARKLE_FRAMEWORK_PATH="$framework_path" DYLD_FRAMEWORK_PATH="$framework_path" \
-              cargo test --workspace --features macos-updater --locked -- --test-threads=1
+              cargo test --workspace --features macos-updater,integration-fonts --locked -- --test-threads=1
           else
-            cargo test --workspace --locked -- --test-threads=1
+            cargo test --workspace --features integration-fonts --locked -- --test-threads=1
           fi
       - name: build
         run: cargo build --workspace --release --locked
+
+  stable:
+    name: current stable / Linux compatibility
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libfontconfig-dev libwayland-dev libxkbcommon-dev \
+            libx11-dev libxcb1-dev libvulkan1 libssl-dev \
+            libglib2.0-dev libgtk-3-dev libxdo-dev libasound2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Explicit +stable overrides the repository's pinned rust-toolchain.toml.
+      - name: Production compatibility
+        run: cargo +stable check --workspace --lib --bins --locked
+      - name: Auxiliary compatibility
+        run: cargo +stable check --workspace --tests --examples --benches --features integration-fonts --locked
+      - name: Engine compatibility without application features
+        run: cargo +stable check --lib --no-default-features --locked
+
+  browser:
+    name: browser editor
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: eliheuer/virtua-grotesk
+          ref: 018488ed9499b7f2c18a249f5406797fc6a20e1d
+          path: test-fonts
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_MIN_VER }}
+          targets: wasm32-unknown-unknown
+      - name: Prepare browser adapter
+        run: python3 web/prepare.py
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: web -> target
+      # web/build.sh refuses any other wasm-bindgen version.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.127
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build the browser editor
+        run: ./web/build.sh
+      - name: Install pinned Playwright and Chromium
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Browser checks
+        env:
+          RUNEBENDER_TEST_FONTS: ${{ github.workspace }}/test-fonts/sources
+          RUNEBENDER_PROOFS: ${{ github.workspace }}/browser-proofs
+        run: |
+          python3 -m http.server 4326 --bind 127.0.0.1 --directory web > /dev/null 2>&1 &
+          for attempt in $(seq 1 30); do
+            curl --silent --fail --output /dev/null http://127.0.0.1:4326/ && break
+            sleep 1
+          done
+          node web/quality.cjs
+          node web/folder.cjs
+          node web/hoi-editing.cjs
+          node web/hoi-preservation.cjs
+          node web/menu-appearance.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-proofs
+          path: browser-proofs/
+          if-no-files-found: ignore
 
   advisories:
     name: security advisories
@@ -118,8 +246,22 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny@0.20.2
-      # RustSec advisories against anything in the lock file. Unlike
-      # the rest of CI this can go red without a change of ours, when
-      # an advisory is published; that is the point of it.
-      - name: cargo deny check advisories
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # The separate web workspace needs its generated, pinned adapter manifest.
+      - name: Prepare browser dependency graph
+        run: python3 web/prepare.py
+      # Audit both Cargo lockfiles against the same reviewed exception policy.
+      # Weekly runs catch newly published advisories even without a code change.
+      # Run every audit after a failure so one graph cannot hide another's findings.
+      - name: Root Cargo.lock advisories
+        if: ${{ !cancelled() }}
         run: cargo deny --locked check advisories
+      - name: Browser Cargo.lock advisories
+        if: ${{ !cancelled() }}
+        run: cargo deny --manifest-path web/Cargo.toml --locked --config deny.toml check advisories
+      - name: Browser package-lock.json advisories
+        if: ${{ !cancelled() }}
+        working-directory: web
+        run: npm audit --package-lock-only --audit-level=low

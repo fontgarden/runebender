@@ -1,4 +1,9 @@
 /target
+# Steam Deck container builds (steamdeck/build.sh).
+/target-*/
+/steamdeck/bin/
+# Pinned Playwright for the browser checks (web/package-lock.json).
+/web/node_modules/
 .DS_Store
 
 # Local worktrees

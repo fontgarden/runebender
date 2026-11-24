@@ -104,6 +104,20 @@ appInk = "baseUi.01"
 headerMutedInk = "baseUi.02"
 
 [roles]
+# Code editor in script nodes: its ground, text, and syntax colors.
+codeBackground = "#000000"
+codeText = "#D8C8A0"
+codeKeyword = "#CC6255"
+codeFunction = "#D9BE4A"
+codeType = "#4D9E78"
+codeString = "#6DBF4E"
+codeNumber = "#D4943D"
+codeComment = "#58524A"
+codeConstant = "#8878A8"
+codeOperator = "#A0A0C0"
+# Line numbers, and the visual-mode selection behind the text.
+codeLineNumber = "#3A3632"
+codeSelection = "#2A2520"
 # Save-state labels use darker hues on the pale title bar, independently of glyph marks.
 savedInk = "rainbow.green.deep"
 unsavedInk = "rainbow.red.dim"

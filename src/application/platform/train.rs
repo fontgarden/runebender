@@ -10,8 +10,20 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use runebender::workflows::process::{
+    self, OutputStream, ProcessCancellation, ProcessLimits, ProcessOutcome,
+};
 
 use crate::application::workspace::Workspace;
+
+/// Longest supervised training run, the maximum the shared process runner accepts.
+const TRAIN_DEADLINE: Duration = Duration::from_secs(24 * 60 * 60);
+/// Retained bytes of each output stream; a longer log stops the run.
+const TRAIN_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+/// Lines of each stream kept to report the result.
+const TAIL_LINES: usize = 12;
 
 /// One training run in progress.
 #[derive(Clone)]
@@ -20,15 +32,11 @@ pub(crate) struct TrainJob {
     pub(crate) lines: Arc<Mutex<Vec<String>>>,
     /// Filled once when the script exits.
     pub(crate) finished: Arc<Mutex<Option<Result<String, String>>>>,
-    /// The script's process, to cancel.
-    child: Arc<Mutex<Option<std::process::Child>>>,
+    /// Stops the script's process.
+    cancel: ProcessCancellation,
     /// Where the run happens: the host, or "this machine".
     pub(crate) place: Arc<Mutex<String>>,
 }
-
-/// Message sent while the worker runs and when it has finished.
-#[derive(Debug)]
-pub(crate) struct TrainProgress;
 
 /// One trained version beside the source.
 #[derive(Clone, Debug, PartialEq)]
@@ -68,6 +76,16 @@ pub(crate) struct TrainState {
     pub(crate) status: String,
     /// The versions beside the source, oldest first.
     pub(crate) versions: Vec<ModelVersion>,
+}
+
+impl Drop for TrainState {
+    /// A run belongs to its document: stop the script when the document closes.
+    /// Without this a run continued for up to its 24 hour deadline with no window to show it.
+    fn drop(&mut self) {
+        if let Some(job) = &self.job {
+            job.cancel.cancel();
+        }
+    }
 }
 
 /// The folder beside `source` that holds its versions: `Name.models` next to `Name.nufo`.
@@ -137,7 +155,6 @@ fn version_at(path: PathBuf, name: String) -> ModelVersion {
 }
 
 /// The host answers ssh within a few seconds.
-#[cfg(not(target_arch = "wasm32"))]
 fn host_answers(host: &str) -> bool {
     std::process::Command::new("ssh")
         .args([
@@ -227,28 +244,23 @@ impl Workspace {
         let job = TrainJob {
             lines: Arc::new(Mutex::new(Vec::new())),
             finished: Arc::new(Mutex::new(None)),
-            child: Arc::new(Mutex::new(None)),
+            cancel: ProcessCancellation::default(),
             place: Arc::new(Mutex::new("…".into())),
         };
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let worker = job.clone();
-            std::thread::spawn(move || {
-                let result = run(
-                    &worker,
-                    &settings,
-                    epochs,
-                    only.as_deref(),
-                    &script,
-                    &source,
-                    &name,
-                    &out_dir,
-                );
-                *worker.finished.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
-            });
-        }
-        #[cfg(target_arch = "wasm32")]
-        let _ = (epochs, &settings, &script, &source, &name, &out_dir, &only);
+        let worker = job.clone();
+        std::thread::spawn(move || {
+            let result = run(
+                &worker,
+                &settings,
+                epochs,
+                only.as_deref(),
+                &script,
+                &source,
+                &name,
+                &out_dir,
+            );
+            *worker.finished.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
+        });
         self.train.status = "Starting…".into();
         self.train.job = Some(job);
         self.note = "Training…".into();
@@ -259,9 +271,7 @@ impl Workspace {
         let Some(job) = self.train.job.as_ref() else {
             return;
         };
-        if let Some(child) = job.child.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-            let _ = child.kill();
-        }
+        job.cancel.cancel();
         self.train.status = "Cancelled".into();
     }
 
@@ -324,7 +334,6 @@ fn status_of(line: &str, place: &str) -> Option<String> {
 
 /// Run the script and stream its lines. Returns the script's last line on success, or the
 /// last few lines on failure.
-#[cfg(not(target_arch = "wasm32"))]
 #[expect(
     clippy::too_many_arguments,
     reason = "one call site, each a distinct setting"
@@ -339,7 +348,6 @@ fn run(
     name: &str,
     out_dir: &Path,
 ) -> Result<String, String> {
-    use std::io::BufRead as _;
     let host = settings
         .train_host
         .as_deref()
@@ -355,10 +363,7 @@ fn run(
         .arg(epochs.to_string())
         .current_dir(&settings.post_opentype)
         .env("OUT_DIR", out_dir)
-        .env("NTF_ONLY", only.unwrap_or_default())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+        .env("NTF_ONLY", only.unwrap_or_default());
     match &host {
         Some(host) => {
             command.env("TRAIN_HOST", host);
@@ -367,56 +372,40 @@ fn run(
             command.env_remove("TRAIN_HOST");
         }
     }
-    let mut child = command.spawn().map_err(|error| error.to_string())?;
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    *job.child.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
-    let mut readers = Vec::new();
-    for reader in [
-        stdout.map(|s| Box::new(s) as Box<dyn std::io::Read + Send>),
-        stderr.map(|s| Box::new(s) as Box<dyn std::io::Read + Send>),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        let lines = job.lines.clone();
-        readers.push(std::thread::spawn(move || {
-            let mut tail: Vec<String> = Vec::new();
-            for line in std::io::BufReader::new(reader)
-                .lines()
-                .map_while(Result::ok)
-            {
-                tail.push(line.clone());
-                if tail.len() > 12 {
-                    tail.remove(0);
-                }
-                lines.lock().unwrap_or_else(|e| e.into_inner()).push(line);
-            }
-            tail
-        }));
-    }
-    let tails: Vec<Vec<String>> = readers
-        .into_iter()
-        .map(|reader| reader.join().unwrap_or_default())
-        .collect();
-    let status = {
-        let mut guard = job.child.lock().unwrap_or_else(|e| e.into_inner());
-        match guard.as_mut() {
-            Some(child) => child.wait().map_err(|error| error.to_string())?,
-            None => return Err("the run was lost".into()),
-        }
+    let limits = ProcessLimits {
+        deadline: TRAIN_DEADLINE,
+        stdin_bytes: 0,
+        stdout_bytes: TRAIN_OUTPUT_BYTES,
+        stderr_bytes: TRAIN_OUTPUT_BYTES,
     };
-    *job.child.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    if status.success() {
-        Ok(tails
-            .first()
-            .and_then(|tail| tail.last().cloned())
-            .unwrap_or_else(|| "Trained".into()))
-    } else {
-        let mut lines: Vec<String> = tails.into_iter().flatten().collect();
-        lines.retain(|line| !line.trim().is_empty());
-        let last: Vec<String> = lines.into_iter().rev().take(4).collect();
-        Err(last.into_iter().rev().collect::<Vec<_>>().join(" | "))
+    let mut stdout_tail: Vec<String> = Vec::new();
+    let mut stderr_tail: Vec<String> = Vec::new();
+    let output = process::run(&mut command, &[], limits, &job.cancel, |stream, line| {
+        let tail = match stream {
+            OutputStream::Stdout => &mut stdout_tail,
+            OutputStream::Stderr => &mut stderr_tail,
+        };
+        tail.push(line.to_string());
+        if tail.len() > TAIL_LINES {
+            tail.remove(0);
+        }
+        job.lines
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(line.to_string());
+    });
+    match output.outcome {
+        ProcessOutcome::Exited { success: true, .. } => Ok(stdout_tail
+            .last()
+            .cloned()
+            .unwrap_or_else(|| "Trained".into())),
+        ProcessOutcome::Exited { .. } => {
+            let mut lines: Vec<String> = stdout_tail.into_iter().chain(stderr_tail).collect();
+            lines.retain(|line| !line.trim().is_empty());
+            let last: Vec<String> = lines.into_iter().rev().take(4).collect();
+            Err(last.into_iter().rev().collect::<Vec<_>>().join(" | "))
+        }
+        outcome => Err(outcome.to_string()),
     }
 }
 
@@ -433,9 +422,9 @@ mod tests {
         let models = models_dir(&source);
         assert_eq!(models, dir.join("Demo.models"));
         std::fs::create_dir_all(models.join("001")).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(20));
         std::fs::create_dir_all(models.join("002")).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(20));
         std::fs::create_dir_all(models.join("sample-ba-basic-2/001")).unwrap();
         std::fs::write(
             models.join("001/train.log"),
@@ -470,7 +459,7 @@ mod tests {
         let job = TrainJob {
             lines: Arc::new(Mutex::new(Vec::new())),
             finished: Arc::new(Mutex::new(None)),
-            child: Arc::new(Mutex::new(None)),
+            cancel: ProcessCancellation::default(),
             place: Arc::new(Mutex::new(String::new())),
         };
         let settings = crate::application::platform::config::Neural {

@@ -33,7 +33,8 @@ pub(super) struct CompileCache {
     )>,
     result: Option<Result<Arc<CompiledFont>, String>>,
     pending: Option<PreviewJob>,
-    queued: Option<babelfont::Font>,
+    /// Set while a pointer gesture is in progress; see [`Project::preview_hold`].
+    hold: Arc<std::sync::atomic::AtomicBool>,
     /// When the sources last changed while a preview was wanted; the snapshot and compile
     /// wait until the edits pause.
     #[cfg(not(target_arch = "wasm32"))]
@@ -111,6 +112,64 @@ impl PreviewJob {
     }
 }
 
+fn normalized_coords(normalized: &[f64]) -> Vec<skrifa::instance::NormalizedCoord> {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "OpenType coordinates use 14 fractional bits"
+    )]
+    normalized
+        .iter()
+        .map(|value| skrifa::instance::NormalizedCoord::from_f32(*value as f32))
+        .collect()
+}
+
+/// Draw the glyph with this index, unhinted and in font units; a glyph without an outline
+/// gives an empty path.
+fn draw_glyph(
+    outlines: &skrifa::outline::OutlineGlyphCollection<'_>,
+    id: u32,
+    coords: &[skrifa::instance::NormalizedCoord],
+) -> Result<kurbo::BezPath, String> {
+    use skrifa::{
+        instance::{LocationRef, Size},
+        outline::{DrawSettings, OutlinePen},
+    };
+    #[derive(Default)]
+    struct Pen(kurbo::BezPath);
+    impl OutlinePen for Pen {
+        fn move_to(&mut self, x: f32, y: f32) {
+            self.0.move_to((f64::from(x), f64::from(y)));
+        }
+        fn line_to(&mut self, x: f32, y: f32) {
+            self.0.line_to((f64::from(x), f64::from(y)));
+        }
+        fn quad_to(&mut self, x: f32, y: f32, x1: f32, y1: f32) {
+            self.0
+                .quad_to((f64::from(x), f64::from(y)), (f64::from(x1), f64::from(y1)));
+        }
+        fn curve_to(&mut self, x: f32, y: f32, x1: f32, y1: f32, x2: f32, y2: f32) {
+            self.0.curve_to(
+                (f64::from(x), f64::from(y)),
+                (f64::from(x1), f64::from(y1)),
+                (f64::from(x2), f64::from(y2)),
+            );
+        }
+        fn close(&mut self) {
+            self.0.close_path();
+        }
+    }
+    let mut pen = Pen::default();
+    if let Some(glyph) = outlines.get(skrifa::GlyphId::new(id)) {
+        glyph
+            .draw(
+                DrawSettings::unhinted(Size::unscaled(), LocationRef::new(coords)),
+                &mut pen,
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(pen.0)
+}
+
 /// A compiled, immutable revision, shared by shaping and binary export.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledFont {
@@ -120,6 +179,8 @@ pub struct CompiledFont {
     pub glyph_order: Vec<String>,
     /// Axis tags in the compiled font's coordinate order.
     pub axis_tags: Vec<String>,
+    /// Each glyph's index in `glyph_order`, for drawing one glyph by name.
+    pub glyph_ids: std::collections::HashMap<String, u32>,
 }
 
 impl CompiledFont {
@@ -153,66 +214,41 @@ impl CompiledFont {
             .collect()
     }
 
+    /// Draw one glyph's compiled outline at a normalized location.
+    ///
+    /// `Ok(None)` when the font has no glyph of that name.
+    /// Text draws only the glyphs it shows, so this avoids drawing the whole font after
+    /// every compile; use [`Self::outlines`] when every glyph is wanted.
+    pub fn outline(
+        &self,
+        name: &str,
+        normalized: &[f64],
+    ) -> Result<Option<kurbo::BezPath>, String> {
+        let Some(&id) = self.glyph_ids.get(name) else {
+            return Ok(None);
+        };
+        // Reading the table directory again for each glyph is small beside drawing it.
+        let font = skrifa::FontRef::new(&self.bytes).map_err(|error| error.to_string())?;
+        use skrifa::MetadataProvider as _;
+        let coords = normalized_coords(normalized);
+        draw_glyph(&font.outline_glyphs(), id, &coords).map(Some)
+    }
+
     /// Draw the compiled outlines at the same normalized location as shaping.
     pub fn outlines(
         &self,
         normalized: &[f64],
     ) -> Result<Vec<(String, Arc<kurbo::BezPath>)>, String> {
-        use skrifa::{
-            MetadataProvider as _,
-            instance::{LocationRef, Size},
-            outline::{DrawSettings, OutlinePen},
-        };
-        #[derive(Default)]
-        struct Pen(kurbo::BezPath);
-        impl OutlinePen for Pen {
-            fn move_to(&mut self, x: f32, y: f32) {
-                self.0.move_to((f64::from(x), f64::from(y)));
-            }
-            fn line_to(&mut self, x: f32, y: f32) {
-                self.0.line_to((f64::from(x), f64::from(y)));
-            }
-            fn quad_to(&mut self, x: f32, y: f32, x1: f32, y1: f32) {
-                self.0
-                    .quad_to((f64::from(x), f64::from(y)), (f64::from(x1), f64::from(y1)));
-            }
-            fn curve_to(&mut self, x: f32, y: f32, x1: f32, y1: f32, x2: f32, y2: f32) {
-                self.0.curve_to(
-                    (f64::from(x), f64::from(y)),
-                    (f64::from(x1), f64::from(y1)),
-                    (f64::from(x2), f64::from(y2)),
-                );
-            }
-            fn close(&mut self) {
-                self.0.close_path();
-            }
-        }
+        use skrifa::MetadataProvider as _;
         let font = skrifa::FontRef::new(&self.bytes).map_err(|error| error.to_string())?;
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "OpenType coordinates use 14 fractional bits"
-        )]
-        let coords: Vec<_> = normalized
-            .iter()
-            .map(|v| skrifa::instance::NormalizedCoord::from_f32(*v as f32))
-            .collect();
+        let coords = normalized_coords(normalized);
         let outlines = font.outline_glyphs();
         self.glyph_order
             .iter()
             .enumerate()
             .map(|(index, name)| {
-                let mut pen = Pen::default();
-                if let Some(glyph) = outlines.get(skrifa::GlyphId::new(
-                    u32::try_from(index).map_err(|_| "glyph id overflow")?,
-                )) {
-                    glyph
-                        .draw(
-                            DrawSettings::unhinted(Size::unscaled(), LocationRef::new(&coords)),
-                            &mut pen,
-                        )
-                        .map_err(|error| error.to_string())?;
-                }
-                Ok((name.clone(), Arc::new(pen.0)))
+                let id = u32::try_from(index).map_err(|_| "glyph id overflow")?;
+                Ok((name.clone(), Arc::new(draw_glyph(&outlines, id, &coords)?)))
             })
             .collect()
     }
@@ -267,10 +303,17 @@ impl CompiledFont {
             .iter()
             .map(|axis| axis.tag().to_string())
             .collect();
+        let glyph_order = shaping.glyph_order().to_vec();
+        let glyph_ids = glyph_order
+            .iter()
+            .enumerate()
+            .filter_map(|(index, name)| Some((name.clone(), u32::try_from(index).ok()?)))
+            .collect();
         Ok(Self {
             bytes: Arc::new(bytes),
-            glyph_order: shaping.glyph_order().to_vec(),
+            glyph_order,
             axis_tags,
+            glyph_ids,
         })
     }
 }
@@ -576,13 +619,28 @@ impl Project {
             cache.result = Some(self.compile().map(Arc::new));
             cache.key = Some(key);
             cache.pending = None;
-            cache.queued = None;
         }
         cache.result.as_ref().expect("compiled revision").clone()
     }
 
+    /// The flag that postpones the snapshot for the preview compile.
+    ///
+    /// The snapshot copies the whole font on the calling thread, which is the interface
+    /// thread. The editor sets the flag while a pointer gesture is in progress, so the copy
+    /// does not take frames from a drag. [`Self::request_preview`] takes the snapshot on its
+    /// first call after the flag is cleared.
+    pub fn preview_hold(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        self.variable
+            .compiled
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .hold
+            .clone()
+    }
+
     /// Request the latest preview without blocking the desktop event loop.
-    /// Edits during a compile replace one queued snapshot; stale results never publish.
+    /// One compile runs at a time. Edits during a compile wait for it to end, then one
+    /// snapshot of the latest sources starts the next compile; stale results never publish.
     /// Browser hosts currently compile synchronously because Rust threads are unavailable.
     pub fn request_preview(&self) -> Result<Option<Arc<CompiledFont>>, String> {
         #[cfg(target_arch = "wasm32")]
@@ -602,26 +660,6 @@ impl Project {
                 cache.key = Some(key);
                 cache.wanted = Some(std::time::Instant::now());
             }
-            if cache
-                .wanted
-                .is_some_and(|since| since.elapsed() >= PREVIEW_DEBOUNCE)
-            {
-                cache.wanted = None;
-                match self.babelfont_snapshot() {
-                    Ok(font) => {
-                        if cache.pending.is_some() {
-                            cache.queued = Some(font);
-                        } else {
-                            cache.pending = Some(PreviewJob::start(font));
-                        }
-                    }
-                    Err(error) => {
-                        cache.pending = None;
-                        cache.queued = None;
-                        cache.result = Some(Err(error));
-                    }
-                }
-            }
             if cache.pending.as_ref().is_some_and(PreviewJob::is_finished) {
                 let job = cache.pending.take().expect("finished job");
                 let result = job
@@ -630,10 +668,25 @@ impl Project {
                     .unwrap_or_else(|error| error.into_inner())
                     .take()
                     .expect("finished result");
-                if let Some(font) = cache.queued.take() {
-                    cache.pending = Some(PreviewJob::start(font));
-                } else {
+                if cache.wanted.is_none() {
+                    // A pending debounce means the key changed after this job started,
+                    // so its result belongs to an older revision.
                     cache.result = Some(result);
+                }
+            }
+            // The snapshot copies the whole font on this thread. Take it only when no
+            // compile is running, so one compile needs one copy, and never during a pointer
+            // gesture.
+            if cache.pending.is_none()
+                && !cache.hold.load(std::sync::atomic::Ordering::Relaxed)
+                && cache
+                    .wanted
+                    .is_some_and(|since| since.elapsed() >= PREVIEW_DEBOUNCE)
+            {
+                cache.wanted = None;
+                match self.babelfont_snapshot() {
+                    Ok(font) => cache.pending = Some(PreviewJob::start(font)),
+                    Err(error) => cache.result = Some(Err(error)),
                 }
             }
             cache.result.clone().transpose()

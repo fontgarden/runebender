@@ -48,11 +48,11 @@ impl Axis {
             || self
                 .map
                 .windows(2)
-                .any(|w| w[0].0 >= w[1].0 || w[0].1 >= w[1].1)
+                .any(|w| w[0].0 >= w[1].0 || w[0].1 > w[1].1)
             || self.map.len() == 1
         {
             return Err(format!(
-                "{}: axis map must be finite and strictly increasing",
+                "{}: axis map needs finite coordinates, strictly increasing inputs and nondecreasing outputs",
                 self.name
             ));
         }
@@ -145,4 +145,27 @@ fn map_value(map: &[(f64, f64)], value: f64) -> f64 {
         .find(|w| value <= w[1].0)
         .expect("value inside map");
     pair[0].1 + (value - pair[0].0) * (pair[1].1 - pair[0].1) / (pair[1].0 - pair[0].0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Axis;
+
+    #[test]
+    fn optical_size_can_reach_the_display_master_early() {
+        let axis = Axis {
+            name: "Optical Size".into(),
+            tag: "opsz".into(),
+            min: 14.0,
+            default: 14.0,
+            max: 144.0,
+            map: vec![(14.0, 14.0), (72.0, 144.0), (144.0, 144.0)],
+        };
+        axis.validate().unwrap();
+        for size in [72.0, 96.0, 144.0] {
+            assert_eq!(axis.user_to_design(size), 144.0);
+            assert_eq!(axis.user_to_normalized(size), 1.0);
+        }
+        assert_eq!(axis.user_to_design(axis.design_to_user(144.0)), 144.0);
+    }
 }

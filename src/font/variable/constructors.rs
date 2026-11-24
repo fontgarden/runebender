@@ -61,8 +61,10 @@ impl VariableData {
                 glyph.width,
                 glyph.codepoint,
             );
-            let mut variable = VariableGlyph::default();
-            variable.layers.insert(layer_id.clone(), preserved);
+            let mut variable = VariableGlyph::new();
+            variable
+                .layers
+                .insert(layer_id.clone(), Box::new(preserved));
             variable
                 .source_metadata
                 .insert(source, CanonicalSourceGlyphMetadata::default());
@@ -70,7 +72,7 @@ impl VariableData {
             geometry.layers.push(layer);
             geometry.codepoints = glyph.codepoint.into_iter().map(u32::from).collect();
             data.glyphs.insert(glyph.name, variable);
-            data.font.glyphs.0.push(geometry);
+            data.push_geometry(geometry);
         }
 
         // Source-format preservation is created only after canonical state.

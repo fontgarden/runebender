@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Files: opening a project, reloading it when the sources change, saving, and a new font.
 
@@ -10,6 +10,7 @@ use crate::application::editor::tools::{
     chat, graph, local_ai, scripts, sketch, voice, weight_debt,
 };
 use crate::application::font_model::FontModel;
+use crate::application::launch_options::LaunchOptions;
 use crate::application::view::canvas;
 use crate::application::view::canvas::grid::cells_of;
 use crate::application::view::panels::sections::metric_bufs;
@@ -41,6 +42,10 @@ fn source_roots(font: &FontModel) -> Vec<std::path::PathBuf> {
     roots
 }
 
+/// A value that changes when a source file is added, removed, resized or rewritten.
+///
+/// It compares what is on disk with what was opened or last saved. A file rewritten with the
+/// same bytes still counts as changed, because its modification time moves.
 fn source_fingerprint(roots: &[std::path::PathBuf]) -> u64 {
     fn hash_path(path: &FsPath, state: &mut std::collections::hash_map::DefaultHasher) {
         path.hash(state);
@@ -56,8 +61,13 @@ fn source_fingerprint(roots: &[std::path::PathBuf]) -> u64 {
                 hash_path(&entry, state);
             }
         } else {
-            match std::fs::read(path) {
-                Ok(bytes) => bytes.hash(state),
+            // A file's length and modification time stand for its contents. Reading every
+            // glyph file took as long as opening the font, at open and twice per save.
+            match std::fs::metadata(path) {
+                Ok(metadata) => {
+                    metadata.len().hash(state);
+                    metadata.modified().ok().hash(state);
+                }
                 Err(error) => error.kind().hash(state),
             }
         }
@@ -75,12 +85,17 @@ impl Workspace {
         Self::from_model(FontModel::open(path)?)
     }
 
+    /// Create the workspace of a font with the launch options of this process.
     pub(crate) fn from_model(font: FontModel) -> Result<Self, String> {
+        Self::new(font, LaunchOptions::current())
+    }
+
+    /// Create the workspace of a font with these launch options.
+    pub(crate) fn new(font: FontModel, options: &LaunchOptions) -> Result<Self, String> {
         let modified = font.project.is_modified();
         let source_roots = source_roots(&font);
         let source_fingerprint = source_fingerprint(&source_roots);
         let features_buf = font.feature_text().to_owned();
-        let source_name_buf = font.master_names()[font.active()].to_string();
         // A Glyphs or Fontra source opens through UFOs; say what the conversion left out.
         let import_note = match font.project.import_warnings.as_slice() {
             [] => String::new(),
@@ -95,9 +110,6 @@ impl Workspace {
                 )
             }
         };
-        let hidden_docks: Vec<String> = std::env::var("RUNEBENDER_HIDDEN_DOCKS")
-            .map(|s| s.split(',').map(str::trim).map(str::to_string).collect())
-            .unwrap_or_default();
         let theme_id = crate::application::platform::themes::catalog().initial_id();
         let palette = Arc::new(Palette::load(theme_id));
         let cells = Arc::new(cells_of(&font, &palette));
@@ -122,16 +134,9 @@ impl Workspace {
         // For headless screenshots: optionally select all points.
         // (set later, after session is final)
 
-        let start_cat = std::env::var("RUNEBENDER_CAT").ok();
-        let start_script = std::env::var("RUNEBENDER_SCRIPT").ok().and_then(|label| {
-            runebender::ui::sidebar::language_groups()
-                .iter()
-                .position(|group| group.label == label)
-        });
-        let (mode, open) = match std::env::var("RUNEBENDER_OPEN")
-            .ok()
-            .and_then(|n| font.index_of(&n))
-        {
+        let start_cat = options.category.as_deref();
+        let start_script = options.script_group;
+        let (mode, open) = match options.open.as_deref().and_then(|n| font.index_of(n)) {
             Some(i) => (Mode::Editor(i), Some(i)),
             None => (Mode::Overview, None),
         };
@@ -151,39 +156,18 @@ impl Workspace {
         };
         // Headless overrides let a render show a state that normally takes
         // clicks to reach.
-        let reference_buf = std::env::var("RUNEBENDER_REFERENCE").unwrap_or_default();
+        let reference_buf = options.reference.clone();
         // GPUI exposes background layers by default. Keep a headless override
         // for captures that need to exercise the disabled toggle.
-        let show_background = std::env::var("RUNEBENDER_BACKGROUND").as_deref() != Ok("0");
-        // RUNEBENDER_VIEW=comb,continuity,colorize,handles,segments,bearings
-        let mut view = canvas::editor::ViewOptions::default();
-        if let Ok(spec) = std::env::var("RUNEBENDER_VIEW") {
-            for name in spec.split(',').map(str::trim) {
-                match name {
-                    "comb" => view.comb = true,
-                    "continuity" => view.continuity = true,
-                    "colorize" => view.colorize = true,
-                    "handles" => view.handles = true,
-                    "segments" => view.segments = true,
-                    "bearings" => view.bearings = true,
-                    "popcount" => view.popcount = true,
-                    "components" => view.components = true,
-                    _ => {}
-                }
-            }
-        }
-        // Headless override: RUNEBENDER_AXIS="wght=500,wdth=80".
-        if let Ok(spec) = std::env::var("RUNEBENDER_AXIS") {
-            for pair in spec.split(',') {
-                if let Some((tag, val)) = pair.split_once('=')
-                    && let Ok(v) = val.trim().parse::<f64>()
-                    && let Some(i) = font
-                        .axes
-                        .iter()
-                        .position(|a| a.tag == tag.trim() || a.name == tag.trim())
-                {
-                    axis_values[i] = v.clamp(font.axes[i].min, font.axes[i].max);
-                }
+        let show_background = options.show_background;
+        let view = options.view;
+        for (tag, value) in &options.axis {
+            if let Some(i) = font
+                .axes
+                .iter()
+                .position(|a| a.tag == *tag || a.name == *tag)
+            {
+                axis_values[i] = value.clamp(font.axes[i].min, font.axes[i].max);
             }
         }
         // Seed the Name/Unicode fields from the glyph actually shown
@@ -202,18 +186,8 @@ impl Workspace {
             .and_then(|glyph| glyph.codepoint)
             .map(|c| format!("{:04X}", c as u32))
             .unwrap_or_default();
-        let initial_text = std::env::var("RUNEBENDER_TEXT").unwrap_or_default();
-        let tool = match std::env::var("RUNEBENDER_TOOL").as_deref() {
-            Ok("interpolation") => Tool::Interpolation,
-            Ok("hand") => Tool::Hand,
-            Ok("metaball") => Tool::Metaball,
-            Ok("measure") => Tool::Measure,
-            Ok("label") => Tool::Label,
-            Ok("text") => Tool::Text,
-            Ok("sketch") => Tool::Sketch,
-            Ok("shapes") => Tool::AiShape,
-            _ => Tool::Select,
-        };
+        let initial_text = options.text.clone();
+        let tool = options.tool;
         let has_text_session = tool == Tool::Text || !initial_text.is_empty();
         let sketch = Arc::new(std::sync::Mutex::new(sketch::SketchLayer::new(
             first_name.clone(),
@@ -226,6 +200,8 @@ impl Workspace {
             font,
             palette,
             cells,
+            filtered: std::cell::RefCell::new(None),
+            interp_preview_cache: std::cell::RefCell::new(None),
             mode,
             selected: open.or(first),
             multi_selected: Arc::new(std::collections::HashSet::new()),
@@ -235,51 +211,29 @@ impl Workspace {
             metadata_redo: Vec::new(),
             filter: String::new(),
             detail: false,
-            list: std::env::var("RUNEBENDER_VIEW_MODE").as_deref() == Ok("list"),
+            list: options.list,
             rail: Rail::Glyphs,
             text_dir: None,
-            text_features_disabled: std::env::var("RUNEBENDER_TEXT_FEATURES_DISABLED")
-                .map(|value| {
-                    value
-                        .split(',')
-                        .map(str::trim)
-                        .filter(|tag| !tag.is_empty())
-                        .map(str::to_string)
-                        .collect()
-                })
-                .unwrap_or_default(),
-            text_script: std::env::var("RUNEBENDER_TEXT_SCRIPT")
-                .ok()
-                .filter(|value| !value.is_empty()),
-            text_language: std::env::var("RUNEBENDER_TEXT_LANGUAGE")
-                .ok()
-                .filter(|value| !value.is_empty()),
-            source_name_buf,
+            text_features_disabled: options.text_features_disabled.iter().cloned().collect(),
+            text_script: options.text_script.clone(),
+            text_language: options.text_language.clone(),
             layer_name_buf: "sketch".into(),
             // Headless frames can start with a dock folded away:
             // `RUNEBENDER_HIDDEN_DOCKS=left,right`.
-            left_collapsed: hidden_docks.iter().any(|d| d == "left"),
-            right_collapsed: hidden_docks.iter().any(|d| d == "right"),
+            left_collapsed: options.hidden_docks.iter().any(|d| d == "left"),
+            right_collapsed: options.hidden_docks.iter().any(|d| d == "right"),
             // Headless frames can start with sections folded:
             // `RUNEBENDER_COLLAPSED=Kerning,Groups`.
             collapsed: {
-                let mut set: std::collections::HashSet<&'static str> =
-                    std::env::var("RUNEBENDER_COLLAPSED")
-                        .map(|s| {
-                            s.split(',')
-                                .filter(|t| !t.is_empty())
-                                .map(|t| &*Box::leak(t.to_string().into_boxed_str()))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                // Every sidebar and inspector section starts folded, so the panel opens clean
-                // and each one is a click away. This is state only;
-                // every header still toggles its existing accessible panel.
+                let mut set: std::collections::HashSet<&'static str> = options
+                    .collapsed
+                    .iter()
+                    .map(|t| &*Box::leak(t.clone().into_boxed_str()))
+                    .collect();
+                // Axes and Masters start expanded together in the Axes tab.
                 set.extend([
-                    "Categories",
                     "Global Scripts",
                     "Filters",
-                    "Sidebar Spacing",
                     "Sidebar Waterfall",
                     "Basic Latin",
                     "Basic Arabic",
@@ -287,7 +241,6 @@ impl Workspace {
                     "Coordinates",
                     "Transformations",
                     "Curves",
-                    "Glyph",
                     "Font info",
                     "Dimensions",
                     "Advanced",
@@ -299,11 +252,9 @@ impl Workspace {
                     "Related",
                     "Mark",
                     "Shaping",
-                    "Axes",
                     "Path Operations",
                     "Background",
                     "Measure",
-                    "Masters",
                 ]);
                 // A headless start on a script or category shows its group.
                 if start_script.is_some() {
@@ -316,7 +267,7 @@ impl Workspace {
             },
             sel: match start_script {
                 Some(index) => Sel::Language(index),
-                None => Sel::Category(match start_cat.as_deref() {
+                None => Sel::Category(match start_cat {
                     Some("Number") => GlyphCategory::Number,
                     Some("Symbol") => GlyphCategory::Symbol,
                     Some("Mark") => GlyphCategory::Mark,
@@ -337,7 +288,7 @@ impl Workspace {
             kern2_buf: kern2,
             clipboard: Vec::new(),
             show_background,
-            show_mark_cloud: std::env::var("RUNEBENDER_MARK_CLOUD").as_deref() == Ok("1"),
+            show_mark_cloud: options.mark_cloud,
             reference_buf,
             sketch_trace: None,
             component_base_buf: String::new(),
@@ -362,7 +313,6 @@ impl Workspace {
                 .collect(),
             active_tab: 0,
             session,
-            selected_points: 0,
             interpolation:
                 crate::application::editor::tools::interpolation::InterpolationState::default(),
             tool,
@@ -402,23 +352,21 @@ impl Workspace {
             // An empty override previews the active glyph itself, which is
             // GPUI's resting edit state. Shaping text remains opt-in through
             // the inspector, sample commands, or the headless environment.
-            preview_text: std::env::var("RUNEBENDER_PREVIEW_TEXT").unwrap_or_default(),
-            preview_blur: std::env::var("RUNEBENDER_PREVIEW_BLUR")
-                .ok()
-                .and_then(|v| v.parse::<f64>().ok())
-                .filter(|v| v.is_finite())
-                .unwrap_or(0.0)
-                .clamp(0.0, 8.0),
+            proof_drag_gap: None,
+            preview_text: options.preview_text.clone().unwrap_or_default(),
+            preview_blur: options.preview_blur,
             preview_visible: true,
-            preview_invert: std::env::var("RUNEBENDER_PREVIEW_INVERT").as_deref() == Ok("1"),
-            proof_view: matches!(
-                std::env::var("RUNEBENDER_PROOF_VIEW").as_deref(),
-                Ok("1" | "toggle" | "before" | "waterfall" | "text")
-            ),
+            preview_invert: options.preview_invert,
+            proof_view: options.proof_view.is_some(),
             review: crate::application::editor::tools::review::ReviewState::default(),
+            proof_samples: crate::application::platform::proof_samples::ProofSamples::default(),
+            panel_sample: None,
+            panel_proof_size: canvas::specimen::LIVE_EM_DEFAULT,
+            proof_watch: Arc::default(),
             search_mode: 0,
             search_case: false,
             reference_layers: std::collections::HashSet::new(),
+            visible_layers: std::collections::BTreeSet::new(),
             show_all_masters: false,
             sample_index: 0,
             graph: graph::GraphState::default(),
@@ -463,133 +411,7 @@ impl Workspace {
         app.rescan_models();
         app.scan_chat_models();
         app.refresh_proposals();
-        if let Ok(content) = std::env::var("RUNEBENDER_SCRIPT_DRAFT") {
-            app.open_script_artifact(scripts::ScriptArtifact {
-                name: std::env::var("RUNEBENDER_SCRIPT_NAME")
-                    .unwrap_or_else(|_| "headless-recipe.py".into()),
-                content,
-            });
-            if let Ok(parameters) = std::env::var("RUNEBENDER_SCRIPT_PARAMETERS") {
-                app.script_parameters_changed(parameters);
-            }
-        }
-        // Headless: RUNEBENDER_MASTER=<style name> makes that master active.
-        if let Ok(name) = std::env::var("RUNEBENDER_MASTER")
-            && let Some(index) = app
-                .font
-                .master_names()
-                .iter()
-                .position(|master| *master == name)
-        {
-            app.set_master(index);
-        }
-        // Headless: RUNEBENDER_RAIL=ai, chat or scripts starts the corresponding
-        // local-model panel, RUNEBENDER_MODEL=<dir> chooses an outline model, and
-        // RUNEBENDER_PROPOSAL_PREVIEW=<task> shows its review overlay.
-        match std::env::var("RUNEBENDER_RAIL").as_deref() {
-            Ok("ai") => app.rail = Rail::LocalAi,
-            Ok("chat") => app.rail = Rail::Chat,
-            Ok("scripts") => app.rail = Rail::Scripts,
-            Ok("shapes") => app.rail = Rail::Shapes,
-            _ => {}
-        }
-        // RUNEBENDER_CHAT_SAMPLE=1 seeds the Chat panel with one exchange, so a
-        // headless screenshot shows the transcript and not only the empty state.
-        // RUNEBENDER_CHAT_SAMPLE=listening shows the composer with the
-        // microphone open, without opening one.
-        if std::env::var("RUNEBENDER_CHAT_SAMPLE").as_deref() == Ok("listening") {
-            app.voice.capture = Some(voice::Capture::sample());
-        }
-        if std::env::var_os("RUNEBENDER_CHAT_SAMPLE").is_some() {
-            use crate::application::editor::tools::chat::ChatEntry;
-            app.chat.entries = vec![
-                ChatEntry::User("what is the upm?".into()),
-                ChatEntry::Tool {
-                    name: "font_info".into(),
-                    ok: true,
-                    note: "done".into(),
-                },
-                ChatEntry::Assistant("The units per em of the font is 1024.".into()),
-                ChatEntry::User("How does the stem of H compare with the other capitals?".into()),
-                ChatEntry::Tool {
-                    name: "analyze_glyph".into(),
-                    ok: true,
-                    note: "done".into(),
-                },
-                ChatEntry::Tool {
-                    name: "analyze_font".into(),
-                    ok: true,
-                    note: "done".into(),
-                },
-                ChatEntry::Assistant(
-                    "The H stem is 92 units. The median uppercase stem is 90, so H sits \
-                     within 2 units of the others. The farthest is M at 84."
-                        .into(),
-                ),
-                ChatEntry::Detail {
-                    text: "Measured with analyze_font on the Regular source. Stems: H 92, \
-                           I 92, N 90, M 84. The outlier M is 6 units lighter."
-                        .into(),
-                    // The detail sample opens with RUNEBENDER_CHAT_SAMPLE=detail.
-                    open: std::env::var("RUNEBENDER_CHAT_SAMPLE").as_deref() == Ok("detail"),
-                },
-            ];
-            app.chat.entries.push(ChatEntry::User(
-                "How many off-curve points does U+0035 have?".into(),
-            ));
-            app.chat.entries.push(ChatEntry::Error(
-                "chat response was cut off at the model's context limit".into(),
-            ));
-            app.chat.prompt = "And which of the figures have the most points, and is \
-                               that a problem for interpolation?"
-                .into();
-            // RUNEBENDER_CHAT_SAMPLE=busy shows the model at work instead.
-            if std::env::var("RUNEBENDER_CHAT_SAMPLE").as_deref() == Ok("busy") {
-                app.chat.entries.pop();
-                app.chat.prompt.clear();
-                app.chat.busy = Some("Running analyze_glyph…".into());
-            }
-            // RUNEBENDER_CHAT_SAMPLE=models shows the model list open.
-            if std::env::var("RUNEBENDER_CHAT_SAMPLE").as_deref() == Ok("models") {
-                app.chat.picking = true;
-            }
-        }
-        if app.tool == Tool::AiShape {
-            // The tool was set directly, not picked, so scan for its models here.
-            app.shapes_rescan();
-        }
-        if let Some(index) = std::env::var("RUNEBENDER_COMPONENT")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-        {
-            Arc::make_mut(&mut app.session).select_component(index);
-        }
-        if app.show_mark_cloud {
-            app.collapsed.remove("Background");
-        }
-        if let Some(dir) = std::env::var_os("RUNEBENDER_MODEL").filter(|d| !d.is_empty()) {
-            app.load_model(FsPath::new(&dir));
-        }
-        if let Ok(task) = std::env::var("RUNEBENDER_PROPOSAL_PREVIEW")
-            && app
-                .ai
-                .proposals
-                .iter()
-                .any(|proposal| proposal.task == task)
-        {
-            app.ai.preview_task = Some(task);
-        }
-        // Headless overrides: RUNEBENDER_NODES=<file> opens a nodes
-        // file, and RUNEBENDER_MODE=nodes starts on the canvas.
-        if let Some(file) = std::env::var_os("RUNEBENDER_NODES").filter(|f| !f.is_empty()) {
-            app.open_graph_file(FsPath::new(&file));
-        }
-        if std::env::var("RUNEBENDER_MODE").as_deref() == Ok("graph") {
-            app.enter_graph_mode();
-        }
-        if tool == Tool::Metaball {
-            Arc::make_mut(&mut app.session).select_all_metaballs();
-        }
+        options.apply_to_document(&mut app);
         Ok(app)
     }
 
@@ -734,7 +556,7 @@ impl Workspace {
                         self.restore_text_context(text_context);
                         self.selected = self.font.index_of(&self.session.glyph_name);
                         if let Some(selected) = self.selected {
-                            self.mode = Mode::Editor(selected);
+                            self.enter_editor_mode(selected);
                             self.refresh_metric_bufs();
                             self.refresh_coord_bufs();
                         }
@@ -799,7 +621,6 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::widgets::shortcuts;
     use masonry::kurbo::Point;
 
     fn projected_glyph(session: &Session) -> norad::Glyph {
@@ -818,6 +639,7 @@ mod tests {
         assert!(!path.with_extension("ufo").exists());
     }
 
+    #[cfg(feature = "integration-fonts")]
     fn copy_tree(source: &std::path::Path, destination: &std::path::Path) {
         std::fs::create_dir_all(destination).expect("the destination directory is created");
         for entry in std::fs::read_dir(source).expect("the source directory is readable") {
@@ -892,9 +714,13 @@ mod tests {
             ),
             1
         );
-        app.change_sources("up");
+        app.font.project.move_source(source, 0).unwrap();
+        app.font.rebuild_cache();
+        app.refresh_source_views();
         assert_eq!(app.font.project.source_index(source), Some(0));
-        app.change_sources("remove");
+        app.font.project.remove_source(source).unwrap();
+        app.font.rebuild_cache();
+        app.refresh_source_views();
         assert!(app.font.project.source_index(source).is_none());
         app.undo_active_edit(false);
         assert_eq!(
@@ -902,7 +728,12 @@ mod tests {
             1,
             "missing-source undo must retain its transaction"
         );
-        app.change_sources("undo");
+        app.font
+            .project
+            .undo_sources(runebender::font::history::HistoryDirection::Undo)
+            .unwrap();
+        app.font.rebuild_cache();
+        app.refresh_source_views();
         assert_eq!(app.font.project.source_index(source), Some(0));
         app.mode = Mode::Overview;
         app.undo_active_edit(false);
@@ -911,8 +742,12 @@ mod tests {
             old_width
         );
         app.set_axis(0, 550.0);
-        app.source_name_buf = "Medium".into();
-        app.change_sources("add");
+        app.font
+            .project
+            .add_interpolated_source("Medium", "Medium.ufo", &app.font.project.location.clone())
+            .unwrap();
+        app.font.rebuild_cache();
+        app.refresh_source_views();
         assert_eq!(app.font.master_count(), 3);
         assert_eq!(
             app.font.master_names()[app.font.active()].as_str(),
@@ -943,21 +778,20 @@ mod tests {
         let document_id = workspace.document_id;
         assert!(matches!(workspace.mode, Mode::Overview));
         for title in [
-            "Categories",
             "Global Scripts",
             "Filters",
             "Coordinates",
             "Transformations",
             "Curves",
-            "Glyph",
             "Mark",
             "Path Operations",
             "Background",
-            "Masters",
-            "Axes",
             "Measure",
         ] {
             assert!(workspace.collapsed.contains(title));
+        }
+        for title in ["Categories", "Sidebar Spacing", "Axes", "Masters", "Glyph"] {
+            assert!(!workspace.collapsed.contains(title));
         }
         assert!(workspace.font.glyphs.is_empty());
         assert_eq!(workspace.selected, None);
@@ -970,6 +804,11 @@ mod tests {
         assert_eq!(workspace.session.glyph_name, "A");
         assert!(matches!(workspace.mode, Mode::Editor(0)));
         assert_eq!(workspace.tabs.len(), 1);
+        assert!(!workspace.collapsed.contains("Coordinates"));
+        assert!(!workspace.collapsed.contains("Curves"));
+        for key in ["Proof", "Editor Glyph", "Editor Layers", "Editor Axes"] {
+            assert!(workspace.collapsed.contains(key));
+        }
 
         workspace.save();
         workspace.list = true;
@@ -1036,18 +875,10 @@ mod tests {
         std::fs::remove_dir_all(path).expect("the fixture is removed");
     }
 
+    #[cfg(feature = "integration-fonts")]
     #[test]
-    #[ignore = "copies and edits the adjacent 13 MB Virtua Grotesk sources"]
     fn disposable_virtua_edit_undo_save_reopen_preserves_unrelated_data() {
-        let source = std::env::var_os("RUNEBENDER_TEST_FONTS")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../virtua-grotesk/sources")
-            });
-        assert!(
-            source.is_dir(),
-            "clone Virtua Grotesk beside this repository or set RUNEBENDER_TEST_FONTS"
-        );
+        let source = crate::integration_fonts::dir();
         let root = std::env::temp_dir().join(format!(
             "runebender-xilem-virtua-trial-{}-{}",
             std::process::id(),
@@ -1122,18 +953,6 @@ mod tests {
             workspace.font.master_name(workspace.font.active()),
             "Regular"
         );
-        let original_fonts: Vec<norad::Font> = workspace
-            .font
-            .project
-            .document_sources()
-            .map(|source| {
-                workspace
-                    .font
-                    .project
-                    .encode_ufo_source(source.id())
-                    .unwrap()
-            })
-            .collect();
 
         let index = workspace.font.index_of("R").expect("Virtua contains R");
         workspace.open_glyph(index);
@@ -1179,6 +998,21 @@ mod tests {
             original_anchor_count + 1
         );
 
+        // Anchor edits can realign dependent composites.
+        // Save/reopen must preserve the complete post-edit document, including those changes.
+        let expected_fonts: Vec<norad::Font> = workspace
+            .font
+            .project
+            .document_sources()
+            .map(|source| {
+                workspace
+                    .font
+                    .project
+                    .encode_ufo_source(source.id())
+                    .unwrap()
+            })
+            .collect();
+
         assert!(workspace.save());
         assert!(!workspace.modified);
         assert_eq!(
@@ -1194,19 +1028,12 @@ mod tests {
         assert_eq!(reopened_r.width, original_width + 4.0);
         assert_eq!(reopened_r.anchors.len(), original_anchor_count + 1);
 
-        for (master_index, original) in original_fonts.into_iter().enumerate() {
+        for (master_index, expected) in expected_fonts.into_iter().enumerate() {
             let source = reopened.font.project.source_id(master_index).unwrap();
-            let mut normalized = reopened.font.project.encode_ufo_source(source).unwrap();
-            if master_index == 0 {
-                let original_r = original
-                    .get_glyph("R")
-                    .expect("the original Regular R exists")
-                    .clone();
-                normalized.default_layer_mut().insert_glyph(original_r);
-            }
+            let actual = reopened.font.project.encode_ufo_source(source).unwrap();
             assert_eq!(
-                normalized, original,
-                "only the edited Regular R may differ after the round trip"
+                actual, expected,
+                "save/reopen preserves every edited and unrelated glyph"
             );
         }
 
@@ -1689,6 +1516,37 @@ mod tests {
         assert_eq!(workspace.font.active(), 1);
         assert_eq!(workspace.font.master_name(1), "Bold");
         std::fs::remove_dir_all(dir).expect("the designspace fixture is removed");
+    }
+
+    #[test]
+    fn overview_axes_preview_and_return_to_the_editable_master() {
+        use kurbo::Shape as _;
+        let (dir, designspace) = two_master_designspace("overview-axis");
+        for (file, width) in [("Regular.ufo", 100.0), ("Bold.ufo", 300.0)] {
+            let mut font = norad::Font::new();
+            let mut glyph = norad::Glyph::new("A");
+            glyph.codepoints.set(['A']);
+            glyph.width = 500.0;
+            glyph.contours.push(norad::Contour::new(
+                [(0.0, 0.0), (width, 0.0), (width, 400.0), (0.0, 400.0)]
+                    .into_iter()
+                    .map(|(x, y)| {
+                        norad::ContourPoint::new(x, y, norad::PointType::Line, false, None, None)
+                    })
+                    .collect(),
+                None,
+            ));
+            font.default_layer_mut().insert_glyph(glyph);
+            font.save(dir.join(file)).unwrap();
+        }
+        let mut app = Workspace::open(&designspace).unwrap();
+        let i = app.font.index_of("A").unwrap();
+        app.set_axis(0, 550.0);
+        assert_eq!(app.cells[i].outline.bounding_box().width(), 200.0);
+        app.set_master(0);
+        assert!(app.on_active_master());
+        assert_eq!(app.cells[i].outline.bounding_box().width(), 100.0);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -2424,7 +2282,8 @@ mod tests {
                 norad::Font::new(),
                 "/dev/null/runebender-test.ufo".into(),
             ),
-        );
+        )
+        .expect("valid source fixture");
         let mut workspace = Workspace::from_model(FontModel::from_project(project))
             .expect("the in-memory fixture opens");
         workspace.modified = true;
@@ -2441,7 +2300,7 @@ mod tests {
         workspace.filter = "A".into();
         workspace.new_glyph();
 
-        workspace.dispatch(shortcuts::AppAction::ShowAllMasters);
+        workspace.dispatch(crate::application::app_action::AppAction::ShowAllMasters);
         assert!(workspace.show_all_masters);
         assert_eq!(workspace.reference_layers.len(), 1);
         assert!(
@@ -2456,21 +2315,21 @@ mod tests {
                 .reference_layers
                 .contains(&workspace.font.active())
         );
-        workspace.dispatch(shortcuts::AppAction::NextSampleString);
+        workspace.dispatch(crate::application::app_action::AppAction::NextSampleString);
         assert_eq!(workspace.sample_index, 1);
         assert_eq!(workspace.preview_text, "nnonoonoo");
-        workspace.dispatch(shortcuts::AppAction::PreviousSampleString);
+        workspace.dispatch(crate::application::app_action::AppAction::PreviousSampleString);
         assert_eq!(workspace.sample_index, 0);
         assert_eq!(workspace.preview_text, "HHOHOHOO");
 
-        workspace.dispatch(shortcuts::AppAction::GridLines);
+        workspace.dispatch(crate::application::app_action::AppAction::GridLines);
         assert!(workspace.view.grid_lines);
-        workspace.dispatch(shortcuts::AppAction::GridDots);
+        workspace.dispatch(crate::application::app_action::AppAction::GridDots);
         assert!(!workspace.view.grid_lines);
-        workspace.dispatch(shortcuts::AppAction::MeasureSizes);
-        workspace.dispatch(shortcuts::AppAction::MeasureSpans);
+        workspace.dispatch(crate::application::app_action::AppAction::MeasureSizes);
+        workspace.dispatch(crate::application::app_action::AppAction::MeasureSpans);
         assert!(workspace.view.sizes && workspace.view.spans);
-        workspace.dispatch(shortcuts::AppAction::MeasureAllOff);
+        workspace.dispatch(crate::application::app_action::AppAction::MeasureAllOff);
         assert!(!workspace.view.sizes && !workspace.view.spans);
 
         std::fs::remove_dir_all(dir).expect("the designspace fixture is removed");

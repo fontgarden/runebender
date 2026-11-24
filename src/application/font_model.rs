@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
+use crate::application::launch_options::CompileMode;
+
 use kurbo::{BezPath, Rect};
 use runebender::analysis::category::GlyphCategory;
 use runebender::font::canonical_metadata::{CanonicalFontMetadata, KerningSide};
@@ -59,7 +61,15 @@ pub(crate) struct FontModel {
     /// The active source's canonical glyph entries in display order.
     pub glyphs: Vec<GlyphEntry>,
     /// Constant-time lookup into the display-ordered canonical entries.
-    name_map: HashMap<String, usize>,
+    /// Each glyph's position in `glyphs`. Shared, so text outlines can use it without a copy.
+    name_map: Arc<HashMap<String, usize>>,
+    /// The entries of the masters that were active before, by master index, with the
+    /// document revision they were built at. A switch back at the same revision reuses
+    /// them; building them reads the outline of each glyph.
+    parked_entries: HashMap<usize, ParkedEntries>,
+    /// The layer being edited for a glyph, when it is not the active master's own layer.
+    /// An entry for another source, or for a layer the glyph no longer has, is ignored.
+    pub(crate) edit_layers: HashMap<String, runebender::font::variable::LayerId>,
     pub axes: Vec<Axis>,
     /// The text inputs last read from this model, reused while nothing they read has changed.
     pub(crate) text_inputs:
@@ -69,6 +79,8 @@ pub(crate) struct FontModel {
         std::sync::Mutex<Option<crate::application::editor::tools::text::CachedTextLocation>>,
     /// Inspector readouts that walk the whole font, kept until the document changes.
     readouts: std::sync::Mutex<Readouts>,
+    /// Whether [`Self::preview_font`] compiles on the calling thread or on a worker thread.
+    preview_mode: CompileMode,
 }
 
 /// The document state a readout was taken from: its revision and the active source.
@@ -85,7 +97,15 @@ struct Readouts {
     used_by: Option<(ReadoutKey, String, Vec<String>)>,
     /// Geometry comparisons against the active source, by source index.
     comparisons: Option<(ReadoutKey, HashMap<usize, GeometryComparison>)>,
+    /// Counts of the glyphs that match a sidebar row, by the kind of row and its indexes.
+    counts: Option<(ReadoutKey, RowCounts)>,
 }
+
+/// Glyph counts by the kind of sidebar row and its two indexes.
+type RowCounts = HashMap<(u8, usize, usize), usize>;
+
+/// The document revision, the entries and the name index of a master that is not active.
+type ParkedEntries = (u64, Vec<GlyphEntry>, Arc<HashMap<String, usize>>);
 
 /// The theme whose mark names label glyph entries, parsed once.
 fn mark_theme() -> Option<&'static Theme> {
@@ -97,7 +117,7 @@ impl FontModel {
     fn default_source_id(&self) -> runebender::font::variable::SourceId {
         let index = self
             .project
-            .master_locations
+            .master_locations()
             .iter()
             .position(|location| location.values().all(|value| *value == 0.0))
             .unwrap_or(0);
@@ -139,13 +159,28 @@ impl FontModel {
             .and_then(|source| self.project.document_font_info(source))
     }
 
-    /// Stable address of one glyph's active default layer.
+    /// Stable address of the layer being edited for one glyph: the layer chosen in the Layers
+    /// panel when it belongs to the active source, else the active master's own layer.
     pub(crate) fn active_layer_address(
         &self,
         glyph: &str,
     ) -> Option<runebender::font::variable::GlyphLayerAddress> {
         let source = self.project.source_id(self.active())?;
-        let layer = self.project.document_source(source)?.default_layer();
+        let layer = self
+            .edit_layers
+            .get(glyph)
+            .filter(|layer| {
+                layer.source == source && self.project.document_layer(glyph, layer).is_some()
+            })
+            .cloned()
+            .map_or_else(
+                || {
+                    self.project
+                        .document_source(source)
+                        .map(|s| s.default_layer())
+                },
+                Some,
+            )?;
         self.project.document_layer(glyph, &layer).map(|_| {
             runebender::font::variable::GlyphLayerAddress {
                 glyph: glyph.to_owned(),
@@ -181,10 +216,9 @@ impl FontModel {
     pub(crate) fn preview_font(
         &self,
     ) -> Result<Option<Arc<runebender::font::compiler::CompiledFont>>, String> {
-        if cfg!(test) || std::env::var_os("RUNEBENDER_SCREENSHOT").is_some() {
-            self.project.compiled_preview().map(Some)
-        } else {
-            self.project.request_preview()
+        match self.preview_mode {
+            CompileMode::Blocking => self.project.compiled_preview().map(Some),
+            CompileMode::Background => self.project.request_preview(),
         }
     }
     pub(crate) fn open(path: &FsPath) -> Result<Self, String> {
@@ -197,11 +231,14 @@ impl FontModel {
         let mut model = Self {
             project,
             glyphs: Vec::new(),
-            name_map: HashMap::new(),
+            name_map: Arc::default(),
+            parked_entries: HashMap::new(),
             axes,
+            edit_layers: HashMap::new(),
             text_inputs: std::sync::Mutex::new(None),
             text_location: std::sync::Mutex::new(None),
             readouts: std::sync::Mutex::new(Readouts::default()),
+            preview_mode: CompileMode::current(),
         };
         model.rebuild_cache();
         model
@@ -209,6 +246,12 @@ impl FontModel {
 
     /// Rebuild every shell entry from the active canonical source.
     pub(crate) fn rebuild_cache(&mut self) {
+        // The callers change the glyph list or its sources, so no parked master is valid.
+        self.parked_entries.clear();
+        self.fill_cache();
+    }
+
+    fn fill_cache(&mut self) {
         let source = self
             .project
             .source_id(self.active())
@@ -221,12 +264,13 @@ impl FontModel {
             .iter()
             .map(|entry| GlyphEntry::from_core(entry, mark_theme))
             .collect();
-        self.name_map = self
-            .glyphs
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| (entry.name.clone(), index))
-            .collect();
+        self.name_map = Arc::new(
+            self.glyphs
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| (entry.name.clone(), index))
+                .collect(),
+        );
     }
 
     /// Refresh one shell entry from its canonical default layer after an edit.
@@ -304,7 +348,7 @@ impl FontModel {
 
     pub(crate) fn master_names(&self) -> Vec<String> {
         self.project
-            .master_names
+            .master_names()
             .iter()
             .map(|n| n.to_string())
             .collect()
@@ -312,7 +356,7 @@ impl FontModel {
 
     pub(crate) fn master_name(&self, index: usize) -> String {
         self.project
-            .master_names
+            .master_names()
             .get(index)
             .map(|n| n.to_string())
             .unwrap_or_default()
@@ -331,13 +375,31 @@ impl FontModel {
         if index >= self.project.document_sources().count() || index == self.project.active {
             return;
         }
+        let revision = self.project.document_revision();
+        let leaving = (
+            revision,
+            std::mem::take(&mut self.glyphs),
+            self.name_map.clone(),
+        );
+        self.parked_entries.insert(self.project.active, leaving);
         self.project.active = index;
         self.project.snap_location_to_master(index);
-        self.rebuild_cache();
+        match self.parked_entries.remove(&index) {
+            Some((built_at, glyphs, name_map)) if built_at == revision => {
+                self.glyphs = glyphs;
+                self.name_map = name_map;
+            }
+            _ => self.fill_cache(),
+        }
     }
 
     pub(crate) fn index_of(&self, name: &str) -> Option<usize> {
         self.name_map.get(name).copied()
+    }
+
+    /// Each glyph's position in `glyphs`, shared without copying.
+    pub(crate) fn name_index(&self) -> Arc<HashMap<String, usize>> {
+        self.name_map.clone()
     }
 
     /// Add an empty glyph to every master.
@@ -423,10 +485,14 @@ impl FontModel {
     /// The given master's axis location in user coordinates, one per axis,
     /// mapping the engine's stored normalized location back through the axis map.
     pub(crate) fn master_axis_values(&self, index: usize) -> Vec<f64> {
-        let loc = self.project.master_locations.get(index);
+        let loc = self.project.master_locations().get(index);
         self.axes
             .iter()
             .map(|ax| match loc.and_then(|l| l.get(&ax.name)) {
+                // For a flat terminal axis map, the inverse can also return
+                // the start of the plateau. Show the master's endpoint.
+                Some(&1.0) => ax.max,
+                Some(&-1.0) => ax.min,
                 Some(value) => ax.normalized_to_user(*value),
                 None => ax.default,
             })
@@ -519,6 +585,64 @@ impl FontModel {
                     .map(|glyph| glyph.outline().clone())
             })
             .collect()
+    }
+
+    /// The layers of `glyph` in the active source that the Layers panel lists: the master's own
+    /// layer first, then the glyph's other layers in the source's layer order. The background
+    /// and proposal layers have their own panels and are left out.
+    pub(crate) fn glyph_layers(&self, glyph: &str) -> Vec<runebender::font::variable::LayerId> {
+        let Some(source) = self.project.source_id(self.active()) else {
+            return Vec::new();
+        };
+        let Some(master) = self
+            .project
+            .document_source(source)
+            .map(|s| s.default_layer())
+        else {
+            return Vec::new();
+        };
+        let mut layers = vec![master.clone()];
+        for name in self
+            .project
+            .document_source_layer_names(source)
+            .unwrap_or_default()
+        {
+            let hidden = name == "public.background"
+                || name.eq_ignore_ascii_case("background")
+                || name.starts_with("com.runebender.proposal.");
+            let layer = runebender::font::variable::LayerId {
+                source,
+                name: name.to_owned(),
+            };
+            if !hidden && layer != master && self.project.document_layer(glyph, &layer).is_some() {
+                layers.push(layer);
+            }
+        }
+        layers
+    }
+
+    /// One layer's contours and components as a path, for drawing it behind the edited layer.
+    pub(crate) fn layer_outline(
+        &self,
+        glyph: &str,
+        layer: &runebender::font::variable::LayerId,
+    ) -> Option<Arc<BezPath>> {
+        let view = self.project.document_layer(glyph, layer)?;
+        let mut path = glyph_paths::ordinary_layer_contours_to_bezpath(view);
+        // The layer's components, resolved in this layer's source, as part of its outline.
+        let address = runebender::font::variable::GlyphLayerAddress {
+            glyph: glyph.to_owned(),
+            layer: layer.clone(),
+        };
+        if let Ok(components) = crate::application::editor::session::resolved_document_components(
+            &self.project,
+            &address,
+        ) {
+            for component in &components {
+                path.extend(component.path.iter());
+            }
+        }
+        Some(Arc::new(path))
     }
 
     /// The glyph's outline in the background layer, as a path.
@@ -657,6 +781,44 @@ impl FontModel {
             .or_insert_with(|| self.compare_source_geometry(index))
     }
 
+    /// A count over every glyph for one sidebar row, computed once for each state of the
+    /// document. `kind` separates the rows that share an index space.
+    pub(crate) fn glyph_count(
+        &self,
+        kind: u8,
+        index: (usize, usize),
+        count: impl FnOnce() -> usize,
+    ) -> usize {
+        let key = self.readout_key();
+        let entry = (kind, index.0, index.1);
+        {
+            let mut readouts = self
+                .readouts
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            match &readouts.counts {
+                Some((at, counts)) if *at == key => {
+                    if let Some(known) = counts.get(&entry) {
+                        return *known;
+                    }
+                }
+                _ => readouts.counts = Some((key, HashMap::new())),
+            }
+        }
+        // Counted without the lock, because the count reads the model.
+        let counted = count();
+        let mut readouts = self
+            .readouts
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some((at, counts)) = &mut readouts.counts
+            && *at == key
+        {
+            counts.insert(entry, counted);
+        }
+        counted
+    }
+
     fn readout_key(&self) -> ReadoutKey {
         (self.project.document_revision(), self.active())
     }
@@ -668,11 +830,21 @@ impl FontModel {
             .readouts
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if let Some((at, name, users)) = &readouts.used_by
-            && *at == key
+        if let Some((at, name, users)) = &mut readouts.used_by
             && name == glyph
+            && at.1 == key.1
         {
-            return users.clone();
+            // Which glyphs place this one changes only when some glyph's components change.
+            // Layer edits that left components alone keep the answer.
+            let unchanged = *at == key
+                || self
+                    .project
+                    .layer_changes_since(at.0)
+                    .is_some_and(|changes| changes.iter().all(|change| !change.mark_inputs));
+            if unchanged {
+                *at = key;
+                return users.clone();
+            }
         }
         let users = self
             .active_layer_address(glyph)
@@ -897,6 +1069,30 @@ mod tests {
     }
 
     #[test]
+    fn a_background_preview_arrives_from_a_worker_thread() {
+        let (dir, mut model) = two_master_model();
+        assert_eq!(model.preview_mode, CompileMode::Blocking);
+        model.preview_mode = CompileMode::Background;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        let compiled = loop {
+            if let Some(compiled) = model.preview_font().expect("the preview compiles") {
+                break compiled;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the background preview arrives"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let blocking = model
+            .project
+            .compiled_preview()
+            .expect("the preview compiles");
+        assert!(Arc::ptr_eq(&compiled, &blocking));
+        std::fs::remove_dir_all(dir).expect("the fixture directory is removed");
+    }
+
+    #[test]
     fn glyph_cache_resolves_canonical_marks_against_the_gray_palette() {
         let mut font = norad::Font::new();
         for (name, label, color) in [
@@ -921,7 +1117,8 @@ mod tests {
             font.default_layer_mut().insert_glyph(glyph);
         }
         let project =
-            Project::from_source(SourceInput::from_font(font, PathBuf::from("Marks.ufo")));
+            Project::from_source(SourceInput::from_font(font, PathBuf::from("Marks.ufo")))
+                .expect("valid source fixture");
         let custom = project
             .document_source_glyph_entry(runebender::font::variable::SourceId(0), "custom")
             .expect("the source exists")
@@ -1126,10 +1323,13 @@ mod tests {
 
         let file = dir.join("not-a-directory");
         std::fs::write(&file, "fixture").expect("the ordinary file is created");
-        let invalid = FontModel::from_project(Project::from_source(SourceInput::from_font(
-            norad::Font::new(),
-            file.join("New.ufo"),
-        )));
+        let invalid = FontModel::from_project(
+            Project::from_source(SourceInput::from_font(
+                norad::Font::new(),
+                file.join("New.ufo"),
+            ))
+            .expect("valid source fixture"),
+        );
         assert!(!invalid.is_writable());
 
         std::fs::remove_dir_all(dir).expect("the fixture is removed");

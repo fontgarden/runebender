@@ -12,137 +12,35 @@
 //! Xilem does not yet provide an application-level keymap layer, so this
 //! widget keeps the behavior at the root of Runebender's view tree.
 
+#[cfg(any(target_os = "macos", test))]
 use masonry::accesskit::{Node, Role};
+#[cfg(any(target_os = "macos", test))]
 use masonry::core::keyboard::KeyState;
+#[cfg(any(target_os = "macos", test))]
 use masonry::core::{
     AccessCtx, ChildrenIds, EventCtx, FromDynWidget, LayoutCtx, MeasureCtx, NewWidget, PaintCtx,
     PropertiesMut, PropertiesRef, RegisterCtx, TextEvent, Widget, WidgetMut, WidgetPod,
 };
+#[cfg(any(target_os = "macos", test))]
 use masonry::kurbo::{Axis, Point, Size};
+#[cfg(any(target_os = "macos", test))]
 use masonry::layout::{LenReq, Length};
+#[cfg(target_os = "macos")]
 use xilem::core::{MessageCtx, MessageResult, Mut, View, ViewMarker};
+#[cfg(target_os = "macos")]
 use xilem::{Pod, ViewCtx, WidgetView};
 
-use crate::application::workspace::{AppState, Tool};
+#[cfg(any(target_os = "macos", test))]
+use crate::application::app_action::AppAction;
+#[cfg(target_os = "macos")]
+use crate::application::workspace::AppState;
 
-/// Workspace-level actions a shortcut or a menu item can fire.
-// Some variants are only constructed by the menu table, which the
-// native menu bar reads, and that exists on macOS.
-#[cfg_attr(
-    not(target_os = "macos"),
-    allow(
-        dead_code,
-        reason = "the menu table is read by the native menu bar, which is macOS only"
-    )
-)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AppAction {
-    Quit,
-    OpenFont,
-    SaveAs,
-    RevertToSaved,
-    ExportFont,
-    Save,
-    Undo,
-    Redo,
-    Overview,
-    Tool(Tool),
-    /// Hold Space to pan in a chrome-free filled preview.
-    BeginSpacePan,
-    /// Restore the selected tool and editing chrome when Space is released.
-    EndSpacePan,
-    FlipHorizontal,
-    FlipVertical,
-    Rotate90,
-    RotateRight,
-    Rotate180,
-    RemoveOverlap,
-    BooleanUnion,
-    BooleanSubtract,
-    BooleanIntersect,
-    BooleanExclude,
-    Decompose,
-    Duplicate,
-    DuplicateRepeat,
-    ReverseContours,
-    SetStartPoint,
-    TidyPaths,
-    AddExtremes,
-    RoundCoordinates,
-    CorrectPathDirection,
-    HyperToCubic,
-    MetaballsToCubic,
-    MetaballsToHyperbezier,
-    FontMetaballsToCubic,
-    QuadsToCubics,
-    CubicsToQuads,
-    RoundCorners,
-    Harmonize,
-    Balance,
-    Optimize,
-    FilterOffset,
-    FilterExtrude,
-    FilterRoughen,
-    FilterSlant,
-    Copy,
-    Paste,
-    CopySelectedGlyphs,
-    SelectAll,
-    DeselectAll,
-    InvertSelection,
-    NewFont,
-    CycleTheme,
-    Theme(&'static str),
-    /// Flip the native window blur the current theme asks for, without restarting.
-    ToggleTranslucency,
-    ZoomToFit,
-    ShowAllMasters,
-    NextMaster,
-    PreviousMaster,
-    NextSampleString,
-    PreviousSampleString,
-    GridDots,
-    GridLines,
-    MeasureColorize,
-    MeasureHandles,
-    MeasureSegments,
-    MeasureSizes,
-    MeasureSpans,
-    MeasureSideBearings,
-    MeasurePopcount,
-    MeasureAllOn,
-    MeasureAllOff,
-    /// The Graph menu: the canvas, a new file, save it, run it.
-    GraphTab,
-    GraphNew,
-    GraphOpen,
-    GraphSave,
-    GraphRun,
-    /// Add every glyph the selected coverage filter is missing.
-    GenerateMissing,
-    NewGlyph,
-    DuplicateGlyph,
-    RemoveGlyph,
-    UpdateMetrics,
-    Reinterpolate,
-    CheckJoining,
-    ComposeFromAnchors,
-    BakeMasks,
-    ExportGlyphSvg,
-    TraceImage,
-    BoldenWithModel,
-    PlaceImage,
-    ImportSvg,
-    RemoveImage,
-    /// The grid's order in the View menu.
-    SortByName,
-    SortByUnicode,
-}
-
+#[cfg(any(target_os = "macos", test))]
 pub(crate) struct ShortcutHost {
     inner: WidgetPod<dyn Widget>,
 }
 
+#[cfg(any(target_os = "macos", test))]
 impl ShortcutHost {
     pub(crate) fn new(child: NewWidget<impl Widget + ?Sized>) -> Self {
         Self {
@@ -150,15 +48,12 @@ impl ShortcutHost {
         }
     }
 
-    #[cfg_attr(
-        not(target_os = "macos"),
-        allow(dead_code, reason = "the reactive wrapper is used by the macOS root")
-    )]
     pub(crate) fn child_mut<'t>(this: &'t mut WidgetMut<'_, Self>) -> WidgetMut<'t, dyn Widget> {
         this.ctx.get_mut(&mut this.widget.inner)
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 impl Widget for ShortcutHost {
     type Action = AppAction;
 
@@ -197,6 +92,12 @@ impl Widget for ShortcutHost {
             && !key.modifiers.ctrl()
             && !key.modifiers.alt();
         if unmodified_space {
+            // A held key repeats. One action starts the pan, and a repeat changes nothing, so
+            // it must not rebuild the view tree for each one.
+            if key.repeat && key.state == KeyState::Down {
+                ctx.set_handled();
+                return;
+            }
             let action = match key.state {
                 KeyState::Down => AppAction::BeginSpacePan,
                 KeyState::Up => AppAction::EndSpacePan,
@@ -242,23 +143,19 @@ impl Widget for ShortcutHost {
 // ---------------------------------------------------------------------------
 // View wrapper (single reactive child, following `sized_box`).
 
-#[cfg_attr(
-    not(target_os = "macos"),
-    allow(dead_code, reason = "the in-window menu is the non-macOS root wrapper")
-)]
+#[cfg(target_os = "macos")]
 pub(crate) struct ShortcutHostView<V> {
     inner: V,
 }
 
-#[cfg_attr(
-    not(target_os = "macos"),
-    allow(dead_code, reason = "the in-window menu is the non-macOS root wrapper")
-)]
+#[cfg(target_os = "macos")]
 pub(crate) fn shortcut_host<V: WidgetView<AppState>>(inner: V) -> ShortcutHostView<V> {
     ShortcutHostView { inner }
 }
 
+#[cfg(target_os = "macos")]
 impl<V> ViewMarker for ShortcutHostView<V> {}
+#[cfg(target_os = "macos")]
 impl<V> View<AppState, (), ViewCtx> for ShortcutHostView<V>
 where
     V: WidgetView<AppState>,
@@ -320,6 +217,7 @@ where
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 // Keep FromDynWidget in scope for downcast().
 #[expect(unused_imports, reason = "the trait is used only on some platforms")]
 use FromDynWidget as _;
@@ -327,6 +225,7 @@ use FromDynWidget as _;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::workspace::Tool;
     use masonry::core::keyboard::{Code, Key, KeyState, KeyboardEvent, Modifiers, NamedKey};
     use masonry::core::{NewWidget, TextEvent};
     use masonry::properties::Dimensions;

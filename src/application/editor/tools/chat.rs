@@ -162,10 +162,6 @@ impl Drop for ChatState {
     }
 }
 
-/// A wake-up from the asynchronous chat pump.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ChatProgress;
-
 /// The endpoint of a running `llama-server` for `gguf`, starting one or
 /// replacing a server that holds another model. Blocks while the model
 /// loads, so it runs on the turn's worker thread.

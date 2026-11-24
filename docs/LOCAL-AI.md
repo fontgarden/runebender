@@ -61,6 +61,10 @@ Rail tab Chat. Source: `src/application/view/panels/chat.rs`,
   model folder holds an `mmproj*.gguf` vision projector; the server passes it with
   `--mmproj`. Each picture is also written to `runebender-proof-images/` in the
   temporary folder. Source: `src/application/editor/tools/proof_image.rs`.
+  Known limit: the sentence that introduces attached pictures to the model
+  describes `proof_image`'s pair and difference; a `review_proof` picture from
+  the chat gets that same sentence. Checked findings on what a vision model
+  reads reliably are in font-garden-lab, `experiments/chat-requests-2026-10-18/requests.md`.
 - The prompt includes the design context, up to 20,000 characters.
 - A second request, constrained to a schema, restates each reply in one or two plain sentences.
 - `/review-glyph H` and the other workflow names send the workflow text.
@@ -82,6 +86,12 @@ Microphone button in Chat. Source: `src/application/editor/tools/voice.rs`,
 - The button is hidden until the binary and a model are found.
 
 ### 2.3 Proof view
+
+The reference cards come from the `reference-fonts/` folder at the root of the
+Git repository of the font, and its subfolders. This is the layout of a
+Font.Garden project, where `make reference-fonts` fills the folder. The view
+shows the faces that cover the character of the glyph. If no face covers it,
+each card gives the reason.
 
 The existing toolbar Brush remains in the edit view. Agent Proof provides its
 own Red pencil, Undo ink and Clear ink buttons, without adding an edit-toolbar
@@ -126,8 +136,12 @@ Sources: `src/application/view/canvas/proof.rs`, `src/application/editor/tools/r
   Other axis locations show an explanation instead of comparing a master drawing with an interpolated instance.
 - Waterfall and Text show compiled font specimens with native shaping, wrapping, selection, and Cmd+C (Ctrl+C on Linux).
   Waterfall uses 72/48/36/24/18/12 px rows; Text has a size field and slider.
-  Choose Glyph, Spacing, Alphabet, or Custom in Sample; Custom accepts multiline Unicode text.
-  The spacing preset is a Latin context starter; use Custom for script-specific review strings.
+  Sample offers Glyph, the proof samples for the script of the glyph, Alphabet, and Custom; Custom accepts multiline Unicode text.
+  The proof samples are the defaults in `assets/data/proof-samples.toml` and the `sample` tables of `sources/proof-samples.toml` at the project root, the file that the Font.Garden web proof reads; outside Git, `proof-samples.toml` next to the font.
+  A sample with the key of a default replaces it, and `defaults = false` removes the defaults.
+  `{glyph}` in a sample text is the character of the open glyph; the defaults use it for a spacing sample in Latin, Hebrew, and Arabic context.
+  The script comes from the Unicode value of the glyph, or of its base glyph for an unencoded form; a glyph of no Latin, Hebrew, or Arabic character gets every sample.
+  The proof opens on the first sample of the script, and an error in the file is shown on the page while the defaults stay in use.
 - Capturing Before also keeps an immutable full-font snapshot for reading proofs.
   That full-font snapshot remains available across glyph selections in the same document; the outline comparison still requires a matching glyph and source.
   Working recompiles as the document changes; selecting a proposal compares Working with a private compiled replacement, without applying it.
@@ -137,7 +151,8 @@ Sources: `src/application/view/canvas/proof.rs`, `src/application/editor/tools/r
   References come from the project's `reference-fonts/` directory and appear in all four modes; References hides or shows them.
   The folder is at the nearest Git root, or next to the opened font outside Git.
   Files are grouped by family, width and slope, with real weight selection and no synthetic bold.
-  Samples and proof settings are session-only; reference choices persist as the files in that folder.
+  The sample file is read again within a second of a change, as the reference folder is.
+  Proof settings are session-only; reference choices persist as the files in that folder.
   See [Proof reference fonts](PROOF-REFERENCES.md) for the shared native/live-web convention.
 - Agents and local Chat can call `review_proof` after reading `editor_context`.
   It captures the same Before/Working or selected proposal and reference drawings, with a shared fit and explicit source/glyph/revision guards.
@@ -149,10 +164,15 @@ Sources: `src/application/view/canvas/proof.rs`, `src/application/editor/tools/r
   The separate Text tool and editor preview strip remain available.
 - `RUNEBENDER_PROOF_VIEW=1` opens Compare; `toggle` opens Toggle on the right-hand revision, and `before` opens Toggle on the left-hand revision.
   `waterfall` and `text` open the reading modes.
-  `RUNEBENDER_PROOF_TEXT` sets a custom screenshot sample (up to 4096 characters).
+  `RUNEBENDER_PROOF_TEXT` sets a custom screenshot sample (up to 4096 characters), and `RUNEBENDER_PROOF_MENU=1` opens the sample menu.
   Headless screenshots use the same project reference directory as the interactive editor.
   `RUNEBENDER_PROOF_DARK=1` opens the proof page in dark mode.
   With `RUNEBENDER_GLYPH=<name>`, `RUNEBENDER_PROOF_SAMPLE=1` creates and selects an in-memory sample proposal for headless screenshots.
+
+The Proof section of the editor panel shows the open glyph in a proof sample of its script, shaped from the live outline, so it follows each edit before the font is saved.
+It sets the sample on one line, or on two lines when one line would be too small, and its Sample pills choose among the same samples as the proof view.
+`RUNEBENDER_EXPAND=Proof` opens it in a headless capture.
+Source: `src/application/view/panels/live_proof.rs`.
 
 To test the review loop, open a glyph, open Proof view to pin Before, return to the canvas and edit it, then reopen Proof view and switch between Compare and Toggle.
 Test a different glyph or source as well: it must not inherit another glyph's baseline.
@@ -167,7 +187,7 @@ Rail tab Local AI. Source: `src/application/view/panels/local_ai.rs`,
 | --- | --- |
 | Model | Model picker, Strength slider from 0 to 3 |
 | Tasks | "This Glyph" and "Every Glyph" buttons for each task in `font-ml tasks --json`, Cancel |
-| Weight Debt | Draft by offset, Draft with the model, Mark installed drafts orange, Measure |
+| Weight Debt | Draft by offset, Draft with the model, Mark installed drafts purple, Measure |
 | Proposals | Compare, Install, Discard, Undo Install |
 | Graph | Graph file picker |
 
@@ -182,6 +202,9 @@ Toolbar Shapes group, Local AI Shapes. Source: `src/application/editor/tools/ai_
 
 - Drag a box and choose a word. The model draws a ghost in the box. Enter keeps
   it, Tab draws another and Esc removes it. Resizing the box draws it again.
+- Drawing jobs and previews belong to one document, glyph identity, source, layer, and captured revision.
+  Switching targets or making a canonical document edit discards them conservatively; unrelated training keeps running.
+  Enter asks the workspace to validate the exact displayed preview before inserting it as one ordinary undoable edit.
 - Draws with `font-ml run draw --prompt <word> --box x,y,w,h`.
 - Trains with `font-ml run train-draw`: Quick is 6000 steps (about 12 minutes),
   Thorough is 15000 steps (about 30 minutes). Add This Font's Shapes continues
@@ -227,10 +250,16 @@ Source: `src/workflows/graph.rs`, `src/workflows/graph_run.rs`,
 
 - File graphs are `<name>.graph.json`. Each task in `font-ml tasks --json` is a
   node `font-ml.<task>`. Unchanged runs are cached by input hash.
-- Live graphs use `live.font`, `live.fork`, `live.python`, `live.proof` and `live.apply`.
+- Live graphs use `live.font`, `live.python`, `live.specimen_script` and `live.proof`.
+  A `live.python` node fed by `live.font` makes a detached font version, and the proofs show it.
+  Apply is a user action outside the graph (`graph_apply`), not a node.
+- New live graphs contain only built-in specimen pages.
+  Add a specimen script explicitly to use DesignBot Rust or DrawBot Python examples; cold Rust compilation can take several minutes and shares the proof worker.
 - `graph_trace` with `local_sketch` runs the local sketch model and puts the
   result in a `live.python` recipe node.
 - Graph runs from MCP on saved files are always proposal-only.
+- `graph_run` accepts only execution version 2, which is the default when `execution_version` is absent.
+  A request for version 1, the earlier four-node comparison contract, is rejected with an error that names version 2.
 
 ### 2.9 Design context
 
@@ -238,7 +267,7 @@ Source: `src/automation/context.rs`. A later layer wins.
 
 1. Default: `assets/context/type-design.context.md` and `assets/context/font-engineering.context.md`.
 2. Personal: `*.context.md` in `~/.config/runebender/context/` and `RUNEBENDER_CONTEXT_PATH`.
-3. Font: `*.context.md` beside the font, up to the repository root.
+3. Font: `CONTEXT.md` (or `context.md`) or `*.context.md` beside the font, up to the repository root.
 
 The `design_context` tool and the Chat prompt read these files.
 
@@ -264,11 +293,11 @@ The `design_context` tool and the Chat prompt read these files.
 ### 3.2 Live tools
 
 <!-- check: live-tools -->
-The live server publishes 50 tools.
+The live server publishes 51 tools.
 
 | Group | Tools |
 | --- | --- |
-| Connection and state | `editor_sessions`, `editor_connect`, `project_info`, `editor_context`, `editor_open_glyph`, `editor_review`, `editor_select_points`, `editor_set_text` |
+| Connection and state | `editor_sessions`, `editor_connect`, `project_info`, `editor_context`, `editor_set_source`, `editor_open_glyph`, `editor_review`, `editor_select_points`, `editor_set_text` |
 | Read and analysis | `font_info`, `read_glyph`, `glyph_inventory`, `design_context`, `analyze_glyph`, `analyze_font`, `read_kerning`, `proof`, `specimen`, `review_proof`, `export_proof` |
 | Proposals and marks | `propose_edits`, `proposal_list`, `proposal_discard`, `proposal_install`, `flag_glyph` |
 | Experiments | `experiment_fork`, `experiment_list`, `experiment_kern`, `experiment_apply`, `experiment_undo_apply` |
@@ -307,7 +336,8 @@ compiled into the binary by `src/automation/prompts.rs`. Each declares
 - Each open document has one epoch. A request with a stale epoch is refused.
 - `proposal_install`, `experiment_apply`, `experiment_undo_apply`, `agent_history`
   and `graph_apply` require `authorization: "user-approved"`.
-- Red marks permit outline replacement. Green and purple glyphs are frozen.
+- Red marks permit outline replacement. Green glyphs are frozen and are the only references.
+  Purple marks a machine draft that the designer has not reviewed.
   `flag_glyph` sets pink only. Source: `src/automation/glyph_grading.rs`.
 - Receipts are keyed by actor, operation key and payload hash. An exact retry
   returns the first result. Receipts are in memory and end with the document.

@@ -97,6 +97,26 @@ pub struct AgentLayerEdits {
     pub operations: Vec<AgentEditOperation>,
 }
 
+/// The authorization marker that a mutating live request carries.
+///
+/// The marker records an existing user decision; it is not a credential.
+/// Only [`Self::UserApproved`] lets a request change the foreground document.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum EditAuthorization {
+    /// The user asked for this change.
+    UserApproved,
+    /// An editor-built request that only stages a preview and never commits.
+    PreviewOnly,
+}
+
+impl EditAuthorization {
+    /// Whether the marker permits a foreground change.
+    pub fn is_user_approved(self) -> bool {
+        self == Self::UserApproved
+    }
+}
+
 /// Complete semantic payload for one receipt-backed live edit.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -108,7 +128,7 @@ pub struct AgentEditRequest {
     /// Actor-local retry identity.
     pub operation_key: String,
     /// Must be `user-approved`, reflecting existing user authorization.
-    pub authorization: String,
+    pub authorization: EditAuthorization,
     /// Explicit stable source ID, never an active-source default.
     pub source: usize,
     /// Name used for the grouped history entry.
@@ -403,6 +423,7 @@ mod tests {
             font,
             PathBuf::from("staged-recipe.ufo"),
         ))
+        .expect("valid source fixture")
     }
 
     fn request(
@@ -414,7 +435,7 @@ mod tests {
             expected_document_epoch: "test-epoch".into(),
             actor: "test".into(),
             operation_key: "test-operation".into(),
-            authorization: "user-approved".into(),
+            authorization: EditAuthorization::UserApproved,
             source: source.0,
             history_name: "staged recipe".into(),
             reads: Vec::new(),
@@ -437,6 +458,21 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn authorization_markers_keep_their_wire_strings() {
+        assert_eq!(
+            serde_json::to_value(EditAuthorization::UserApproved).unwrap(),
+            json!("user-approved")
+        );
+        assert_eq!(
+            serde_json::to_value(EditAuthorization::PreviewOnly).unwrap(),
+            json!("preview-only")
+        );
+        assert!(serde_json::from_value::<EditAuthorization>(json!("approved")).is_err());
+        assert!(EditAuthorization::UserApproved.is_user_approved());
+        assert!(!EditAuthorization::PreviewOnly.is_user_approved());
     }
 
     #[test]
@@ -726,7 +762,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("staged-budget.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let source = project.source_id(0).unwrap();
         let glyphs = ["A".to_owned()];
         let root = capture(&project, source, &glyphs, "root".into(), BTreeMap::new()).unwrap();

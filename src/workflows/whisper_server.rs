@@ -106,7 +106,7 @@ pub fn to_mono_16k(samples: &[f32], channels: u16, rate: u32) -> Vec<f32> {
         .chunks_exact(channels)
         .map(|frame| frame.iter().sum::<f32>() / frame.len() as f32)
         .collect();
-    if rate == SAMPLE_RATE || mono.is_empty() {
+    if rate == SAMPLE_RATE || rate == 0 || mono.is_empty() {
         return mono;
     }
     let step = f64::from(rate) / f64::from(SAMPLE_RATE);
@@ -139,7 +139,7 @@ pub fn wav(samples: &[f32]) -> Vec<u8> {
     let data_len = u32::try_from(samples.len() * 2).unwrap_or(u32::MAX);
     let mut out = Vec::with_capacity(44 + samples.len() * 2);
     out.extend_from_slice(b"RIFF");
-    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(&data_len.saturating_add(36).to_le_bytes());
     out.extend_from_slice(b"WAVEfmt ");
     out.extend_from_slice(&16_u32.to_le_bytes());
     out.extend_from_slice(&1_u16.to_le_bytes()); // PCM
@@ -278,6 +278,7 @@ impl WhisperServer {
                 Ok(None) => {}
                 Err(error) => {
                     let _ = child.kill();
+                    let _ = child.wait();
                     return Err(format!("whisper-server status: {error}"));
                 }
             }

@@ -9,7 +9,9 @@ Sibling repositories are not workspace members; do not modify them unless a task
 This file is the entry point for any coding agent working in the repository.
 The root `.mcp.json` declares `runebender mcp --live`, the editor's local MCP command.
 Clients that read `.mcp.json` can use it directly; `runebender mcp --install` registers the built binary by absolute path in Antigravity, Claude Code, Codex, Claude Desktop and Cursor.
-- Design context for agents lives in `assets/context/*.context.md` (defaults), `~/.config/runebender/context/` (personal) and `*.context.md` beside a font (font layer); `design_context` serves them, the chat prompt embeds them. Keep the default files generic; a font's rules go in its own file.
+Design context for agents lives in `assets/context/*.context.md` (defaults), `~/.config/runebender/context/` (personal) and `*.context.md` beside a font (font layer).
+The `design_context` tool serves these files, and the chat prompt embeds them.
+Keep the default files generic; the rules of a font go in its own file.
 The live host also serves the workflows in `skills/` as MCP prompts; link a `skills/runebender-*` directory into a client's skills folder to use one as a skill.
 The tiny `.codex/config.toml` repeats that command so Codex can discover it automatically in a trusted checkout.
 See [MCP and the live editor](https://runebender.org/docs/mcp.html) for setup and document-selection guidance.
@@ -22,8 +24,9 @@ The repository records its stable rustfmt settings in `.rustfmt.toml`, and CI ve
 
 ## Architecture
 
-Read [the architecture guide](https://runebender.org/docs/architecture.html) before moving code or adding a subsystem.
-It is the canonical source map and change-routing guide for humans and agents.
+Read [the module map](docs/ARCHITECTURE.md) and [the architecture guide](https://runebender.org/docs/architecture.html) before moving code or adding a subsystem.
+The module map is the canonical source map and change-routing guide for humans and agents.
+`tests/architecture_map.rs` checks its paths against the source tree, so a change that adds, moves or removes a file it names updates it in the same commit.
 
 The root package produces the `runebender` executable and its library target.
 A font path starts the Xilem editor; a subcommand runs headlessly before window setup.
@@ -52,9 +55,13 @@ The following commands describe the full native CI suite, not a requirement for 
 ```sh
 cargo fmt --all --check
 bash .github/scripts/copyright.sh
-cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --lib --bins --locked -- -D warnings
+cargo clippy --workspace --tests --examples --benches --locked -- -D warnings
+cargo clippy --workspace --tests --examples --benches --features integration-fonts --locked -- -D warnings
+cargo clippy --lib --no-default-features --locked -- -D warnings
 cargo doc --workspace --no-deps --locked
-cargo test --workspace --locked -- --test-threads=1
+env -u RUNEBENDER_TEST_FONTS cargo test --lib --no-default-features --locked -- --test-threads=1
+cargo test --workspace --features integration-fonts --locked -- --test-threads=1
 cargo build --workspace --release --locked
 cargo deny --locked check advisories
 ```
@@ -63,7 +70,9 @@ On hosts with less than 24 GiB of physical RAM, never overlap Cargo build, check
 Wait for one Cargo command to finish before starting the next; do not overlap browser smoke checks with a Cargo build on these hosts.
 On these hosts, set `CARGO_BUILD_JOBS=2` for Cargo commands; leave higher-memory hosts at their normal Cargo defaults unless memory pressure occurs.
 
-Set `RUNEBENDER_TEST_FONTS` to a directory containing test UFOs and a designspace when the adjacent Virtua Grotesk checkout is unavailable.
+Ordinary unit tests use the repository-owned synthetic fonts in `tests/fixtures/core`.
+Full-font tests require `--features integration-fonts`; set `RUNEBENDER_TEST_FONTS` to the pinned Virtua Grotesk `sources` directory when the adjacent checkout is unavailable.
+See [the contributor guide](docs/CONTRIBUTING.md) for the fixture revision and repository hygiene checks.
 Do not count ignored model tests as passing runtime coverage.
 
 For a clean-checkout proof, clone or archive the repository into a temporary directory and run the documented commands there.
@@ -76,7 +85,7 @@ Read `src/application/design/mod.rs` first: it explains the design system and it
 Colors and shapes come from the theme files, controls name a `ControlKind`, and area exceptions go in `design/areas.rs` with a reason.
 Do not set a color, opacity, stroke, radius, or text size in a view.
 `tests/design_system.rs` fails the build when a view does.
-A panel section is built only from `recipes::Row` values; read [the panel language](docs/UI-DESIGN.md) and `src/application/design/recipes/rows.rs` first, and `tests/panel_vocabulary.rs` fails the build when a panel reaches past them.
+A panel section is built only from `recipes::Row` values; read [the panel language](docs/UI-DESIGN.md) and `src/application/design/recipes/rows.rs` first, and `tests/panel_vocabulary.rs` fails the build when a panel module makes more raw view calls than its budget, which may only go down.
 Read [the theme guide](https://runebender.org/docs/themes.html) before changing colors; it names the Base UI and Rainbow palettes and traces their tokens through the editor.
 Views read workspace state; commands own intent; the font engine owns font behavior.
 

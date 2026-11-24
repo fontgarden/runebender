@@ -278,9 +278,13 @@ impl Workspace {
         let glyph = self.session.glyph_name.clone();
         let undo_depth = self.font.history_depth(&glyph, HistoryDirection::Undo);
         if self.font.project.set_hoi_trajectories(records)? {
-            self.metadata_undo
-                .push(MetadataEdit::Interpolation { glyph, undo_depth });
+            self.metadata_undo.push(MetadataEdit::Interpolation {
+                glyph,
+                undo_depth,
+                revision: self.font.project.document_revision(),
+            });
             self.metadata_redo.clear();
+            self.overview_redo.clear();
             self.modified = true;
             self.note = "Interpolation updated".into();
         }
@@ -449,8 +453,8 @@ impl Workspace {
 }
 
 /// Outline-changing commands are unavailable while the endpoint drawings are locked.
-pub(crate) fn command_allowed(action: crate::application::widgets::shortcuts::AppAction) -> bool {
-    use crate::application::widgets::shortcuts::AppAction as A;
+pub(crate) fn command_allowed(action: crate::application::app_action::AppAction) -> bool {
+    use crate::application::app_action::AppAction as A;
     matches!(
         action,
         A::Quit
@@ -480,6 +484,12 @@ pub(crate) fn command_allowed(action: crate::application::widgets::shortcuts::Ap
             | A::PreviousMaster
             | A::NextSampleString
             | A::PreviousSampleString
+            | A::NextDraft
+            | A::PreviousDraft
+            | A::GradeRed
+            | A::GradeOrange
+            | A::GradeYellow
+            | A::GradeGreen
             | A::GridDots
             | A::GridLines
             | A::MeasureColorize
@@ -505,7 +515,7 @@ pub(crate) fn command_allowed(action: crate::application::widgets::shortcuts::Ap
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::widgets::shortcuts::AppAction;
+    use crate::application::app_action::AppAction;
 
     fn shapes() -> Workspace {
         let mut app = Workspace::open(std::path::Path::new(

@@ -158,19 +158,19 @@ pub(crate) const SIDEBAR_SPLITTER_HIT_WIDTH: f64 = 16.0;
 /// Equal outer padding for section contents in either side panel.
 pub(crate) const PANEL_SECTION_INSET: Space = Space::Md;
 /// Standard space between a folding section header and its contents.
-pub(crate) const PANEL_SECTION_BODY_GAP: Space = Space::Sm;
-/// GPUI category rows inset their marker and count by 14 logical pixels.
-pub(crate) const SIDEBAR_ROW_INSET: f64 = 14.0;
+pub(crate) const PANEL_SECTION_BODY_GAP: Space = PANEL_SECTION_INSET;
+/// Space between a list row's face and its marker, name and count.
+/// It is close to the space above and below the row's text, so a selected row has even margins.
+pub(crate) const SIDEBAR_ROW_INSET: f64 = 4.0;
 /// Painted sidebar marker geometry, shared with the GPUI reference.
 pub(crate) const ROW_MARKER_SIZE: f64 = 10.0;
-/// GPUI navigation strip geometry, in logical pixels.
-pub(crate) const RAIL_TAB_ACTIVE_HEIGHT: f64 = 32.0;
-/// Space above the rail tabs, beside the outer tabs, and between neighbors.
+/// Height of the navigation strip above the left panel, in logical pixels.
+pub(crate) const RAIL_TAB_HEIGHT: f64 = 38.0;
+/// Space around the rail tabs and between neighbors.
 pub(crate) const RAIL_TAB_INSET: f64 = 6.0;
-pub(crate) const RAIL_TAB_HEIGHT: f64 = RAIL_TAB_INSET + RAIL_TAB_ACTIVE_HEIGHT;
-/// Inactive tabs leave the same inset below them, above the rail's bottom keyline,
-/// as above and beside them.
-pub(crate) const RAIL_TAB_INACTIVE_HEIGHT: f64 =
+/// Every rail tab has the same height and leaves the same inset above and below it,
+/// above the rail's bottom keyline.
+pub(crate) const RAIL_TAB_BUTTON_HEIGHT: f64 =
     RAIL_TAB_HEIGHT - 2.0 * RAIL_TAB_INSET - Stroke::Hairline.px();
 /// Content height that makes a collapsed node-inspector group fill the rail.
 pub(crate) const NODE_VIEW_SECTION_HEADER_HEIGHT: f64 =
@@ -187,23 +187,6 @@ pub(crate) const GRID_CELL_SELECTED_SHADOW_OFFSET: f64 = 3.0;
 pub(crate) const RAIL_TAB_ICON: f64 = 14.0;
 /// Rail icons whose ink fills their whole frame draw smaller to match inset icons.
 pub(crate) const RAIL_TAB_ICON_FULL_FRAME: f64 = 12.0;
-pub(crate) const RAIL_TAB_ICON_RISE: f64 = 2.0;
-/// The active tab's bottom flares are outer curves around its top corners,
-/// so they read as even when slightly larger than those corners.
-pub(crate) const RAIL_TAB_FLARE_EXTRA: f64 = 2.0;
-
-/// Top-corner radius of the rail tabs for a theme's tile radius.
-/// Smaller than the tile radius when needed so the larger flare still fits the inset.
-pub(crate) fn rail_tab_radius(theme_radius: f64) -> f64 {
-    theme_radius.min(RAIL_TAB_INSET - RAIL_TAB_FLARE_EXTRA)
-}
-
-/// Radius of the active rail tab's bottom flares for a given top-corner radius.
-/// The flare cannot exceed the rail's tab gap and side inset, or it would meet
-/// the next tab or the panel edge.
-pub(crate) fn rail_tab_flare(radius: f64) -> f64 {
-    (radius + RAIL_TAB_FLARE_EXTRA).min(RAIL_TAB_INSET)
-}
 /// Initial proof drawing height, excluding its single top divider.
 /// Proof appearance controls live in the footer; text and shaping in the inspector.
 pub(crate) const PROOF_STRIP_HEIGHT: f64 = 140.0;
@@ -228,7 +211,7 @@ pub(crate) const FOOTER_INSET: f64 = 10.0;
 /// the floating panels start at its bottom edge without a second top gutter.
 pub(crate) const TITLEBAR_HEIGHT: f64 = 34.0;
 /// Compact title-bar tabs leave clearance above and below their outlines.
-pub(crate) const HEADER_TAB_HEIGHT: f64 = 19.0;
+pub(crate) const HEADER_TAB_HEIGHT: f64 = 20.0;
 /// Horizontal breathing room around title-bar tab labels.
 pub(crate) const HEADER_TAB_TEXT_INSET: f64 = 6.0;
 /// Icon tabs share a short rectangular silhouette with the text tabs.
@@ -268,16 +251,18 @@ pub(crate) const COORD_PICKER_GAP: f64 =
 pub(crate) const COORD_LABEL_WIDTH: f64 = 14.0;
 
 /// Floating metrics-card geometry, measured against the Gray reference capture.
-pub(crate) const METRICS_CARD_WIDTH: f64 = 320.0;
-pub(crate) const METRICS_CARD_HEIGHT: f64 = 58.0;
+pub(crate) const METRICS_CARD_WIDTH: f64 = 360.0;
+pub(crate) const METRICS_CARD_HEIGHT: f64 = 82.0;
 pub(crate) const METRICS_CARD_HEADER: f64 = 22.0;
 pub(crate) const METRICS_CARD_INSET: f64 = 8.0;
 pub(crate) const METRICS_CARD_BOTTOM: f64 = 12.0;
 pub(crate) const METRICS_FIELD_HEIGHT: f64 = 20.0;
-pub(crate) const METRICS_FIELD_WIDTH: f64 = 56.0;
+pub(crate) const METRICS_FIELD_WIDTH: f64 =
+    (METRICS_CARD_WIDTH - 2.0 * METRICS_CARD_INSET - 4.0 * METRICS_FIELD_GAP) / 5.0;
 pub(crate) const METRICS_FIELD_GAP: f64 = 6.0;
-/// Skip the left kerning-group field before the three editable metrics.
-pub(crate) const METRICS_FIELD_START: f64 = 70.0;
+/// Skip the left kerning field before the three editable metrics.
+pub(crate) const METRICS_FIELD_START: f64 =
+    METRICS_CARD_INSET + METRICS_FIELD_WIDTH + METRICS_FIELD_GAP;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Space {
@@ -337,11 +322,11 @@ impl Space {
 pub(crate) enum ControlSize {
     /// 10 px. A dot in a picker, a status light.
     Dot,
-    /// 16 px. A color swatch or a chip.
+    /// 24 px. A color swatch or a chip.
     Swatch,
     /// 20 px. An icon, a small thumbnail.
     Icon,
-    /// 19 px. A category row, matching the GPUI sidebar.
+    /// 20 px. A category row.
     SidebarRow,
     /// 21 px. A row in a dense list or tree.
     Row,
@@ -361,7 +346,7 @@ impl ControlSize {
             Self::Dot => 10.0,
             Self::Swatch => 24.0,
             Self::Icon => 20.0,
-            Self::SidebarRow => 19.0,
+            Self::SidebarRow => 20.0,
             Self::Row => 21.0,
             Self::Control => 28.0,
             Self::Large => 36.0,
@@ -547,12 +532,12 @@ impl ButtonShape {
     reason = "the scale is a closed vocabulary: a size nothing uses yet is still part of it"
 )]
 pub(crate) enum TextSize {
-    /// 11 px. Section headers, counts, hints.
+    /// 13 px. Section headers, counts, hints.
     Caption,
-    /// 12 px. Rows, labels, fields. The default.
+    /// 13 px. Rows, labels, fields. The default.
     #[default]
     Body,
-    /// 14 px. A window or panel title.
+    /// 13 px. A window or panel title.
     Title,
     /// 18 px. The one heading on a screen.
     Heading,

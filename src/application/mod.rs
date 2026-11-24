@@ -10,6 +10,7 @@
 //! map and change routing guide.
 
 pub(crate) mod actions;
+pub(crate) mod app_action;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod browser;
 #[cfg(not(target_arch = "wasm32"))]
@@ -19,6 +20,7 @@ pub(crate) mod editor;
 pub(crate) mod font_model;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod launch;
+pub(crate) mod launch_options;
 pub(crate) mod local_models;
 pub(crate) mod pieces;
 pub(crate) mod platform;

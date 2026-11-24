@@ -77,7 +77,14 @@ impl Workspace {
                 .references
                 .refresh(self.font.document_source());
         }
-        if self.review.annotations.lock().unwrap().draft.is_some() {
+        if self
+            .review
+            .annotations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .draft
+            .is_some()
+        {
             return failure("Finish the pencil stroke before capturing review");
         }
         let comparison = self.review_comparison();
@@ -98,11 +105,7 @@ impl Workspace {
             return failure("reference_offset exceeds the reference count");
         }
         let weight = self.review_reference_weight();
-        let identities: Vec<_> = self
-            .review
-            .reading
-            .references
-            .selected(weight)
+        let identities: Vec<_> = references::faces(self, character)
             .into_iter()
             .skip(request.reference_offset)
             .take(4)
@@ -164,7 +167,11 @@ impl Workspace {
             {
                 let key =
                     crate::application::widgets::proof_pencil::card_key(self, drawing, &card.label);
-                let ink = self.review.annotations.lock().unwrap();
+                let ink = self
+                    .review
+                    .annotations
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 for stroke in ink.strokes.get(&key).into_iter().flatten() {
                     annotation_data.push(json!({"card":index,"drawing_key":key,"width_font_units":stroke.width,"points":stroke.points.iter().map(|p|[p.x,p.y]).collect::<Vec<_>>()}));
                     let field_x = if index % 2 == 0 { 24.0 } else { 528.0 };

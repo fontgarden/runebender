@@ -32,22 +32,6 @@ impl TextBuffer {
         self.auto_direction = true;
     }
 
-    /// Whether the bidi run containing `index` reads right to left.
-    ///
-    /// This is the sort's own rendering direction, not the line's: a
-    /// Latin glyph inside an Arabic sentence is in an LTR run and
-    /// reports false. The metrics panel uses it to keep "left" and
-    /// "right" meaning what they look like on screen.
-    pub fn sort_rtl(&self, index: usize) -> bool {
-        let line = self.line_number_for_sort(index);
-        let (start, end) = self.line_range_for_number(line);
-        self.visual_runs_for_line(start, end)
-            .iter()
-            .find(|run| run.sorts.contains(&index))
-            .map(|run| run.rtl)
-            .unwrap_or(false)
-    }
-
     /// Sorts of one line in visual order, left to right, grouped into
     /// runs of one direction each.
     ///
@@ -58,7 +42,7 @@ impl TextBuffer {
         line_start: usize,
         line_end: usize,
     ) -> Rc<Vec<VisualRun>> {
-        let line_number = self.line_number_for_index(line_start);
+        let line_number = self.line_number_for_sort(line_start);
         let base_rtl = self.resolved_line_direction(line_number) == TextDirection::RightToLeft;
         self.visual_runs_in(line_start, line_end, base_rtl)
     }

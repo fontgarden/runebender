@@ -521,10 +521,11 @@ pub fn dechunk(raw: &[u8]) -> Result<Vec<u8>, String> {
         if size == 0 {
             return Ok(body);
         }
-        let end = at + size;
-        if end + 2 > raw.len() {
-            return Err("chunked body ended inside a chunk".into());
-        }
+        // The size comes from the response, so the sums are checked.
+        let end = at
+            .checked_add(size)
+            .filter(|end| end.checked_add(2).is_some_and(|tail| tail <= raw.len()))
+            .ok_or("chunked body ended inside a chunk")?;
         body.extend_from_slice(&raw[at..end]);
         if &raw[end..end + 2] != b"\r\n" {
             return Err("chunk is not followed by a blank line".into());

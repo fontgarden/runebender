@@ -10,7 +10,7 @@
 //! and precision outside Babelfont's schema; saving materializes its geometry
 //! through the preserving adapter rather than its lossy UFO converter.
 
-mod background;
+pub(super) mod background;
 mod constructors;
 mod glyph_transactions;
 mod proposal_transactions;
@@ -162,10 +162,12 @@ pub struct GlyphSource {
 }
 
 /// One glyph across all sources, including sparse and auxiliary layers.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct VariableGlyph {
     id: GlyphId,
-    pub(super) layers: BTreeMap<LayerId, super::babelfont::LayerPreservation>,
+    /// Boxed so that a B-tree node, which reserves room for eleven entries, stays small.
+    /// A glyph usually has one to three layers.
+    pub(super) layers: BTreeMap<LayerId, Box<super::babelfont::LayerPreservation>>,
     pub(super) source_metadata:
         BTreeMap<SourceId, super::model::glyph_metadata::CanonicalSourceGlyphMetadata>,
 }
@@ -201,6 +203,12 @@ impl CanonicalSourceStructureSnapshot {
     /// Stable source identities in display order.
     pub fn source_ids(&self) -> &[SourceId] {
         &self.source_ids
+    }
+
+    pub(in crate::font) fn designspace(
+        &self,
+    ) -> Option<&super::model::designspace::CanonicalDesignspace> {
+        self.designspace.as_ref()
     }
 }
 
@@ -253,6 +261,15 @@ impl DocumentSnapshot {
 }
 
 impl VariableGlyph {
+    /// An empty glyph with a new session-local identity.
+    pub(super) fn new() -> Self {
+        Self {
+            id: GlyphId::next(),
+            layers: BTreeMap::new(),
+            source_metadata: BTreeMap::new(),
+        }
+    }
+
     /// Stable addresses of all of this glyph's layers.
     pub fn layer_ids(&self) -> impl Iterator<Item = &LayerId> {
         self.layers.keys()
@@ -296,12 +313,133 @@ pub(crate) struct VariableData {
     pub(super) revision: u64,
     pub(super) compiled: std::sync::Mutex<super::compiler::CompileCache>,
     pub(super) glyphs: BTreeMap<String, VariableGlyph>,
+    /// Position of each glyph in `font.glyphs`, which is a plain list that finds a name by
+    /// scanning. Kept current by [`Self::push_geometry`] and [`Self::reindex_geometry`].
+    geometry_index: std::collections::HashMap<String, usize>,
+    /// What recent layer commits changed, oldest first, one entry per revision they produced.
+    /// A revision produced any other way has no entry; see [`Self::layer_changes_since`].
+    layer_changes: std::collections::VecDeque<(u64, Vec<LayerChange>)>,
     pub(super) source_formats:
         BTreeMap<SourceId, super::persistence::source_format::SourceFormatData>,
     pub(super) source_metadata: BTreeMap<SourceId, SourceMetadata>,
     designspace: Option<super::model::designspace::CanonicalDesignspace>,
     pub(super) source_ids: Vec<SourceId>,
     pub(super) next_source: usize,
+}
+
+/// What one layer commit changed in a glyph, for derived data that follows single edits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LayerChange {
+    /// The edited glyph.
+    pub glyph: String,
+    /// The edited layer.
+    pub layer: LayerId,
+    /// The advance width or height changed.
+    pub metrics: bool,
+    /// The Unicode code points changed.
+    pub codepoints: bool,
+    /// The anchors or components changed, which generated mark features are made from.
+    pub mark_inputs: bool,
+}
+
+/// Layer commits remembered for [`VariableData::layer_changes_since`].
+const LAYER_CHANGE_CAPACITY: usize = 64;
+
+impl VariableData {
+    /// Remember what the layer commit that produced the current revision changed.
+    fn record_layer_changes(
+        &mut self,
+        changes: impl IntoIterator<Item = (GlyphLayerAddress, super::babelfont::LayerDelta)>,
+    ) {
+        let changes = changes
+            .into_iter()
+            .map(|(address, delta)| LayerChange {
+                glyph: address.glyph,
+                layer: address.layer,
+                metrics: delta.metrics,
+                codepoints: delta.codepoints,
+                mark_inputs: delta.mark_inputs,
+            })
+            .collect();
+        if self.layer_changes.len() == LAYER_CHANGE_CAPACITY {
+            self.layer_changes.pop_front();
+        }
+        self.layer_changes.push_back((self.revision, changes));
+    }
+
+    /// Every layer change between `revision` and the current revision.
+    ///
+    /// `None` when any revision in between came from something other than a layer commit, such
+    /// as a kerning, source or glyph-list edit, or is older than the journal keeps.
+    /// The caller then has to read the whole document again.
+    pub(super) fn layer_changes_since(&self, revision: u64) -> Option<Vec<&LayerChange>> {
+        let steps = self.revision.checked_sub(revision)?;
+        let steps = usize::try_from(steps).ok()?;
+        if steps > self.layer_changes.len() {
+            return None;
+        }
+        let recent = self
+            .layer_changes
+            .iter()
+            .skip(self.layer_changes.len() - steps);
+        let mut expected = revision;
+        let mut changes = Vec::new();
+        for (at, entries) in recent {
+            expected = expected.checked_add(1)?;
+            if *at != expected {
+                return None;
+            }
+            changes.extend(entries);
+        }
+        Some(changes)
+    }
+
+    /// Where `name` is in `font.glyphs`.
+    ///
+    /// The index is trusted only when it points at a glyph with that name.
+    /// A list changed without [`Self::reindex_geometry`] is still read correctly, by scanning.
+    pub(super) fn geometry_position(&self, name: &str) -> Option<usize> {
+        let glyphs = &self.font.glyphs.0;
+        match self.geometry_index.get(name) {
+            Some(&index) if glyphs.get(index).is_some_and(|glyph| glyph.name == name) => {
+                Some(index)
+            }
+            None if self.geometry_index.len() == glyphs.len() => None,
+            _ => glyphs.iter().position(|glyph| glyph.name == name),
+        }
+    }
+
+    /// One glyph's Babelfont geometry, found without scanning the glyph list.
+    pub(super) fn geometry(&self, name: &str) -> Option<&babelfont::Glyph> {
+        self.geometry_position(name)
+            .and_then(|index| self.font.glyphs.0.get(index))
+    }
+
+    /// One glyph's Babelfont geometry for editing its layers.
+    /// Do not rename the glyph through this reference.
+    pub(super) fn geometry_mut(&mut self, name: &str) -> Option<&mut babelfont::Glyph> {
+        self.geometry_position(name)
+            .and_then(|index| self.font.glyphs.0.get_mut(index))
+    }
+
+    /// Append a glyph's geometry and index it.
+    pub(super) fn push_geometry(&mut self, glyph: babelfont::Glyph) {
+        self.geometry_index
+            .insert(glyph.name.to_string(), self.font.glyphs.0.len());
+        self.font.glyphs.0.push(glyph);
+    }
+
+    /// Rebuild the name index after glyphs were removed, reordered or replaced.
+    pub(super) fn reindex_geometry(&mut self) {
+        self.geometry_index = self
+            .font
+            .glyphs
+            .0
+            .iter()
+            .enumerate()
+            .map(|(index, glyph)| (glyph.name.to_string(), index))
+            .collect();
+    }
 }
 
 impl Clone for VariableData {
@@ -311,6 +449,8 @@ impl Clone for VariableData {
             revision: self.revision,
             compiled: std::sync::Mutex::default(),
             glyphs: self.glyphs.clone(),
+            geometry_index: self.geometry_index.clone(),
+            layer_changes: self.layer_changes.clone(),
             source_formats: self.source_formats.clone(),
             source_metadata: self.source_metadata.clone(),
             designspace: self.designspace.clone(),
@@ -399,7 +539,12 @@ impl VariableData {
         &self,
         snapshot: &CanonicalSourceStructureSnapshot,
     ) -> bool {
-        self.source_structure_snapshot() == *snapshot
+        self.font.glyphs == snapshot.glyph_geometry
+            && self.glyphs == snapshot.glyphs
+            && self.source_formats == snapshot.source_formats
+            && self.source_metadata == snapshot.source_metadata
+            && self.source_ids == snapshot.source_ids
+            && self.designspace == snapshot.designspace
     }
 
     pub(super) fn restore_source_structure_if_current(
@@ -420,6 +565,7 @@ impl VariableData {
             .max()
             .unwrap_or(0);
         self.font.glyphs = replacement.glyph_geometry;
+        self.reindex_geometry();
         self.glyphs = replacement.glyphs;
         self.source_formats = replacement.source_formats;
         self.source_metadata = replacement.source_metadata;
@@ -471,9 +617,7 @@ impl VariableData {
     ) -> Option<super::babelfont::LayerView<'_>> {
         let preserved = self.glyphs.get(name)?.layers.get(id)?;
         let layer = self
-            .font
-            .glyphs
-            .get(name)?
+            .geometry(name)?
             .get_layer(&super::babelfont::layer_key(id))?;
         Some(super::babelfont::LayerView::new(layer, preserved))
     }
@@ -483,11 +627,9 @@ impl VariableData {
         name: &str,
         id: &LayerId,
     ) -> Option<super::LayerEditDraft> {
-        let preserved = self.glyphs.get(name)?.layers.get(id)?.clone();
+        let preserved = self.glyphs.get(name)?.layers.get(id)?.as_ref().clone();
         let layer = self
-            .font
-            .glyphs
-            .get(name)?
+            .geometry(name)?
             .get_layer(&super::babelfont::layer_key(id))?
             .clone();
         Some(super::LayerEditDraft::new(layer, preserved))
@@ -502,11 +644,10 @@ impl VariableData {
             .get(&address.glyph)?
             .layers
             .get(&address.layer)?
+            .as_ref()
             .clone();
         let layer = self
-            .font
-            .glyphs
-            .get(&address.glyph)?
+            .geometry(&address.glyph)?
             .get_layer(&super::babelfont::layer_key(&address.layer))?
             .clone();
         Some(super::CanonicalLayerSnapshot::new(
@@ -514,6 +655,22 @@ impl VariableData {
             layer,
             preserved,
         ))
+    }
+
+    pub(super) fn layer_matches_snapshot(
+        &self,
+        expected: &super::CanonicalLayerSnapshot,
+    ) -> Option<bool> {
+        let address = expected.address();
+        let preserved = self
+            .glyphs
+            .get(&address.glyph)?
+            .layers
+            .get(&address.layer)?;
+        let layer = self
+            .geometry(&address.glyph)?
+            .get_layer(&super::babelfont::layer_key(&address.layer))?;
+        Some(expected.matches_layer(layer, preserved))
     }
 
     pub(super) fn feature_text(&self, source: SourceId) -> Option<&str> {
@@ -626,14 +783,13 @@ impl VariableData {
         draft: super::LayerEditDraft,
     ) -> Option<super::babelfont::LayerDelta> {
         let key = super::babelfont::layer_key(id);
+        let position = self.geometry_position(name);
         let preserved = self
             .glyphs
             .get_mut(name)
             .and_then(|glyph| glyph.layers.get_mut(id))?;
-        let layer = self
-            .font
-            .glyphs
-            .get_mut(name)
+        let layer = position
+            .and_then(|index| self.font.glyphs.0.get_mut(index))
             .and_then(|glyph| glyph.get_layer_mut(&key))?;
         let delta = draft.delta_from(layer, preserved);
         if delta.is_empty() {
@@ -641,8 +797,13 @@ impl VariableData {
         }
         let (new_layer, new_preserved) = draft.into_parts();
         *layer = new_layer;
-        *preserved = new_preserved;
+        **preserved = new_preserved;
         self.revision = self.revision.wrapping_add(1);
+        let address = GlyphLayerAddress {
+            glyph: name.to_owned(),
+            layer: id.clone(),
+        };
+        self.record_layer_changes([(address, delta)]);
         Some(delta)
     }
 
@@ -663,9 +824,7 @@ impl VariableData {
                     .layers
                     .get(&address.layer)?;
                 let layer = self
-                    .font
-                    .glyphs
-                    .get(&address.glyph)?
+                    .geometry(&address.glyph)?
                     .get_layer(&super::babelfont::layer_key(&address.layer))?;
                 Some(draft.delta_from(layer, preserved))
             })
@@ -679,13 +838,11 @@ impl VariableData {
                 }
                 let (layer, preserved) = draft.into_parts();
                 *self
-                    .font
-                    .glyphs
-                    .get_mut(&address.glyph)
+                    .geometry_mut(&address.glyph)
                     .expect("validated glyph geometry")
                     .get_layer_mut(&super::babelfont::layer_key(&address.layer))
                     .expect("validated glyph layer geometry") = layer;
-                *self
+                **self
                     .glyphs
                     .get_mut(&address.glyph)
                     .expect("validated glyph preservation")
@@ -697,6 +854,7 @@ impl VariableData {
             .collect::<Vec<_>>();
         if !changed.is_empty() {
             self.revision = self.revision.wrapping_add(1);
+            self.record_layer_changes(changed.iter().cloned());
         }
         Some(changed)
     }
@@ -714,9 +872,7 @@ impl VariableData {
             .get(name)
             .and_then(|glyph| glyph.layers.get(from))
             .zip(
-                self.font
-                    .glyphs
-                    .get(name)
+                self.geometry(name)
                     .and_then(|glyph| glyph.get_layer(&super::babelfont::layer_key(from))),
             )
             .map(|(preserved, layer)| super::babelfont::copy_layer(layer, preserved, to))
@@ -727,10 +883,8 @@ impl VariableData {
             .get_mut(name)
             .expect("source layer retains its glyph")
             .layers
-            .insert(to.clone(), preserved);
-        self.font
-            .glyphs
-            .get_mut(name)
+            .insert(to.clone(), Box::new(preserved));
+        self.geometry_mut(name)
             .expect("source layer retains its geometry")
             .layers
             .push(layer);
@@ -744,20 +898,17 @@ impl VariableData {
         };
         if !glyph.layers.contains_key(id)
             || self
-                .font
-                .glyphs
-                .get(name)
+                .geometry(name)
                 .and_then(|glyph| glyph.get_layer(&key))
                 .is_none()
         {
             return false;
         }
+        let position = self.geometry_position(name);
         let glyph = self.glyphs.get_mut(name).expect("validated glyph");
         glyph.layers.remove(id);
-        let geometry = self
-            .font
-            .glyphs
-            .get_mut(name)
+        let geometry = position
+            .and_then(|index| self.font.glyphs.0.get_mut(index))
             .expect("preserved layer retains its geometry");
         geometry
             .layers
@@ -765,6 +916,7 @@ impl VariableData {
         if glyph.layers.is_empty() {
             self.glyphs.remove(name);
             self.font.glyphs.0.retain(|glyph| glyph.name != name);
+            self.reindex_geometry();
         }
         true
     }
@@ -790,25 +942,32 @@ impl VariableData {
     }
 
     pub(super) fn dependent_component_layers(&self, name: &str) -> Vec<GlyphLayerAddress> {
-        self.glyphs
-            .iter()
-            .flat_map(|(glyph_name, glyph)| {
-                glyph.layers.keys().filter_map(move |id| {
-                    let layer = self
-                        .font
-                        .glyphs
-                        .get(glyph_name)?
-                        .get_layer(&super::babelfont::layer_key(id))?;
-                    layer
-                        .components()
-                        .any(|component| component.reference.as_str() == name)
-                        .then(|| GlyphLayerAddress {
-                            glyph: glyph_name.clone(),
-                            layer: id.clone(),
-                        })
-                })
-            })
-            .collect()
+        let mut dependents = Vec::new();
+        for geometry in self.font.glyphs.iter() {
+            for layer in &geometry.layers {
+                if !layer
+                    .components()
+                    .any(|component| component.reference.as_str() == name)
+                {
+                    continue;
+                }
+                let Some((glyph_name, glyph)) = self.glyphs.get_key_value(geometry.name.as_str())
+                else {
+                    continue;
+                };
+                if let Some(id) = glyph.layers.keys().find(|id| {
+                    layer.id.as_deref() == Some(super::babelfont::layer_key(id).as_str())
+                }) {
+                    dependents.push(GlyphLayerAddress {
+                        glyph: glyph_name.clone(),
+                        layer: id.clone(),
+                    });
+                }
+            }
+        }
+        // Geometry order can differ from canonical glyph and layer order.
+        dependents.sort_unstable();
+        dependents
     }
 }
 
@@ -817,6 +976,47 @@ mod tests {
     use norad::{Font, Glyph};
 
     use super::*;
+
+    #[test]
+    fn component_dependents_are_direct_unique_layers_in_canonical_order() {
+        let composite = |name: &str, base: &str| {
+            let mut glyph = Glyph::new(name);
+            glyph.components.push(norad::Component::new(
+                norad::Name::new(base).unwrap(),
+                norad::AffineTransform::default(),
+                None,
+            ));
+            glyph
+        };
+        let mut font = Font::new();
+        font.default_layer_mut().insert_glyph(Glyph::new("A"));
+        let mut repeated = composite("B", "A");
+        repeated.components.push(repeated.components[0].clone());
+        font.default_layer_mut().insert_glyph(repeated);
+        font.default_layer_mut().insert_glyph(composite("C", "A"));
+        font.default_layer_mut().insert_glyph(composite("D", "C"));
+        let auxiliary = font.layers.new_layer("a.reference").unwrap();
+        auxiliary.insert_glyph(composite("B", "A"));
+        auxiliary.insert_glyph(composite("C", "A"));
+        let mut data = crate::font::persistence::ufo_codec::decode_source(&font).unwrap();
+        data.font.glyphs.reverse();
+        let address = |glyph: &str, layer: &str| GlyphLayerAddress {
+            glyph: glyph.into(),
+            layer: LayerId {
+                source: SourceId(0),
+                name: layer.into(),
+            },
+        };
+        assert_eq!(
+            data.dependent_component_layers("A"),
+            [
+                address("B", "a.reference"),
+                address("B", "public.default"),
+                address("C", "a.reference"),
+                address("C", "public.default"),
+            ]
+        );
+    }
 
     #[test]
     fn structural_restore_is_guarded_and_preserves_allocator() {

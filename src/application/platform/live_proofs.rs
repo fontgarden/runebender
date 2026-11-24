@@ -148,6 +148,14 @@ impl Workspace {
                 "operation_key must contain 1 to 128 UTF-8 bytes",
             );
         }
+        // The published schema omits `specimen_script`, and the tool declares no local code.
+        // A drawing script runs a local process, so the live tool refuses it.
+        if request.recipe.specimen_script.is_some() {
+            return failure(
+                "invalid_arguments",
+                "proof_start does not accept recipe.specimen_script",
+            );
+        }
         if let Err(error) = request.recipe.validate() {
             return failure("invalid_arguments", error);
         }
@@ -402,6 +410,20 @@ mod tests {
         assert_eq!(repeated["proof_id"], started["proof_id"]);
         assert_eq!(repeated["replayed"], true);
         assert_eq!(app.proof_jobs.jobs.len(), 1);
+    }
+
+    #[test]
+    fn proof_start_rejects_a_specimen_script_without_allocating() {
+        let mut app = app();
+        let mut scripted = serde_json::to_value(request(&app)).unwrap();
+        scripted["recipe"]["specimen_script"] = json!({"code": "print('proof')"});
+        let call = ToolCall {
+            name: "proof_start".into(),
+            arguments: scripted,
+        };
+        let rejected = app.call_live(&call);
+        assert_eq!(rejected["error_code"], "invalid_arguments", "{rejected}");
+        assert!(app.proof_jobs.jobs.is_empty());
     }
 
     #[test]

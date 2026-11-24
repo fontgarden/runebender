@@ -14,6 +14,11 @@
 //! the font's own `features.fea` when it compiles, and through the
 //! built-in Arabic joining rules in the `shaping` module otherwise.
 //!
+//! The Text tool does not use Parley for this, for three reasons.
+//! Each sort draws the live outline and advance of a glyph that is being edited.
+//! A sort can name a glyph that has no code point.
+//! The line must shape before a compiled font exists.
+//!
 //! Kerning comes from a `TextKerningModel` that resolves pairs
 //! through UFO `kern1` and `kern2` groups, and a manual kerning drag
 //! writes a direct pair value back into that model. The `layout` and
@@ -28,6 +33,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
+use std::sync::Arc;
 use unicode_bidi::{BidiInfo, Level};
 
 use crate::text::shape::{ShapingFont, ShapingGlyph, ShapingSource, log_shaping_failure};
@@ -42,24 +48,15 @@ mod shaping;
 /// Neutrals, such as digits, punctuation, and spaces, return `None`
 /// so they never decide a line's direction on their own.
 pub fn strong_direction(char: char) -> Option<TextDirection> {
-    let code = char as u32;
-    let rtl = matches!(code,
-        0x0590..=0x05FF   // Hebrew
-        | 0x0600..=0x06FF // Arabic
-        | 0x0700..=0x074F // Syriac
-        | 0x0750..=0x077F // Arabic Supplement
-        | 0x0780..=0x07BF // Thaana
-        | 0x08A0..=0x08FF // Arabic Extended-A
-        | 0xFB1D..=0xFDFF // Hebrew / Arabic presentation forms
-        | 0xFE70..=0xFEFF // Arabic presentation forms-B
-    );
-    if rtl {
-        return Some(TextDirection::RightToLeft);
+    // The Unicode bidirectional class decides, so each right-to-left script counts and a
+    // digit of any script is not a strong character.
+    match unicode_bidi::bidi_class(char) {
+        unicode_bidi::BidiClass::R | unicode_bidi::BidiClass::AL => {
+            Some(TextDirection::RightToLeft)
+        }
+        unicode_bidi::BidiClass::L => Some(TextDirection::LeftToRight),
+        _ => None,
     }
-    if char.is_alphabetic() {
-        return Some(TextDirection::LeftToRight);
-    }
-    None
 }
 
 /// Reading direction of a line or a bidi run.
@@ -149,6 +146,10 @@ pub struct TextLayoutItem {
     pub y: f64,
     /// Advance width of the glyph as placed, after shaping.
     pub advance_width: f64,
+    /// The sort's unkerned frame width at this location.
+    pub nominal_width: f64,
+    /// Signed distance from the preceding visual sort's nominal edge, within its run.
+    pub spacing_before: f64,
 }
 
 /// One stretch of a line at a single bidi embedding level.
@@ -328,14 +329,31 @@ impl TextGlyphInventory {
     }
 }
 
-impl TextKerningModel {
-    /// Every stored pair as first key, second key, and value, group
-    /// names included, for hosts syncing buffer kerning back into a
-    /// font.
-    pub fn pairs(&self) -> &HashMap<String, HashMap<String, f64>> {
-        &self.kerning
+impl TextGlyphInventory {
+    /// Read the advance widths of `glyphs` again from one canonical document source.
+    ///
+    /// This is the whole update after layer edits that changed neither code points nor the
+    /// anchors and components that generated mark features are made from.
+    /// Returns `None`, leaving the inventory unchanged, when a glyph or the source is missing.
+    pub fn refresh_widths<'a>(
+        &mut self,
+        project: &crate::font::project::Project,
+        source: crate::font::variable::SourceId,
+        glyphs: impl IntoIterator<Item = &'a str>,
+    ) -> Option<()> {
+        let layer_id = project.document_source(source)?.default_layer();
+        let widths = glyphs
+            .into_iter()
+            .map(|name| Some((name, project.document_layer(name, &layer_id)?.width())))
+            .collect::<Option<Vec<_>>>()?;
+        for (name, width) in widths {
+            self.widths.insert(name.to_owned(), width);
+        }
+        Some(())
     }
+}
 
+impl TextKerningModel {
     /// Build the kerning model from a norad font's groups and
     /// kerning.plist (native hosts; the web host sends JSON).
     #[cfg(test)]
@@ -561,8 +579,11 @@ pub struct TextBuffer {
     /// its own first strong character, which is what lets a Latin line
     /// and an Arabic line share a buffer.
     auto_direction: bool,
-    kerning: TextKerningModel,
-    glyph_inventory: TextGlyphInventory,
+    /// Shared with the host, which hands the same model to every buffer it makes.
+    /// A buffer that changes its own copy clones it first.
+    kerning: Arc<TextKerningModel>,
+    glyph_inventory: Arc<TextGlyphInventory>,
+    drag_gap: Option<(usize, f64)>,
     manual_kerning: Option<ManualKerningSession>,
     /// Preview feature overrides handed to the shaper.
     feature_overrides: Vec<(String, bool)>,
@@ -578,7 +599,7 @@ pub struct TextBuffer {
     /// `Clone` starts empty: two buffers with the same text are equal
     /// whether or not either has compiled its font yet.
     shaping_font: ShapingFontCache,
-    compiled_font: Option<std::sync::Arc<Vec<u8>>>,
+    compiled_font: Option<Arc<Vec<u8>>>,
     normalized: Vec<f64>,
     /// The positioning shaping gave each sort, applied by `layout`.
     shaped_offsets: ShapedOffsets,
@@ -597,8 +618,9 @@ impl Default for TextBuffer {
             direction: TextDirection::default(),
             // Detect per line until the toolbar pins a direction.
             auto_direction: true,
-            kerning: TextKerningModel::default(),
-            glyph_inventory: TextGlyphInventory::default(),
+            kerning: Arc::default(),
+            glyph_inventory: Arc::default(),
+            drag_gap: None,
             manual_kerning: None,
             feature_overrides: Vec::new(),
             script_override: None,
@@ -615,11 +637,7 @@ impl Default for TextBuffer {
 impl TextBuffer {
     /// Supply the full compiled document for variable advances and GPOS.
     /// The bytes remain shared; changing coordinates does not recompile the font.
-    pub fn set_compiled_font(
-        &mut self,
-        font: Option<std::sync::Arc<Vec<u8>>>,
-        normalized: Vec<f64>,
-    ) {
+    pub fn set_compiled_font(&mut self, font: Option<Arc<Vec<u8>>>, normalized: Vec<f64>) {
         if self.compiled_font != font || self.normalized != normalized {
             self.compiled_font = font;
             self.normalized = normalized;
@@ -684,11 +702,6 @@ impl TextBuffer {
                 TextSortKind::LineBreak => Some('\n'),
             })
             .collect()
-    }
-
-    /// Drop the text selection without moving the caret.
-    pub fn clear_selection(&mut self) {
-        self.selection_anchor = None;
     }
 
     /// Select a logical sort range, clamped to the buffer. Equal or
@@ -818,14 +831,6 @@ impl TextBuffer {
         })
     }
 
-    /// The SVG path data stored for a glyph, or `None` when the inventory has no outline for it.
-    pub fn glyph_outline_svg(&self, glyph_name: &str) -> Option<&str> {
-        self.glyph_inventory
-            .outlines
-            .get(glyph_name)
-            .map(String::as_str)
-    }
-
     /// Replace the name, codepoint, and advance width of the glyph sort at `index`.
     /// Returns false when the index is out of range or the sort is a line break.
     pub fn update_glyph(
@@ -881,35 +886,13 @@ impl TextBuffer {
         )
     }
 
-    /// Replace one glyph's outline without rebuilding the whole
-    /// inventory. Used when an edit to a base glyph changes every
-    /// composite that places it.
-    pub fn set_glyph_outline(&mut self, name: &str, outline: &str) {
-        if outline.is_empty() {
-            self.glyph_inventory.outlines.remove(name);
-        } else {
-            self.glyph_inventory
-                .outlines
-                .insert(name.to_string(), outline.to_string());
-        }
-    }
-
-    /// Replace everything *except* the outlines, which are maintained one
-    /// glyph at a time as edits land.
-    ///
-    /// The wholesale replace re-sends every outline in the font on
-    /// every edit. That is slow, a few MB of JSON, and worse: it hands
-    /// back the outlines as the sender last knew them, undoing
-    /// anything updated since. Mid-nudge that reads as a flash: the
-    /// composite snaps to its old shape and forward again.
-    pub fn set_glyph_metrics(&mut self, mut inventory: TextGlyphInventory) {
-        std::mem::swap(&mut inventory.outlines, &mut self.glyph_inventory.outlines);
-        self.glyph_inventory = inventory;
-        self.shaping_font.clear();
-    }
-
     /// Replace the whole glyph inventory, outlines included, and drop the cached shaping font so it is rebuilt on next use.
     pub fn set_glyph_inventory(&mut self, glyph_inventory: TextGlyphInventory) {
+        self.set_shared_glyph_inventory(Arc::new(glyph_inventory));
+    }
+
+    /// Replace the whole glyph inventory with one shared between buffers, without copying it.
+    pub fn set_shared_glyph_inventory(&mut self, glyph_inventory: Arc<TextGlyphInventory>) {
         self.glyph_inventory = glyph_inventory;
         // The complete shaper is invalidated by set_compiled_font instead.
         if self.compiled_font.is_none() {
@@ -928,6 +911,53 @@ impl TextBuffer {
         self.insert_character_with_active_advance(char, None)
     }
 
+    /// Insert the inventory-mapped characters at the cursor and shape the finished text once.
+    ///
+    /// Returns the number inserted.
+    /// Unmapped characters are skipped, just as with [`Self::insert_character`]; this does not
+    /// synthesize line breaks.
+    /// The first mapped character replaces any selection, and existing active sorts keep their
+    /// identity as their indices shift.
+    /// Empty or entirely unmapped text leaves the buffer unchanged.
+    pub fn insert_characters(&mut self, text: &str) -> usize {
+        let mut inserted = 0;
+        for character in text.chars() {
+            inserted += usize::from(self.insert_character_unshaped(character, None));
+        }
+        if inserted != 0 {
+            self.shape_arabic_if_rtl();
+        }
+        inserted
+    }
+
+    /// Insert stored text at the cursor, with each line ending as a line break, and shape once.
+    ///
+    /// [`Self::text`] writes a line break as `\n`, so this is the function that restores a
+    /// buffer from its stored text without joining its lines.
+    /// `\r\n` and a lone `\r` count as one line ending.
+    /// Unmapped characters are skipped, as with [`Self::insert_characters`].
+    /// Returns the number of sorts inserted.
+    pub fn insert_text(&mut self, text: &str) -> usize {
+        let mut inserted = 0;
+        let mut characters = text.chars().peekable();
+        while let Some(character) = characters.next() {
+            match character {
+                '\r' | '\n' => {
+                    if character == '\r' && characters.peek() == Some(&'\n') {
+                        characters.next();
+                    }
+                    self.insert_line_break();
+                    inserted += 1;
+                }
+                _ => inserted += usize::from(self.insert_character_unshaped(character, None)),
+            }
+        }
+        if inserted != 0 {
+            self.shape_arabic_if_rtl();
+        }
+        inserted
+    }
+
     /// Insert the glyph mapped to `char` at the cursor as an inactive sort and advance the cursor.
     /// `active_advance_width` is the live width of the glyph being edited and wins over the inventory width, except for Arabic characters on an RTL line, which shaping will resize anyway.
     /// Reshapes around the insertion point. Returns false when the inventory has no glyph for the character.
@@ -936,19 +966,25 @@ impl TextBuffer {
         char: char,
         active_advance_width: Option<f64>,
     ) -> bool {
+        if !self.insert_character_unshaped(char, active_advance_width) {
+            return false;
+        }
+        self.shape_arabic_around_if_rtl(self.cursor - 1);
+        true
+    }
+
+    fn insert_character_unshaped(&mut self, char: char, active_advance_width: Option<f64>) -> bool {
         let Some(glyph_name) = self.glyph_inventory.unicode.get(&(char as u32)).cloned() else {
             return false;
         };
         self.delete_selected_sorts();
-        let use_active_advance =
-            self.cursor_direction() != TextDirection::RightToLeft || !joining::is_arabic(char);
         let advance_width = active_advance_width
-            .filter(|_| use_active_advance)
+            .filter(|_| {
+                self.cursor_direction() != TextDirection::RightToLeft || !joining::is_arabic(char)
+            })
             .or_else(|| self.glyph_inventory.widths.get(&glyph_name).copied())
             .unwrap_or(500.0);
-        let position = self.cursor;
         self.insert_inactive_glyph(glyph_name, Some(char), advance_width);
-        self.shape_arabic_around_if_rtl(position);
         true
     }
 
@@ -1042,18 +1078,6 @@ impl TextBuffer {
         let deleted = self.sorts.remove(self.cursor);
         self.adjust_active_after_delete(self.cursor);
         Some(deleted)
-    }
-
-    /// Move the cursor one sort back in logical order, stopping at `0`.
-    pub fn move_cursor_left(&mut self) {
-        self.selection_anchor = None;
-        self.step_cursor_left();
-    }
-
-    /// Move the cursor one sort forward in logical order, stopping at `len()`.
-    pub fn move_cursor_right(&mut self) {
-        self.selection_anchor = None;
-        self.step_cursor_right();
     }
 
     /// Move the cursor one sort toward the left of the screen: back on an LTR line, forward on an RTL line.

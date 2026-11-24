@@ -13,9 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::font::CanonicalSourceStructureSnapshot;
 use crate::font::LayerView;
 use crate::font::canonical_metadata::{CanonicalFontMetadata, KerningParticipant};
-use crate::font::history::{
-    HistoryDirection, HistoryReplayError, HistoryReplayOutcome, TransactionHistory,
-};
+use crate::font::history::{HistoryDirection, HistoryReplayError, HistoryReplayOutcome, UndoStack};
 use crate::font::model::designspace::{
     CanonicalLocation, InstanceId, SourceDescriptor, SourceOrderEntry, SparseSourceDescriptor,
 };
@@ -44,7 +42,7 @@ impl SourceFrame {
     }
 
     fn matches(&self, project: &Project) -> bool {
-        self == &Self::capture(project)
+        project.variable.source_structure_matches(&self.canonical)
     }
 
     fn restore_if_current(&self, project: &mut Project, expected: &Self) -> Result<(), String> {
@@ -143,7 +141,7 @@ impl SourceFrame {
 
 #[derive(Debug, Default)]
 pub(super) struct SourceHistory {
-    transactions: TransactionHistory<SourceFrame>,
+    transactions: UndoStack<SourceFrame>,
 }
 
 impl Project {
@@ -224,6 +222,17 @@ impl Project {
             self.variable.revision = self.variable.revision.wrapping_add(1);
         }
         self.source_history.transactions.record(before, after);
+    }
+
+    /// Restore the structure captured in `before` after a step that should not fail did fail.
+    ///
+    /// Returns `error` for the caller, so a rejected command leaves no partial change.
+    fn abandon_source_change(&mut self, before: &SourceFrame, error: &str) -> String {
+        let current = SourceFrame::capture(self);
+        match before.restore_if_current(self, &current) {
+            Ok(()) => error.into(),
+            Err(restore) => format!("{error}; {restore}"),
+        }
     }
 
     fn record_canonical_source_change(&mut self, before: SourceFrame) {
@@ -333,12 +342,7 @@ impl Project {
     }
 
     /// Undo or redo one source/layer transaction, preserving later unrelated edits.
-    pub fn undo_sources(&mut self, redo: bool) -> Result<bool, String> {
-        let direction = if redo {
-            HistoryDirection::Redo
-        } else {
-            HistoryDirection::Undo
-        };
+    pub fn undo_sources(&mut self, direction: HistoryDirection) -> Result<bool, String> {
         let current = SourceFrame::capture(self);
         let mut history = std::mem::take(&mut self.source_history);
         let transactions = &mut history.transactions;
@@ -697,84 +701,60 @@ impl Project {
 
     /// Copy one foreground layer's contours and exact width into the canonical background.
     ///
-    /// The conventional background layer and glyph are created when absent.
-    /// An identical copy is a no-op that retains existing stable identities and redo history.
+    /// Returns the shared history group and invalidation scope, or `None` for an identical copy.
+    /// Only the consulted and edited layers are retained. Creating a background also records its
+    /// container, so Undo removes that container only if no later edit has reused or changed it.
     pub fn copy_document_layer_to_background(
         &mut self,
         address: &GlyphLayerAddress,
-    ) -> Result<bool, String> {
-        let before = SourceFrame::capture(self);
-        let base = self.variable.source_structure_snapshot();
-        let mut replacement = base.clone();
-        let (_, changed) = replacement.copy_layer_to_background(&address.glyph, &address.layer)?;
-        if !changed {
-            return Ok(false);
-        }
-        self.commit_background_structure(before, base, replacement, address)
+    ) -> Result<Option<(EditHistoryGroupId, DocumentChange)>, String> {
+        let Some(edit) = self.variable.copy_layer_to_background(address)? else {
+            return Ok(None);
+        };
+        self.commit_background_group(edit)
     }
 
-    /// Atomically exchange foreground and background contours.
+    /// Atomically exchange foreground and background contours as one layer-local history group.
     ///
     /// The foreground retains its width and non-outline metadata. The background receives the
-    /// foreground width, matching the existing editor command while retaining its other metadata.
+    /// foreground width. An unchanged exchange returns `None` without affecting any history.
     pub fn swap_document_layer_with_background(
         &mut self,
         address: &GlyphLayerAddress,
-    ) -> Result<bool, String> {
-        let before = SourceFrame::capture(self);
-        let base = self.variable.source_structure_snapshot();
-        let mut replacement = base.clone();
-        let (_, changed) =
-            replacement.swap_layer_with_background(&address.glyph, &address.layer)?;
-        if !changed {
-            return Ok(false);
-        }
-        self.commit_background_structure(before, base, replacement, address)
+    ) -> Result<Option<(EditHistoryGroupId, DocumentChange)>, String> {
+        let Some(edit) = self.variable.swap_layer_with_background(address)? else {
+            return Ok(None);
+        };
+        self.commit_background_group(edit)
     }
 
-    /// Remove this glyph from its canonical background layer, retaining the layer container.
+    /// Swap the contours and widths of two layers of one glyph in the same source.
+    ///
+    /// Returns the shared history group and invalidation scope, or `None` when the layers are
+    /// already identical.
+    pub fn swap_document_layers(
+        &mut self,
+        address: &GlyphLayerAddress,
+        other: &LayerId,
+    ) -> Result<Option<(EditHistoryGroupId, DocumentChange)>, String> {
+        let Some(edit) = self.variable.swap_layers(address, other)? else {
+            return Ok(None);
+        };
+        self.commit_background_group(edit)
+    }
+
+    /// Remove this glyph's background, retaining its layer container and unrelated glyphs.
+    ///
+    /// Returns the shared history group and invalidation scope, or `None` when already absent.
     pub fn clear_document_background(
         &mut self,
         glyph: &str,
         source: SourceId,
-    ) -> Result<bool, String> {
-        let before = SourceFrame::capture(self);
-        let base = self.variable.source_structure_snapshot();
-        let mut replacement = base.clone();
-        let (_, changed) = replacement.clear_background_layer(glyph, source)?;
-        if !changed {
-            return Ok(false);
-        }
-        let address = GlyphLayerAddress {
-            glyph: glyph.into(),
-            layer: self
-                .variable
-                .background_layer_id(source)
-                .ok_or("unknown source")?,
+    ) -> Result<Option<(EditHistoryGroupId, DocumentChange)>, String> {
+        let Some(edit) = self.variable.clear_background_layer(glyph, source)? else {
+            return Ok(None);
         };
-        self.commit_background_structure(before, base, replacement, &address)
-    }
-
-    fn commit_background_structure(
-        &mut self,
-        before: SourceFrame,
-        base: CanonicalSourceStructureSnapshot,
-        replacement: CanonicalSourceStructureSnapshot,
-        address: &GlyphLayerAddress,
-    ) -> Result<bool, String> {
-        let changed = self
-            .variable
-            .restore_source_structure_if_current(&base, replacement)
-            .map_err(|_| "canonical source structure changed after background staging")?;
-        if !changed {
-            return Ok(false);
-        }
-        let index = self
-            .source_index(address.layer.source)
-            .ok_or("background source disappeared")?;
-        self.sources[index].dirty = true;
-        self.record_canonical_source_change(before);
-        Ok(true)
+        self.commit_background_group(edit)
     }
 
     /// Duplicate one glyph into an auxiliary UFO layer, creating that layer if needed.
@@ -797,10 +777,9 @@ impl Project {
         }
         let before = SourceFrame::capture(self);
         self.variable.ensure_layer_container(&target_id)?;
-        assert!(
-            self.variable.copy_layer(glyph, from, &target_id),
-            "validated source layer must remain copyable"
-        );
+        if !self.variable.copy_layer(glyph, from, &target_id) {
+            return Err(self.abandon_source_change(&before, "the source layer cannot be copied"));
+        }
         self.sources[index].dirty = true;
         self.record_source_change(before);
         Ok(target_id)
@@ -831,6 +810,18 @@ impl Project {
 
     /// Remove one auxiliary glyph layer, retaining the layer and other glyphs.
     pub fn remove_glyph_layer(&mut self, glyph: &str, id: &LayerId) -> Result<(), String> {
+        self.remove_auxiliary_glyph_layer(glyph, id, false)
+    }
+
+    /// Remove one glyph's auxiliary layer as one undoable source change.
+    ///
+    /// With `remove_unused_container`, the layer container goes too when no other glyph uses it.
+    fn remove_auxiliary_glyph_layer(
+        &mut self,
+        glyph: &str,
+        id: &LayerId,
+        remove_unused_container: bool,
+    ) -> Result<(), String> {
         let index = self.source_index(id.source).ok_or("unknown source")?;
         if self.variable.default_layer_name(id.source) == Some(id.name.as_str()) {
             return Err("remove the source to remove a default layer".into());
@@ -839,13 +830,65 @@ impl Project {
             return Err("missing glyph layer".into());
         }
         let before = SourceFrame::capture(self);
-        assert!(
-            self.variable.remove_layer(glyph, id),
-            "validated canonical layer must remain removable"
-        );
+        if !self.variable.remove_layer(glyph, id) {
+            return Err("the glyph layer cannot be removed".into());
+        }
+        if remove_unused_container
+            && !self.variable.has_layer(id)
+            && self.variable.source_contains_layer(id)
+        {
+            self.variable.remove_empty_layer_container(id);
+        }
         self.sources[index].dirty = true;
         self.record_source_change(before);
         Ok(())
+    }
+
+    /// Rename one glyph's auxiliary layer, as one undoable source change. The glyph's layer
+    /// moves to the layer named `name`, which is created when the source lacks it, and the old
+    /// layer's container is removed when no other glyph uses it. The layer's own edit history
+    /// does not move with it. The default layer and an existing target are rejected.
+    pub fn rename_glyph_layer(
+        &mut self,
+        glyph: &str,
+        id: &LayerId,
+        name: &str,
+    ) -> Result<LayerId, String> {
+        let index = self.source_index(id.source).ok_or("unknown source")?;
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("a layer needs a name".into());
+        }
+        if self.variable.default_layer_name(id.source) == Some(id.name.as_str()) {
+            return Err("a master layer takes its name from its master".into());
+        }
+        if self.document_layer(glyph, id).is_none() {
+            return Err("missing glyph layer".into());
+        }
+        let target = LayerId {
+            source: id.source,
+            name: name.into(),
+        };
+        if self.document_layer(glyph, &target).is_some() {
+            return Err("the glyph already has a layer with that name".into());
+        }
+        let before = SourceFrame::capture(self);
+        self.variable.ensure_layer_container(&target)?;
+        if !self.variable.copy_layer(glyph, id, &target) || !self.variable.remove_layer(glyph, id) {
+            return Err(self.abandon_source_change(&before, "the glyph layer cannot be renamed"));
+        }
+        if !self.variable.has_layer(id) && self.variable.source_contains_layer(id) {
+            self.variable.remove_empty_layer_container(id);
+        }
+        self.sources[index].dirty = true;
+        self.record_source_change(before);
+        Ok(target)
+    }
+
+    /// Delete one glyph's auxiliary layer and, when no other glyph uses that layer, its
+    /// container, as one undoable source change. The default layer is rejected.
+    pub fn delete_glyph_layer(&mut self, glyph: &str, id: &LayerId) -> Result<(), String> {
+        self.remove_auxiliary_glyph_layer(glyph, id, true)
     }
 
     /// Remove an empty auxiliary layer container from canonical persistence and its projection.

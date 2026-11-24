@@ -24,6 +24,9 @@ use runebender::workflows::process::{
     OutputStream, ProcessCancellation, ProcessLimits, ProcessOutcome,
 };
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::application::workspace::DocumentGroupScope;
+
 use crate::application::editor::session::Session;
 use crate::application::font_model::FontModel;
 use crate::application::view::canvas::grid::cells_of;
@@ -226,10 +229,6 @@ impl Drop for ModelCaptureDirectory {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
-
-/// The pump's message: something arrived from the run thread.
-#[derive(Debug)]
-pub(crate) struct AiProgress;
 
 /// Capture canonical foreground revisions for named glyphs, or the whole
 /// default layer when `names` is empty.
@@ -648,7 +647,7 @@ impl Workspace {
                     .map(|layer| layer.glyph.clone())
                     .collect();
                 self.remember_debt_install(task, &installed);
-                self.record_agent_group(history_group, &change);
+                self.record_document_group(history_group, &change, DocumentGroupScope::Contextual);
                 self.ai.installed_order.push(InstalledProposalEdit {
                     layer_history_depth: 0,
                     address,
@@ -782,7 +781,7 @@ impl Workspace {
         }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(group) = edit.group {
-            if let Err(error) = self.replay_agent_group(group, HistoryDirection::Undo) {
+            if let Err(error) = self.replay_document_group(group, HistoryDirection::Undo) {
                 self.ai.installed_order.push(edit);
                 self.note = format!("Cannot undo model install: {error}");
             } else {
@@ -1227,7 +1226,8 @@ mod tests {
         for glyph in proposed {
             layer.insert_glyph(glyph);
         }
-        let external = Project::from_source(SourceInput::from_font(external, "Review.ufo".into()));
+        let external = Project::from_source(SourceInput::from_font(external, "Review.ufo".into()))
+            .expect("valid source fixture");
         let candidate = capture.stage(&app.font.project, &external, source).unwrap();
         app.ai.pending.insert(
             (source, "review-batch".into()),
@@ -1905,9 +1905,15 @@ print(json.dumps({'ok': True, 'input_width': width, 'capture_source': str(source
         let mut font = norad::Font::new();
         font.default_layer_mut()
             .insert_glyph(norad::Glyph::new("A"));
-        let mut model = FontModel::from_project(runebender::font::project::Project::from_source(
-            runebender::font::project::SourceInput::from_font(font, PathBuf::from("Revision.ufo")),
-        ));
+        let mut model = FontModel::from_project(
+            runebender::font::project::Project::from_source(
+                runebender::font::project::SourceInput::from_font(
+                    font,
+                    PathBuf::from("Revision.ufo"),
+                ),
+            )
+            .expect("valid source fixture"),
+        );
         let expected = foreground_revisions(&model, &[]).expect("the layer can be revised");
 
         assert!(model.add_glyph("B", 500.0, None));

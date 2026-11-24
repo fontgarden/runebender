@@ -3,7 +3,7 @@
 A panel section is built from `recipes::Row` values grouped under captions.
 There is no other way to put content in a section.
 The vocabulary, its rules, and every measurement live in [`src/application/design/recipes/rows.rs`](../src/application/design/recipes/rows.rs); this page is the summary.
-`tests/panel_vocabulary.rs` fails the build when a panel module reaches past the vocabulary to a bare label, column, or button.
+`tests/panel_vocabulary.rs` counts the lines in each panel module that reach past the vocabulary to a bare label, column, or button, and fails the build when a count rises above its budget.
 
 ## The design system
 
@@ -38,6 +38,7 @@ Captions and titles are title case, never all caps. Nothing in the view uppercas
 | `Field` | Caption over an input | A value you type |
 | `Picker` | The current choice with a chevron | One of several models or files; never a stack of toggles |
 | `Chips` | Small outlined pills over as many lines as needed | A set of words or tags |
+| `Dropdown` | A caption and the chosen name in one row; the list opens under it and closes on a pick | One of many, where the list is too long to keep on screen |
 | `Choice` | Segmented control | Two or three exclusive options |
 | `Primary` | Filled button, full width | The one thing the section is for |
 | `Secondary` | Outlined button, full width | The other way to do it |
@@ -48,7 +49,6 @@ Captions and titles are title case, never all caps. Nothing in the view uppercas
 | `KeyValue` | Name left, value right | Facts: steps, loss, folder |
 | `Details` | Disclosure, closed by default | Rows nobody needs every day |
 | `Slider` | Caption and a slider | A value on a range |
-| `Legacy` | A view from an older module | Only while that module moves to the vocabulary |
 
 If a feature needs a row that is not here, add it to `Row` once, with a reason in its doc comment.
 
@@ -84,7 +84,7 @@ Views read workspace state and forward edits to existing workspace intents; font
 ## Older sections
 
 Sections written before the vocabulary use `recipes::panel_section`, `recipes::section`, `recipes::panel_group`, `recipes::field`, and `design::column` and `design::row` with a `Region` directly.
-They are listed in `tests/panel_vocabulary.rs` and leave that list as they move.
+Each has a count of raw view calls in `tests/panel_vocabulary.rs`, and the count may only go down.
 Until then: `panel_group` owns an 8-pixel inset and the full-width divider; `section` owns the header and a 4-pixel gap; section bodies add no outer padding.
 Read colors from `design::theme::Palette` and measurements from `design` instead of assigning local colors, radii, or pixel values.
 Let the dock own its width; section contents fit the available width.
@@ -105,19 +105,18 @@ The separate Toggle action changes only the visible revision, keeping its contro
 Theme files begin with `formatVersion`, `id`, and `name`, followed by the Base UI and Rainbow palette definitions.
 The built-in Rainbow palette contains the seven mark-picker hues: red, orange, yellow, green, blue, purple, and pink.
 The `[drawing]` section follows the palettes and controls how their colors appear on glyph tiles and outline points.
-It contains `markStep`, `markTileStep`, `markTileOpacity`, `markStyle`, `markOutline`, `markInk`, `pointStyle`, `pointOutline`, and `pointHalo`.
-`markTileStep` names the Rainbow step for glyph tiles and the metrics card header, and defaults to `markStep`.
-`markTileOpacity` blends those tile colors over `surfaces.canvas`, the way the label tool draws letter colors, and the result stays opaque.
-Gray draws its tiles at 0.85 opacity; points, anchors, combs, and the mark picker keep the full colors.
+It contains `markStep`, `markStyle`, `markOutline`, `markInk`, `pointStyle`, `pointOutline`, and `pointHalo`.
+Glyph tiles, the metrics card header, the mark picker and points all use the same Rainbow colors, so a mark has one color everywhere.
 Existing custom themes can keep these settings at the top level, but must not also define the same setting in `[drawing]`.
 Dark, Dark Gray, Gray, Light Gray, Light, Strawberry, and Campfire explicitly define panel, tile, and control rounding, slider states, header ink, backdrop tint, and panel shadows.
 Gray uses 6-pixel tile corners; the other built-ins use 8-pixel tile corners.
 All built-ins use 10-pixel panel corners and 4-pixel control corners while keeping their own palettes and point styles.
-Sidebar tabs use the glyph-tile radius up to 4 pixels for their top corners.
-The active tab's concave bottom flares are 2 pixels larger, because outer curves read as even only when slightly larger than the corners they surround.
-The strip uses 6-pixel tab gaps and outer insets, and a flare never exceeds that inset.
+Optional `code*` roles color the code editor in script nodes: `codeBackground`, `codeText`, `codeKeyword`, `codeFunction`, `codeType`, `codeString`, `codeNumber`, `codeComment`, `codeConstant`, `codeOperator`, `codeLineNumber`, and `codeSelection`.
+A theme without them uses its own text and mark colors on its field surface.
+Sidebar tabs are a row of equal icon buttons with control corners, 6-pixel gaps and 6-pixel insets.
+The open tab takes the side panel's face, and the other tabs keep the `inactiveTab` face and dimmer ink.
+No tab changes size or position when it opens.
 Icons that are inset in their frame draw at 14 pixels and icons that fill their frame draw at 12, so all tab icons look the same size.
-The active icon sits lower than the inactive icons.
 Optional `text.inactiveTabInk` supplies solid inactive icon ink; older themes retain their previous opacity treatment.
 Panel outlines sit outside the content clip, with matching concentric radii and paint bounds that include the full stroke.
 Selected glyph and sidebar labels use the theme's yellow mark; other selected controls use `controlSelectedInk`.
@@ -230,25 +229,127 @@ RUNEBENDER_SCREENSHOT=/tmp/shot.png cargo run --release -- path/to/Font.designsp
 ```
 
 The capture uses the same text and font settings as the window.
-These variables control what the frame shows:
+The next two sections list every `RUNEBENDER_*` variable that the code reads.
+
+### Launch variables
+
+The editor reads these variables once at launch, in `LaunchOptions::from_env` in `src/application/launch_options.rs`.
+The same table is in that file, and a test compares the two.
+Most of them exist for captures, but each one also applies to a window unless its row says "in a capture".
 
 | Variable | Effect |
 | --- | --- |
-| `RUNEBENDER_SIZE=1100x720` | Logical window size; the default is 1100 by 720. |
-| `RUNEBENDER_SCALE=2` | Device-pixel scale at the same logical layout. |
-| `RUNEBENDER_THEME=<id>` | Theme ID; the default is Gray. |
+| `RUNEBENDER_SCREENSHOT=<path>` | Render one frame to this PNG file and exit without a window. |
+| `RUNEBENDER_SIZE=1100x720` | Logical size of the capture; the default is 1100 by 720. |
+| `RUNEBENDER_SCALE=2` | Device-pixel scale of the capture at the same logical layout. |
 | `RUNEBENDER_GLYPH=<name>` | Open this glyph in the editor. |
-| `RUNEBENDER_SELECTED=<name>` | Select this glyph in the grid. |
+| `RUNEBENDER_OPEN=<name>` | Create the workspace with the editor already on this glyph, without the steps of opening it. |
+| `RUNEBENDER_SELECTED=<name>` | In a capture, select this glyph in the grid. |
 | `RUNEBENDER_SELECTALL=1` | Select all points in the open glyph. |
-| `RUNEBENDER_EXPAND=<key>` | Expand the panel section with this collapse key. |
+| `RUNEBENDER_EXPAND=<key>[,<key>]` | In a capture, expand the panel sections with these collapse keys. |
 | `RUNEBENDER_COLLAPSED=<key,...>` | Collapse these panel sections. |
 | `RUNEBENDER_HIDDEN_DOCKS=<left,right>` | Fold these docks away, as the footer toggles do. |
+| `RUNEBENDER_CAT=<Number\|Symbol\|Mark>` | Select this category in the sidebar and expand the Categories section. |
 | `RUNEBENDER_SCRIPT=<label>` | Select this script group in the sidebar and open its coverage rows. |
+| `RUNEBENDER_VIEW_MODE=list` | Show the overview as a list. |
 | `RUNEBENDER_RAIL=<ai\|chat\|scripts\|shapes>` | Open this tool pane. |
-| `RUNEBENDER_VIEW=<option,...>` | Turn on canvas view options: `comb`, `continuity`, `colorize`, `handles`, `segments`, `bearings`, `popcount`, `components`. |
+| `RUNEBENDER_TOOL=<interpolation\|hand\|metaball\|measure\|label\|text\|sketch\|shapes>` | Start with this tool instead of the selection tool. |
+| `RUNEBENDER_VIEW=<option,...>` | Turn on canvas view options: `comb`, `thickness`, `continuity`, `colorize`, `handles`, `segments`, `bearings`, `popcount`, `components`. |
+| `RUNEBENDER_THICKNESS_REFERENCE=<units>` | Center the thickness heatmap on this stroke width in font units across all glyphs. |
 | `RUNEBENDER_COMPONENT=<n>` | Open the open glyph's component at index `n` in place, inside its composite. |
 | `RUNEBENDER_AXIS=wght=500,wdth=80` | Set the design-space location. |
 | `RUNEBENDER_MASTER=<name>` | Make this master active, by its style name. |
+| `RUNEBENDER_SHOW_LAYERS=1` | Turn on the eye of every layer of the open glyph. |
+| `RUNEBENDER_LAYER=<name>` | Edit this layer of the open glyph, by its name in the Layers panel. |
+| `RUNEBENDER_BACKGROUND=0` | Hide the background layers. |
+| `RUNEBENDER_MARK_CLOUD=1` | Show the mark cloud and expand the Background section. |
+| `RUNEBENDER_REFERENCE=<name>` | Fill the Reference field with this glyph name. |
+| `RUNEBENDER_TEXT=<text>` | Start a text session in the editor with this text. |
+| `RUNEBENDER_TEXT_FEATURES_DISABLED=<tag,...>` | Turn off these OpenType features in the text session. |
+| `RUNEBENDER_TEXT_SCRIPT=<tag>` | Shape the text session with this OpenType script tag. |
+| `RUNEBENDER_TEXT_LANGUAGE=<tag>` | Shape the text session with this OpenType language tag. |
+| `RUNEBENDER_TEXT_SELECTION=<start>:<end>` | Select this range of the text session. |
+| `RUNEBENDER_PREVIEW_TEXT=<text>` | Set the text of the proof strip. |
+| `RUNEBENDER_PREVIEW_BLUR=<radius>` | Blur the proof strip by this radius, from 0 to 8. |
+| `RUNEBENDER_PREVIEW_INVERT=1` | Invert the proof strip. |
+| `RUNEBENDER_PREVIEW=<pieces\|model>` | In a capture, show this view of the proof strip; `model` waits for the first drawing of the trained font. |
+| `RUNEBENDER_NEURAL_STATUS=<text>` | In a capture, show this training status in the Neural section. |
+| `RUNEBENDER_PROOF_VIEW=<1\|toggle\|before\|waterfall\|text>` | Open the proof view: `1` opens Compare, `toggle` and `before` open Toggle on the right-hand or left-hand revision, `waterfall` and `text` open those pages. |
+| `RUNEBENDER_PROOF_DARK=1` | Open the proof page in dark mode. |
+| `RUNEBENDER_PROOF_TEXT=<text>` | Set a custom sample of at most 4096 characters for the reading proof. |
+| `RUNEBENDER_PROOF_MENU=1` | Open the sample menu of the reading proof. |
+| `RUNEBENDER_PROOF_SAMPLE=1` | With `RUNEBENDER_GLYPH`, create and select an in-memory sample proposal for the proof view. |
+| `RUNEBENDER_LABEL_SAMPLE=<n>` | With `RUNEBENDER_GLYPH`, select this sample of the label tool. |
+| `RUNEBENDER_SCRIPT_DRAFT=<code>` | Open a script draft with this content in the Scripts pane. |
+| `RUNEBENDER_SCRIPT_NAME=<name>` | Name the script draft; the default is `headless-recipe.py`. |
+| `RUNEBENDER_SCRIPT_PARAMETERS=<json>` | Set the parameters of the script draft. |
+| `RUNEBENDER_CHAT_SAMPLE=<1\|listening\|detail\|busy\|models>` | Fill the Chat pane with a sample exchange; the named values show the open microphone, an open detail, a running tool or the model list. |
+| `RUNEBENDER_MODEL=<dir>` | Load the outline model in this folder. |
+| `RUNEBENDER_PROPOSAL_PREVIEW=<task>` | Show the review overlay of the proposal with this task name. |
+| `RUNEBENDER_NODES=<file>` | Open this graph file. |
+| `RUNEBENDER_NODES_CONTENT_FIXTURE=1` | Open the fixed code-and-image graph layout that interface reviews use. |
+| `RUNEBENDER_MODE=graph` | Start in the Graph view. |
+| `RUNEBENDER_GRAPH_SCRIPT=<index>` | In a capture of the Graph view, add a code node with this example script. |
+| `RUNEBENDER_GRAPH_EXPANDED=1` | In a capture of the Graph view, show the first proof image expanded. |
+| `RUNEBENDER_IN_WINDOW_MENU=1` | On macOS, show the in-window menu that the other platforms use. |
+| `RUNEBENDER_MENU_OPEN=<title>` | Open the in-window menu with this title. |
+| `RUNEBENDER_FRAME_STATS=1` | In a window, render every frame and report the frame cadence on stderr. |
+| `RUNEBENDER_FRAME_TIMES=<1\|path>` | In a window, record frame times without a change of pacing: `1` writes to stderr, a path replaces that file, and the footer shows the last second. |
 
-The code in `src/application/launch.rs` and `src/application/platform/host.rs` reads these variables.
-Search for `RUNEBENDER_` in `src` to find more specialized ones.
+### Variables that other code reads
+
+Other code reads these variables where it uses them: editor views and tools, platform code, the command line, the font engine and the tests.
+A test checks that this section and the previous one name every `RUNEBENDER_*` variable in `src`.
+
+| Variable | Effect |
+| --- | --- |
+| `RUNEBENDER_PYTHON=<path>` | The Python executable that runs recipes and graph code nodes. |
+| `RUNEBENDER_FONT_ML=<path>` | The `font-ml` executable. |
+| `RUNEBENDER_AI_DEVICE=<device>` | The device that graph model nodes request; the default is `auto`. |
+| `RUNEBENDER_CORE=<path>` | The executable that Chat runs for its tools; the default is the editor itself. |
+| `RUNEBENDER_CHAT_ENDPOINT=<url>` | An OpenAI-compatible chat server to use instead of a local model. |
+| `RUNEBENDER_CHAT_MODEL=<name>` | The model name sent to `RUNEBENDER_CHAT_ENDPOINT`; the default is `font-ml`. |
+| `RUNEBENDER_MODELS_DIR=<dir>` | The folder of Virtua sketch models; the default is `~/runebender/models`. |
+| `RUNEBENDER_SKETCH_REPOSITORY=<dir>` | The sketch runtime checkout, instead of the one in `runtime.json`. |
+| `RUNEBENDER_SKETCH_CHECKPOINT=<dir>` | The sketch checkpoint for a request that selects no model package. |
+| `RUNEBENDER_SAMPLE_SHAPES=<dir>` | The sample shapes UFO of the Shapes pane. |
+| `RUNEBENDER_THEME=<id>` | Theme ID; the default is Gray. |
+| `RUNEBENDER_THEME_PATH=<dir>[:<dir>]` | More folders of theme files. |
+| `RUNEBENDER_EDITOR_ZOOM=<zoom>` | In a capture, frame the editor canvas at this zoom. |
+| `RUNEBENDER_DEBUG_BACKDROP=1` | On macOS, report the state of the window backdrop on stderr. |
+| `RUNEBENDER_LIVE_SESSION=<socket>` | The live editor session that the `runebender agent` commands and the Chat runner use. |
+| `RUNEBENDER_DOCS=<dir>[:<dir>]` | More folders for the documentation search of the agent commands. |
+| `RUNEBENDER_CONTEXT_PATH=<dir>[:<dir>]` | More folders of personal design context files. |
+| `RUNEBENDER_MODELS=<dir>` | The model folder; the default is `~/Runebender/models`. |
+| `RUNEBENDER_MODEL_PATHS=<dir>[:<dir>]` | More model folders. |
+| `RUNEBENDER_LLAMA_SERVER=<path>` | The `llama-server` executable. |
+| `RUNEBENDER_WHISPER_SERVER=<path>` | The `whisper-server` executable. |
+| `RUNEBENDER_WHISPER_MODEL=<file>` | The speech model for voice input. |
+| `RUNEBENDER_TEST_FONTS=<dir>` | Tests: the Virtua Grotesk `sources` folder for the full-font tests. |
+| `RUNEBENDER_BENCH_FONT=<path>` | Frame probe: the designspace or UFO to measure. |
+| `RUNEBENDER_BENCH_GLYPH=<name>` | Frame probe: the glyph to open; the default is `a`. |
+| `RUNEBENDER_BENCH_OVERVIEW=1` | Frame probe: measure the overview grid instead of a point drag. |
+| `RUNEBENDER_BENCH_REPEAT=<count>` | Frame probe: repeat the edit and its rebuild for a sampling profiler; in the overview, repeat a switch of master. |
+| `RUNEBENDER_BENCH_OPEN=<count>` | Frame probe, in the overview: open and close a glyph this many times for a sampling profiler. |
+| `RUNEBENDER_BENCH_TEXT=<text>` | Frame probe: time the text line of a composition with this text. |
+| `RUNEBENDER_BENCH_GLYPHS=<count>[,<count>]` | Large-font benchmark: the glyph counts of the fixtures. |
+| `RUNEBENDER_BENCH_KEEP=<dir>` | Large-font benchmark: keep the fixture of each size in this folder. |
+| `RUNEBENDER_REAL_LLAMA=<gguf>` | Ignored test: start `llama-server` with this model and ask one question. |
+| `RUNEBENDER_REAL_WHISPER=<wav>` | Ignored test: transcribe this 16 kHz mono file with `whisper-server`. |
+| `RUNEBENDER_REAL_MICROPHONE=1` | Ignored test: record two seconds from the default input. |
+| `RUNEBENDER_REAL_VOICE=<designspace>` | Ignored test: run voice input from the microphone to the Chat field. |
+| `RUNEBENDER_REAL_CHAT_FONT=<designspace>` | Ignored test: run one Chat turn against the shared model server. |
+| `RUNEBENDER_REAL_CHAT_MODEL=<name>` | Ignored test: the model for that Chat turn. |
+| `RUNEBENDER_RECIPE_EXAMPLES=<dir>` | Tests: the recipe examples folder; the default is `tests/fixtures/recipes`. |
+| `RUNEBENDER_SCRIPT_FONT=<ttf>` | Ignored test: the font that the specimen script starters render. |
+| `RUNEBENDER_SCRIPT_OUT=<dir>` | Ignored test: keep the specimen script images in this folder. |
+| `RUNEBENDER_ANNOTATED_MCP_RENDER=<path>` | Tests: write the annotated proof scene of the live tools to this PNG file. |
+| `RUNEBENDER_ANNOTATED_PAGE_RENDER=<path>` | Tests: write the annotated proof page to this PNG file. |
+| `RUNEBENDER_HEADER_RENDER=<path>` | Tests: write the proof page header to this PNG file. |
+| `RUNEBENDER_PENCIL_RENDER=<path>` | Tests: write the proof pencil ink to this PNG file. |
+| `RUNEBENDER_GRID_FIT_PROOFS=<dir>` | Tests: write the grid fit images to this folder. |
+| `RUNEBENDER_GRID_LABEL_PROOF=<path>` | Tests: write the grid caption image to this PNG file. |
+| `RUNEBENDER_METABALL_PROOF_DIR=<dir>` | Tests: write the metaball panel images to this folder. |
+| `RUNEBENDER_NODES_PROOFS=<dir>` | Tests: write the graph comparison images to this folder. |
+| `RUNEBENDER_RESIZE_EVIDENCE=<dir>` | Tests: write the splitter images to this folder. |
+| `RUNEBENDER_HOI_PROOF_DIR=<dir>` | Tests: write the higher-order interpolation proofs to this folder. |

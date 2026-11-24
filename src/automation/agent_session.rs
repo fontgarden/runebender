@@ -500,6 +500,7 @@ mod tests {
             font,
             PathBuf::from("agent-session-fixture.ufo"),
         ))
+        .expect("valid source fixture")
     }
 
     fn session(capacity: usize) -> AgentSession {

@@ -183,15 +183,23 @@ fn project_error(reason: impl Into<String>) -> ProposalError {
     }
 }
 
-fn validate_task(task: &str) -> Result<(), ProposalError> {
-    if task.is_empty()
-        || !task
+/// The rule a task name follows, as an error message.
+pub(crate) const TASK_NAME_RULE: &str =
+    "task must contain only ASCII letters, digits, hyphens, or underscores";
+
+/// Whether `task` is one or more ASCII letters, digits, hyphens or underscores.
+///
+/// Task names become UFO layer names and file names, so the set is deliberately small.
+pub(crate) fn is_task_name(task: &str) -> bool {
+    !task.is_empty()
+        && task
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || "-_".contains(character))
-    {
-        return Err(project_error(
-            "task must contain only ASCII letters, digits, hyphens, or underscores",
-        ));
+}
+
+fn validate_task(task: &str) -> Result<(), ProposalError> {
+    if !is_task_name(task) {
+        return Err(project_error(TASK_NAME_RULE));
     }
     Ok(())
 }
@@ -971,7 +979,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("CompositionProposal.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         (project, SourceId(0))
     }
 
@@ -998,7 +1007,8 @@ mod tests {
                 .unwrap()
                 .insert_glyph(candidate);
             let mut project =
-                Project::from_source(SourceInput::from_font(font, "ReviewEligibility.ufo".into()));
+                Project::from_source(SourceInput::from_font(font, "ReviewEligibility.ufo".into()))
+                    .expect("valid source fixture");
             let source = SourceId(0);
             let revision = project.document_revision();
             let eligibility = validate_project_glyph_install(&project, source, "review", "a", true);
@@ -1046,7 +1056,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font(),
             PathBuf::from("PointMoves.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let mut project = project;
         let source = SourceId(0);
         let moves = [PointMoves {

@@ -27,7 +27,7 @@ use kurbo::{Point, Vec2};
 use norad::{AffineTransform, Anchor, Component, Font, Glyph, Name};
 use serde::{Deserialize, Serialize};
 
-use crate::font::composites::{AlignInput, realign_component_offsets};
+use crate::font::composites::{AlignInput, layer_anchors, realign_component_offsets};
 use crate::font::project::Project;
 #[cfg(test)]
 use crate::font::proposal;
@@ -529,13 +529,6 @@ fn document_recipe(
     None
 }
 
-fn document_anchors(layer: LayerView<'_>) -> Vec<(String, Point)> {
-    layer
-        .anchors()
-        .map(|anchor| (anchor.name().to_owned(), anchor.position()))
-        .collect()
-}
-
 fn place_document(
     layers: &HashMap<String, LayerView<'_>>,
     recipe: &Recipe,
@@ -544,7 +537,7 @@ fn place_document(
         .get(&recipe.base)
         .ok_or_else(|| format!("no glyph named {}", recipe.base))?;
     let mut inputs = vec![AlignInput {
-        anchors: document_anchors(*base),
+        anchors: layer_anchors(*base),
         offset: Vec2::ZERO,
         aligned: true,
     }];
@@ -552,7 +545,7 @@ fn place_document(
         let layer = layers
             .get(mark)
             .ok_or_else(|| format!("no glyph named {mark}"))?;
-        let anchors = document_anchors(*layer);
+        let anchors = layer_anchors(*layer);
         if !anchors.iter().any(|(name, _)| name.starts_with('_')) {
             return Err(format!("{mark} has no _anchor to attach by"));
         }
@@ -843,7 +836,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("CanonicalCompose.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()
@@ -901,7 +895,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("DuplicateUnicodeCompose.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()
@@ -932,7 +927,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("InvalidCanonicalCompose.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         assert_eq!(
             plan_project(&project, SourceId(0), Some(&["Aacute".into()])),
             Err(DocumentEditError::InvalidLayerMetadata)
@@ -1014,7 +1010,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("CanonicalExplicitCompose.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()

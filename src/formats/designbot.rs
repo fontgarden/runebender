@@ -13,53 +13,6 @@ use crate::font::experiments::Experiment;
 use crate::font::project::Project;
 use crate::font::variable::{GlyphLayerAddress, LayerId, SourceId};
 
-/// Build an isolated-glyph proof from the supplied source font or proposal layer.
-/// Geometry is resolved before transport; no source files are read by Designbot.
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "Scene dimensions are bounded positive integers"
-)]
-#[cfg(test)]
-pub fn scene(font: &norad::Font, layer: Option<&str>, names: &[String]) -> Result<Value, String> {
-    use kurbo::Affine;
-    if names.is_empty() || names.len() > 256 {
-        return Err("proof requires 1 to 256 glyphs".into());
-    }
-    let preview = layer
-        .map(|l| crate::font::proposal::preview_font(font, l))
-        .transpose()?;
-    let font = preview.as_ref().unwrap_or(font);
-    let columns = names.len().min(6);
-    let rows = names.len().div_ceil(columns);
-    let cell = 256.0;
-    let height = (rows as f64 * cell).min(2048.0);
-    let reduction = height / (rows as f64 * cell);
-    let units_per_em = font
-        .font_info
-        .units_per_em
-        .map(|value| value.as_f64())
-        .unwrap_or(1000.0);
-    let scale = 190.0 / units_per_em * reduction;
-    let mut paths = Vec::new();
-    let mut labels = Vec::new();
-    for (i, name) in names.iter().enumerate() {
-        let glyph = font
-            .get_glyph(name)
-            .ok_or_else(|| format!("no glyph named {name}"))?;
-        let x = ((i % columns) as f64 * cell + 24.0) * reduction;
-        let y = height - ((i / columns) as f64 * cell + 205.0) * reduction;
-        let path = Affine::translate((x, y))
-            * Affine::scale(scale)
-            * crate::outline::glyph_paths::glyph_to_bezpath(glyph, font);
-        paths.push(json!({"d":path.to_svg()}));
-        labels
-            .push(json!({"text":name,"x":x,"y":y-24.0*reduction,"size":(12.0*reduction).max(1.0)}));
-    }
-    Ok(
-        json!({"version":1,"width":(columns as f64*cell*reduction).round() as u64,"height":height.round() as u64,"paths":paths,"labels":labels}),
-    )
-}
-
 /// Build an isolated-glyph scene directly from one canonical Project source.
 pub fn scene_project(
     project: &Project,
@@ -350,100 +303,6 @@ pub(crate) fn hash_executable(path: &std::path::Path) -> Result<String, String> 
     Ok(format!("sha256:{:x}", digest.finalize()))
 }
 
-/// A one-page Latin kerning specimen from live outlines, shaped with harfrust.
-/// Uses canonical kerning with `kern` disabled in feature shaping to avoid double kerning.
-/// Other feature positioning remains active. Fails on unsupported text or feature errors.
-#[cfg(test)]
-pub fn specimen(font: &norad::Font, text: &str) -> Result<Value, String> {
-    use crate::text::shape::{ShapingFont, ShapingGlyph, ShapingSource};
-    use kurbo::Affine;
-    if text.is_empty()
-        || text.len() > 256
-        || !text.is_ascii()
-        || text.chars().any(|c| c.is_control() && c != '\n')
-    {
-        return Err(
-            "MVP text proofs accept 1 to 256 basic Latin characters, with optional newlines".into(),
-        );
-    }
-    let units_per_em = font
-        .font_info
-        .units_per_em
-        .map(|value| value.as_f64())
-        .unwrap_or(1000.0);
-    let mut glyphs: Vec<_> = font
-        .default_layer()
-        .iter()
-        .map(|g| ShapingGlyph {
-            name: g.name().to_string(),
-            advance: g.width,
-            unicodes: g.codepoints.iter().map(u32::from).collect(),
-        })
-        .collect();
-    glyphs.sort_by_key(|g| (g.name != ".notdef", g.name.clone()));
-    if glyphs.first().is_none_or(|g| g.name != ".notdef") {
-        glyphs.insert(
-            0,
-            ShapingGlyph {
-                name: ".notdef".into(),
-                advance: units_per_em * 0.5,
-                unicodes: vec![],
-            },
-        );
-    }
-    let shaper = ShapingFont::build(&ShapingSource {
-        units_per_em,
-        glyphs,
-        features: font.features.clone(),
-    })?;
-    let mut paths = Vec::new();
-    let mut labels = Vec::new();
-    let mut baseline = 742.0;
-    for size in [18.0, 24.0, 36.0, 48.0] {
-        let scale = size / units_per_em;
-        labels.push(json!({"text":format!("{size} pt / live UFO kerning"),"x":30,"y":baseline+16.0,"size":10}));
-        for line in text.lines() {
-            let shaped = shaper.shape_with_features(line, false, &[("kern".into(), false)])?;
-            let mut x = 30.0;
-            let mut previous: Option<&str> = None;
-            for item in shaped {
-                let name = shaper
-                    .glyph_name(item.glyph_id)
-                    .ok_or("invalid shaped glyph")?;
-                let glyph = font
-                    .get_glyph(name)
-                    .ok_or_else(|| format!("missing glyph {name}"))?;
-                if name == ".notdef" {
-                    return Err("specimen contains an unmapped character".into());
-                }
-                let kern = previous.map_or(0.0, |left| pair_kerning(font, left, name));
-                if x + (kern + item.x_advance) * scale > 582.0 {
-                    x = 30.0;
-                    baseline -= size * 1.5;
-                    previous = None;
-                }
-                if baseline < 40.0 {
-                    return Err("specimen exceeds one page; use shorter text".into());
-                }
-                if previous.is_some() {
-                    x += kern * scale;
-                }
-                let path = Affine::translate((
-                    x + item.x_offset * scale,
-                    baseline + item.y_offset * scale,
-                )) * Affine::scale(scale)
-                    * crate::outline::glyph_paths::glyph_to_bezpath(glyph, font);
-                paths.push(json!({"d":path.to_svg()}));
-                x += item.x_advance * scale;
-                previous = Some(name);
-            }
-            baseline -= size * 1.5;
-        }
-        baseline -= 32.0;
-    }
-    Ok(json!({"version":1,"width":612,"height":792,"paths":paths,"labels":labels}))
-}
-
 /// Build a one-page specimen from one canonical Project source.
 pub fn specimen_project(project: &Project, source: SourceId, text: &str) -> Result<Value, String> {
     let default = project
@@ -616,41 +475,10 @@ fn specimen_canonical<'a>(
     Ok(json!({"version":1,"width":612,"height":792,"paths":paths,"labels":labels}))
 }
 
-/// Resolve pair exceptions before side-specific UFO group pairs.
-#[cfg(test)]
-fn pair_kerning(font: &norad::Font, left: &str, right: &str) -> f64 {
-    let left_group = font
-        .groups
-        .iter()
-        .find(|(name, members)| {
-            name.starts_with("public.kern1.") && members.iter().any(|g| g.as_str() == left)
-        })
-        .map(|(name, _)| name.as_str());
-    let right_group = font
-        .groups
-        .iter()
-        .find(|(name, members)| {
-            name.starts_with("public.kern2.") && members.iter().any(|g| g.as_str() == right)
-        })
-        .map(|(name, _)| name.as_str());
-    for (l, r) in [
-        (Some(left), Some(right)),
-        (Some(left), right_group),
-        (left_group, Some(right)),
-        (left_group, right_group),
-    ] {
-        if let (Some(l), Some(r)) = (l, r)
-            && let Some(value) = font.kerning.get(l).and_then(|row| row.get(r))
-        {
-            return *value;
-        }
-    }
-    0.0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::font::project::SourceInput;
     use kurbo::Shape as _;
 
     #[test]
@@ -676,12 +504,18 @@ mod tests {
                 None,
             ));
         }
-        let before = specimen(&font, "AV").unwrap();
+        let specimen = |font: &norad::Font| {
+            let project =
+                Project::from_source(SourceInput::from_font(font.clone(), "Kerning.ufo".into()))
+                    .expect("valid source fixture");
+            specimen_project(&project, SourceId(0), "AV").unwrap()
+        };
+        let before = specimen(&font);
         font.kerning
             .entry(norad::Name::new("A").unwrap())
             .or_default()
             .insert(norad::Name::new("V").unwrap(), -40.0);
-        let after = specimen(&font, "AV").unwrap();
+        let after = specimen(&font);
         let x = |v: &Value| {
             kurbo::BezPath::from_svg(v["paths"][1]["d"].as_str().unwrap())
                 .unwrap()

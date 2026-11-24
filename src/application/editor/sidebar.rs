@@ -1,12 +1,12 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! The sidebar's filters and the grid selection.
 
 use crate::application::design;
 use crate::application::font_model as model;
 use crate::application::view::canvas::grid::{Cell, CellMetrics};
-use crate::application::workspace::{Mode, Sel, Sort, Workspace};
+use crate::application::workspace::{FilteredKey, Mode, Sel, Sort, Workspace};
 use runebender::GlyphCategory;
 use runebender::outline::glyph_paths::round_units;
 use std::sync::Arc;
@@ -23,6 +23,21 @@ impl Workspace {
             && self.sort == Sort::Name
         {
             return self.cells.clone();
+        }
+        let key = FilteredKey {
+            cells: self.cells.clone(),
+            revision: self.font.project.document_revision(),
+            filter: self.filter.clone(),
+            sel: self.sel,
+            sort: self.sort,
+            regex: self.search_regex,
+            mode: self.search_mode,
+            case: self.search_case,
+        };
+        if let Some((last, cells)) = self.filtered.borrow().as_ref()
+            && last.cells_are(&key)
+        {
+            return cells.clone();
         }
         let q = if self.search_case {
             self.filter.clone()
@@ -72,7 +87,9 @@ impl Workspace {
                 out.sort_by_key(|c| c.codepoint.map(|cp| cp as u32).unwrap_or(u32::MAX));
             }
         }
-        Arc::new(out)
+        let out = Arc::new(out);
+        *self.filtered.borrow_mut() = Some((key, out.clone()));
+        out
     }
 
     /// Codepoints of a glyph entry (the cache keeps only the first).
@@ -136,13 +153,19 @@ impl Workspace {
         let Some(g) = sb::language_groups().get(i) else {
             return 0;
         };
-        self.font
-            .glyphs
-            .iter()
-            .filter(|e| {
-                sb::glyph_matches_language_group(&e.name, Self::entry_codepoints(e).as_slice(), g)
-            })
-            .count()
+        self.font.glyph_count(0, (i, 0), || {
+            self.font
+                .glyphs
+                .iter()
+                .filter(|e| {
+                    sb::glyph_matches_language_group(
+                        &e.name,
+                        Self::entry_codepoints(e).as_slice(),
+                        g,
+                    )
+                })
+                .count()
+        })
     }
 
     /// Present-count for GF-coverage filter `i` (glyphs the font has).
@@ -154,13 +177,19 @@ impl Workspace {
         else {
             return 0;
         };
-        self.font
-            .glyphs
-            .iter()
-            .filter(|e| {
-                sb::glyph_matches_character_filter(&e.name, Self::entry_codepoints(e).as_slice(), f)
-            })
-            .count()
+        self.font.glyph_count(1, (i, 0), || {
+            self.font
+                .glyphs
+                .iter()
+                .filter(|e| {
+                    sb::glyph_matches_character_filter(
+                        &e.name,
+                        Self::entry_codepoints(e).as_slice(),
+                        f,
+                    )
+                })
+                .count()
+        })
     }
 
     /// How many glyphs a category's subfilter holds.
@@ -190,14 +219,19 @@ impl Workspace {
         else {
             return (0, None);
         };
-        let present = self
-            .font
-            .glyphs
-            .iter()
-            .filter(|e| {
-                sb::glyph_matches_character_filter(&e.name, Self::entry_codepoints(e).as_slice(), f)
-            })
-            .count();
+        let present = self.font.glyph_count(2, (gi, fi), || {
+            self.font
+                .glyphs
+                .iter()
+                .filter(|e| {
+                    sb::glyph_matches_character_filter(
+                        &e.name,
+                        Self::entry_codepoints(e).as_slice(),
+                        f,
+                    )
+                })
+                .count()
+        });
         (present, f.expected_count)
     }
 
@@ -235,8 +269,7 @@ impl Workspace {
             padding: 8.0,
             padding_y: 8.0,
             captions_below: true,
-            ascender: self.font.ascender(),
-            descender: self.font.descender(),
+            baseline_offset: Some(self.font.font_info().metrics.resolved().cap_height * 0.5),
             upm: self.font.units_per_em(),
             detail: self.detail,
         }
@@ -250,8 +283,7 @@ impl Workspace {
             padding_y: design::RAIL_GRID_INSET,
             // A neural item has no code point to recognize it by, so it keeps its name.
             captions_below: self.font.project.is_neural(),
-            ascender: self.font.ascender(),
-            descender: self.font.descender(),
+            baseline_offset: None,
             upm: self.font.units_per_em(),
             detail: false,
         }

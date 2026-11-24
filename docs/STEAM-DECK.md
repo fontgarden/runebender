@@ -97,7 +97,7 @@ The steps below describe what they do.
 
 SteamOS has no compiler, no headers, and no `pkg-config`.
 Do not install them with `pacman` on the host.
-SteamOS ships Distrobox and Podman, so put the toolchain in an Arch container in `/home/deck`.
+SteamOS ships Distrobox and Podman, so put the toolchain in an Ubuntu container in `/home/deck`.
 
 1. On the Deck, run `distrobox create --yes --name rb --image docker.io/library/ubuntu:24.04`.
    An Arch image builds too, but its glibc 2.44 is newer than the SteamOS 2.41, so that binary only runs through `distrobox enter`.

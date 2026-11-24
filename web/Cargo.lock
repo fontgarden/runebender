@@ -2360,11 +2360,11 @@ dependencies = [
  "runebender-xilem-browser",
  "serde",
  "serde_json",
+ "sha2",
  "skrifa 0.46.2",
  "tokio",
  "toml",
  "wasm-bindgen",
- "web-time",
 ]
 
 [[package]]

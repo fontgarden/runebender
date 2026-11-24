@@ -8,7 +8,24 @@ use crate::font::generated::{GeneratedContour, validate_contours};
 
 impl LayerEditDraft {
     pub(in crate::font) fn new(layer: Layer, preserved: LayerPreservation) -> Self {
-        Self { layer, preserved }
+        Self {
+            layer,
+            preserved,
+            grid_spacing: crate::outline::point_ops::DEFAULT_GRID_SPACING,
+        }
+    }
+
+    /// Set this draft's snapping policy in font units; zero disables snapping.
+    ///
+    /// Invalid values leave the policy unchanged.
+    /// The policy belongs to the edit context, not to persisted glyph data or undo history.
+    /// Returns whether the policy changed.
+    pub fn set_grid_spacing(&mut self, spacing: f64) -> bool {
+        if !spacing.is_finite() || spacing < 0.0 || self.grid_spacing == spacing {
+            return false;
+        }
+        self.grid_spacing = spacing;
+        true
     }
 
     pub(in crate::font) fn into_parts(self) -> (Layer, LayerPreservation) {
@@ -46,7 +63,6 @@ impl LayerEditDraft {
             || self.preserved.smart_component_axes != preserved.smart_component_axes
             || self.preserved.smart_component_values != preserved.smart_component_values
             || self.preserved.smart_component_pole != preserved.smart_component_pole
-            || self.preserved.hoi_intermediates != preserved.hoi_intermediates
             || self.preserved.contours != preserved.contours
             || self
                 .preserved
@@ -58,10 +74,17 @@ impl LayerEditDraft {
                     .iter()
                     .map(|item| (item.id, &item.alignment, &item.metadata)))
             || self.preserved.anchors != preserved.anchors;
+        let mark_inputs = self.layer.anchors != layer.anchors
+            || self.preserved.anchors != preserved.anchors
+            || !self.layer.components().eq(layer.components())
+            || exact_components(&self.preserved.components)
+                != exact_components(&preserved.components);
         LayerDelta {
             geometry,
             metrics,
             metadata,
+            codepoints: self.preserved.codepoints != preserved.codepoints,
+            mark_inputs,
         }
     }
 

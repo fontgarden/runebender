@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! The info panel: which sections show for the grid and for a glyph.
 
@@ -12,8 +12,8 @@ use crate::application::view::panels::editor_info::{
 };
 use crate::application::view::panels::sections::{
     axes_section, background_section, coordinates_section, curves_section, font_advanced_section,
-    font_info_section, layers_section, mark_section, masters_section, measure_section,
-    path_operations_section, shaping_section, transformations_section,
+    font_info_section, layers_section, mark_section, measure_section, path_operations_section,
+    shaping_section, transformations_section,
 };
 use crate::application::workspace::{Mode, Tool, Workspace};
 use runebender::outline::glyph_paths::round_units;
@@ -182,7 +182,8 @@ pub(crate) fn info_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
                             row("Selected".into(), format!("{}", app.multi_selected.len()))
                         }),
                         (!pts.is_empty()).then(|| row("Points".into(), pts)),
-                        editing.then(|| row("Selected".into(), format!("{}", app.selected_points))),
+                        editing
+                            .then(|| row("Selected".into(), format!("{}", app.selected_points()))),
                     ),
                 )
             }),
@@ -194,7 +195,7 @@ pub(crate) fn info_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
     );
     let glyph_section = recipes::section_with_header_height(
         app,
-        "Glyph",
+        if editing { "Editor Glyph" } else { "Glyph" },
         "Glyph",
         glyph_body,
         if nodes && app.collapsed.contains("Glyph") {
@@ -229,9 +230,11 @@ pub(crate) fn info_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
             (editing && app.tool == Tool::Sketch)
                 .then(|| recipes::panel_group(pal, super::sketch::panel(app))),
             editing.then(|| recipes::panel_group(pal, coordinates_section(app))),
+            editing.then(|| recipes::panel_group(pal, curves_section(app))),
+            (editing && !app.font.project.is_neural())
+                .then(|| recipes::panel_group(pal, super::live_proof::section(app))),
         )),
         editing.then(|| recipes::panel_group(pal, transformations_section(app))),
-        editing.then(|| recipes::panel_group(pal, curves_section(app))),
         editing.then(|| recipes::panel_group(pal, path_operations_section(app))),
         recipes::panel_group(pal, glyph_section),
         editing.then(|| recipes::panel_group(pal, background_section(app))),
@@ -258,13 +261,10 @@ pub(crate) fn info_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
         (!editing).then(|| recipes::panel_group(pal, compare_section(app))),
         (!editing).then(|| recipes::panel_group(pal, features_section(app))),
         layers_section(app).map(|body| recipes::panel_group(pal, body)),
-        recipes::panel_stack((
-            masters_section(app).map(|body| recipes::panel_group(pal, body)),
-            editing
-                .then(|| axes_section(app))
-                .flatten()
-                .map(|body| recipes::panel_group(pal, body)),
-        )),
+        editing
+            .then(|| axes_section(app, "Editor Axes"))
+            .flatten()
+            .map(|body| recipes::panel_group(pal, body)),
         editing.then(|| recipes::panel_group(pal, measure_section(app))),
     )))
 }

@@ -112,10 +112,6 @@ pub fn realign_component_offsets(components: &[AlignInput], seed: &[(String, Poi
 /// The anchors a layer carries itself, as `(name, position)`: what alignment reads from a
 /// component's base glyph.
 pub fn layer_anchors(layer: LayerView<'_>) -> Vec<(String, Point)> {
-    document_anchors(layer)
-}
-
-fn document_anchors(layer: LayerView<'_>) -> Vec<(String, Point)> {
     layer
         .anchors()
         .map(|anchor| (anchor.name().to_owned(), anchor.position()))
@@ -137,7 +133,7 @@ pub fn effective_document_anchors<'a>(
         resolve: &mut impl FnMut(&str) -> Option<LayerView<'a>>,
         depth: usize,
     ) -> Vec<(String, Point)> {
-        let own = document_anchors(layer);
+        let own = layer_anchors(layer);
         if !own.is_empty() || depth > 8 {
             return own;
         }
@@ -159,19 +155,6 @@ pub fn effective_document_anchors<'a>(
     }
 
     recurse(layer, &mut resolve, 0)
-}
-
-/// Build stable component identities and alignment inputs from one canonical layer.
-///
-/// `resolve` selects component bases in the same source/layer context as `layer`.
-/// A missing base has no anchors and therefore leaves that component at its stored position.
-pub fn document_align_inputs<'layer, 'base>(
-    layer: LayerView<'layer>,
-    mut resolve: impl FnMut(&str) -> Option<LayerView<'base>>,
-) -> Vec<(ComponentId, AlignInput)> {
-    align_inputs_with(layer, |base| {
-        resolve(base).map(document_anchors).unwrap_or_default()
-    })
 }
 
 /// Alignment inputs with each base glyph's anchors supplied by `base_anchors`.
@@ -207,7 +190,7 @@ pub fn realign_document_layer<'a>(
 ) -> Result<bool, DocumentEditError> {
     realign_document_layer_with(
         draft,
-        |base| resolve(base).map(document_anchors).unwrap_or_default(),
+        |base| resolve(base).map(layer_anchors).unwrap_or_default(),
         seed_own_anchors,
     )
 }
@@ -225,7 +208,7 @@ pub fn realign_document_layer_with(
         return Ok(false);
     }
     let seed = if seed_own_anchors {
-        document_anchors(layer)
+        layer_anchors(layer)
     } else {
         Vec::new()
     };
@@ -261,22 +244,6 @@ pub fn realign_document_layer_with(
         changed |= draft.set_component_transform(id, transform)?;
     }
     Ok(changed)
-}
-
-/// Return every canonical layer glyph that places `base` as a component.
-pub fn document_composites_using<'a>(
-    layers: impl IntoIterator<Item = LayerView<'a>>,
-    base: &str,
-) -> Vec<String> {
-    layers
-        .into_iter()
-        .filter(|layer| {
-            layer
-                .components()
-                .any(|component| component.reference() == base)
-        })
-        .map(|layer| layer.glyph_name().to_owned())
-        .collect()
 }
 
 #[cfg(test)]
@@ -449,7 +416,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("CanonicalAlignment.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let source = SourceId(0);
         let layer = project.document_source(source).unwrap().default_layer();
         let address = GlyphLayerAddress {
@@ -499,7 +467,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("CanonicalAnchors.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()
@@ -518,7 +487,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("InvalidCanonicalAlignment.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()

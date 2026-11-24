@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Editing a component in place: the session opens the component's base glyph,
 //! but the canvas keeps drawing it where the composite places it.
@@ -14,7 +14,7 @@
 use crate::application::editor::session::{PointView, Session};
 use crate::application::font_model::FontModel;
 use crate::application::platform::host;
-use crate::application::workspace::{MetadataEdit, Mode, Tab, TextContext, Workspace};
+use crate::application::workspace::{MetadataEdit, Tab, TextContext, Workspace};
 use std::sync::Arc;
 
 use masonry::kurbo::{Affine, BezPath, Line, Point, Vec2};
@@ -543,9 +543,8 @@ impl Workspace {
         }
         if let Some(index) = self.font.index_of(&name) {
             self.selected = Some(index);
-            self.mode = Mode::Editor(index);
+            self.enter_editor_mode(index);
         }
-        self.selected_points = self.session.selection.len();
         self.name_buf = name;
         self.unicode_buf = self
             .session
@@ -555,6 +554,7 @@ impl Workspace {
         self.refresh_metric_bufs();
         self.refresh_coord_bufs();
         self.note.clear();
+        self.shapes_context_changed();
     }
 }
 

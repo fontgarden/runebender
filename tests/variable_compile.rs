@@ -521,12 +521,7 @@ fn designspace_rules_are_present_in_the_compiled_variable_shaper() {
 
     let mut doc = designspace();
     doc.rules.rules.push(weight_rule(650.0));
-    let mut project = project_from_designspace(doc);
-    project.axes.clear();
-    project.master_locations.clear();
-    project.master_names.clear();
-    project.instances.clear();
-    project.brace.clear();
+    let project = project_from_designspace(doc);
     let compiled = project.compile().unwrap();
     for (location, name) in [(0.0, "A"), (1.0, "V")] {
         let shaping = ShapingFont::from_bytes((*compiled.bytes).clone())
@@ -716,7 +711,11 @@ fn source_structure_history_invalidates_compiled_preview() {
         vec![added, SourceId(0), SourceId(1)]
     );
 
-    assert!(project.undo_sources(false).unwrap());
+    assert!(
+        project
+            .undo_sources(runebender::font::history::HistoryDirection::Undo)
+            .unwrap()
+    );
     let after_move_undo = project.compiled_preview().unwrap();
     assert!(!std::sync::Arc::ptr_eq(&after_move, &after_move_undo));
     assert_eq!(
@@ -730,7 +729,11 @@ fn source_structure_history_invalidates_compiled_preview() {
         vec![SourceId(0), SourceId(1), added]
     );
 
-    assert!(project.undo_sources(false).unwrap());
+    assert!(
+        project
+            .undo_sources(runebender::font::history::HistoryDirection::Undo)
+            .unwrap()
+    );
     let after_add_undo = project.compiled_preview().unwrap();
     assert!(!std::sync::Arc::ptr_eq(&after_move_undo, &after_add_undo));
     assert_eq!(
@@ -745,10 +748,18 @@ fn source_structure_history_invalidates_compiled_preview() {
     );
     assert_eq!(after_add_undo.bytes, initial.bytes);
 
-    assert!(project.undo_sources(true).unwrap());
+    assert!(
+        project
+            .undo_sources(runebender::font::history::HistoryDirection::Redo)
+            .unwrap()
+    );
     let after_add_redo = project.compiled_preview().unwrap();
     assert!(!std::sync::Arc::ptr_eq(&after_add_undo, &after_add_redo));
-    assert!(project.undo_sources(true).unwrap());
+    assert!(
+        project
+            .undo_sources(runebender::font::history::HistoryDirection::Redo)
+            .unwrap()
+    );
     let after_move_redo = project.compiled_preview().unwrap();
     assert!(!std::sync::Arc::ptr_eq(&after_add_redo, &after_move_redo));
     assert_eq!(
@@ -863,4 +874,43 @@ fn background_preview_coalesces_edits_and_never_publishes_a_stale_revision() {
         .unwrap();
     assert_eq!(shaped[0].x_advance, 1050.0);
     assert!(project.preview_job().is_none());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_held_preview_starts_no_compile_until_the_gesture_ends() {
+    use std::sync::atomic::Ordering;
+    let mut project = project();
+    let hold = project.preview_hold();
+    hold.store(true, Ordering::Relaxed);
+    edit_width(&mut project, SourceId(1), "A", 900.0);
+    // Well past the debounce: only the hold keeps the snapshot from being taken.
+    let held_until = std::time::Instant::now() + std::time::Duration::from_millis(600);
+    while std::time::Instant::now() < held_until {
+        assert!(project.request_preview().unwrap().is_none());
+        assert!(
+            project.preview_job().is_none(),
+            "no compile during a gesture"
+        );
+        assert!(project.preview_pending(), "the preview is still wanted");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    hold.store(false, Ordering::Relaxed);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let compiled = loop {
+        if let Some(compiled) = project.request_preview().unwrap() {
+            break compiled;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "preview worker must complete"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let shaped = ShapingFont::from_bytes((*compiled.bytes).clone())
+        .unwrap()
+        .at_normalized(vec![1.0])
+        .shape("A", false)
+        .unwrap();
+    assert_eq!(shaped[0].x_advance, 900.0);
 }

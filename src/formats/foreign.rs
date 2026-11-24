@@ -27,7 +27,9 @@
 //!   and only the UFO working copy is saved.
 //! - Font-wide data edited in Runebender (names, font info, OpenType values, designspace
 //!   instances and rules) is not written back. Only the items listed above are merged.
-//! - Non-default UFO layers (backgrounds, brace layers made in Runebender) are not written back.
+//! - Backup layers made in the Layers panel are written back: to Glyphs as backup layers of
+//!   their master, and to Fontra as sub-layers of their source. Brace layers made in
+//!   Runebender are not written back, and Glyphs files do not get the background layer.
 //! - Save As writes UFOs; there is no "save as Glyphs" or "save as Fontra" for a font that
 //!   started as UFO.
 //! - These formats have not been tried in the browser host.

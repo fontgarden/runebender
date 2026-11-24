@@ -117,6 +117,8 @@ pub(crate) fn semantic_mark(label: Option<&str>) -> (Option<&str>, Option<MarkCo
 #[derive(Clone)]
 pub(crate) struct Session {
     pub glyph_name: String,
+    /// Snapping policy owned by this editing context, not the font document.
+    pub grid_spacing: f64,
     pub metaballs: metaballs::MetaballSelection,
     /// The label tool's active letter and polygon in progress.
     pub label: label::LabelState,
@@ -212,12 +214,20 @@ impl Session {
 
     /// Build an editor session with metrics from the canonical active source.
     pub(crate) fn new_from_model(font: &FontModel, name: &str) -> Option<Self> {
-        Self::new_from_project(&font.project, name, Metrics::of_canonical(font.font_info()))
+        // The Layers panel may have chosen another layer of this glyph to edit.
+        let layer = font.active_layer_address(name).map(|address| address.layer);
+        Self::new_from_project(
+            &font.project,
+            name,
+            Metrics::of_canonical(font.font_info()),
+            layer,
+        )
     }
 
     fn inactive_with_metrics(metrics: Metrics) -> Self {
         Self {
             glyph_name: String::new(),
+            grid_spacing: crate::application::platform::config::grid_spacing(),
             metaball_preview: BezPath::new(),
             components: BezPath::new(),
             component_cache: Vec::new(),
@@ -258,17 +268,22 @@ impl Session {
                 font.clone(),
                 std::path::PathBuf::from("memory.ufo"),
             ),
-        );
-        Self::new_from_project(&project, name, Metrics::of(font))
+        )
+        .expect("valid source fixture");
+        Self::new_from_project(&project, name, Metrics::of(font), None)
     }
 
     fn new_from_project(
         project: &runebender::font::project::Project,
         name: &str,
         metrics: Metrics,
+        layer: Option<runebender::font::variable::LayerId>,
     ) -> Option<Self> {
         let source = project.source_id(project.active)?;
-        let layer_id = project.document_source(source)?.default_layer();
+        let layer_id = match layer {
+            Some(layer) => layer,
+            None => project.document_source(source)?.default_layer(),
+        };
         project.document_layer(name, &layer_id)?;
         let address = runebender::font::variable::GlyphLayerAddress {
             glyph: name.to_owned(),
@@ -279,6 +294,7 @@ impl Session {
         let canonical_base = project.begin_document_layer_transaction(&address).ok();
         let mut session = Self {
             glyph_name: name.to_string(),
+            grid_spacing: crate::application::platform::config::grid_spacing(),
             metaball_preview: BezPath::new(),
             components,
             component_cache,
@@ -629,6 +645,14 @@ impl Session {
             .or(self.canonical_base.as_ref())
     }
 
+    /// Stable canonical target of this session, including an in-progress edit draft.
+    pub(crate) fn canonical_address(
+        &self,
+    ) -> Option<&runebender::font::variable::GlyphLayerAddress> {
+        self.current_transaction()
+            .map(|transaction| transaction.address())
+    }
+
     fn stage_canonical_edit(
         &mut self,
         label: &'static str,
@@ -639,6 +663,7 @@ impl Session {
         let Some(mut transaction) = self.canonical_base.clone() else {
             return false;
         };
+        transaction.draft_mut().set_grid_spacing(self.grid_spacing);
         if edit(transaction.draft_mut()) != Ok(true) {
             return false;
         }
@@ -655,6 +680,7 @@ impl Session {
         let Some(mut transaction) = self.canonical_base.clone() else {
             return Ok(false);
         };
+        transaction.draft_mut().set_grid_spacing(self.grid_spacing);
         if !edit(transaction.draft_mut())? {
             return Ok(false);
         }
@@ -1053,9 +1079,10 @@ impl Session {
     }
 
     pub(crate) fn begin_point_drag(&mut self) {
-        let Some(transaction) = self.canonical_base.clone() else {
+        let Some(mut transaction) = self.canonical_base.clone() else {
             return;
         };
+        transaction.draft_mut().set_grid_spacing(self.grid_spacing);
         let selected: Vec<_> = self.selection.iter().copied().collect();
         let Ok(origins) = transaction
             .draft()
@@ -1167,6 +1194,49 @@ impl Session {
                 .map(|anchor| (anchor.name().to_owned(), anchor.position()))
                 .collect();
             self.parts = Arc::new(alignment.follow(&own, &drag.parts));
+        }
+    }
+
+    pub(crate) fn constrain_point_drag(&mut self) {
+        if self.selection.len() != 1 {
+            return;
+        }
+        let id = *self.selection.iter().next().unwrap();
+        if let Some(drag) = &mut self.active_point_drag
+            && drag.changed
+            && !drag.independent
+            && let Some((_, origin)) = drag.origins.iter().find(|(point, _)| *point == id)
+            && drag
+                .transaction
+                .draft()
+                .view()
+                .contours()
+                .flat_map(|c| c.points())
+                .any(|p| p.id() == id && p.position() != *origin)
+        {
+            let _ = drag.transaction.draft_mut().maintain_g2_at(id);
+        }
+    }
+
+    /// Match the newly completed join when the pen has drawn its outgoing cubic.
+    pub(crate) fn constrain_pen_join(&mut self, contour: ContourId, closed: bool) {
+        let Some(tx) = &mut self.pending_canonical else {
+            return;
+        };
+        let Some(c) = tx.draft().view().contours().find(|c| c.id() == contour) else {
+            return;
+        };
+        let nodes: Vec<_> = c
+            .points()
+            .filter(|p| p.point_type() != LayerPointType::OffCurve)
+            .map(|p| p.id())
+            .collect();
+        if closed {
+            for id in [nodes.last(), nodes.first()].into_iter().flatten() {
+                let _ = tx.draft_mut().maintain_g2_at(*id);
+            }
+        } else if nodes.len() >= 3 {
+            let _ = tx.draft_mut().maintain_g2_at(nodes[nodes.len() - 2]);
         }
     }
 
@@ -1350,9 +1420,12 @@ impl Session {
                             point: {
                                 // Snapped like the inserted point, so a preview
                                 // shows where the click lands.
-                                use runebender::outline::point_ops::snap_coord;
+                                use runebender::outline::point_ops::snap_to_spacing;
                                 let at = segment.seg.eval(hit.t);
-                                Point::new(snap_coord(at.x), snap_coord(at.y))
+                                Point::new(
+                                    snap_to_spacing(at.x, self.grid_spacing),
+                                    snap_to_spacing(at.y, self.grid_spacing),
+                                )
                             },
                             curve: !matches!(segment.seg, kurbo::PathSeg::Line(_)),
                         },
@@ -1582,7 +1655,7 @@ impl Session {
     }
 
     /// Close the active contour.
-    pub(crate) fn pen_close(&mut self) {
+    pub(crate) fn pen_close(&mut self, maintain_g2: bool) {
         let Some(contour) = self.active_contour.take() else {
             self.pen.clear();
             return;
@@ -1613,8 +1686,23 @@ impl Session {
                     .close_contour(contour, controls)
                     .is_ok()
             {
+                if maintain_g2 && first_incoming.is_some() {
+                    let first_id = transaction
+                        .draft()
+                        .view()
+                        .contours()
+                        .find(|c| c.id() == contour)
+                        .and_then(|c| c.points().next())
+                        .map(|p| p.id());
+                    if let Some(id) = first_id {
+                        let _ = transaction.draft_mut().set_point_smooth(id, true);
+                    }
+                }
                 self.pending_canonical = Some(transaction);
                 self.pending_canonical_label = Some("close pen contour");
+                if maintain_g2 {
+                    self.constrain_pen_join(contour, true);
+                }
             }
         }
         self.pen.clear();
@@ -1896,7 +1984,11 @@ impl Session {
     }
 
     pub(crate) fn side_bearings(&self) -> Option<runebender::analysis::measure::SideBearings> {
-        runebender::analysis::measure::side_bearings(&self.paths(), self.advance())
+        runebender::analysis::measure::side_bearings_with_components(
+            &self.paths(),
+            &self.components,
+            self.advance(),
+        )
     }
 
     /// Bounding box of the selected points in design space, if any.
@@ -2157,18 +2249,6 @@ impl Session {
         runebender::analysis::measure::colored_strokes(&self.paths())
     }
 
-    pub(crate) fn curvature_comb(&self) -> Vec<Vec<runebender::analysis::curve::CombSample>> {
-        let Some(layer) = self.current_layer() else {
-            return Vec::new();
-        };
-        let cubics = runebender::analysis::curve::cubics_from_layer(layer);
-        let maxk = runebender::analysis::curve::max_curvature(&cubics);
-        if maxk <= 1e-12 {
-            return Vec::new();
-        }
-        runebender::analysis::curve::curvature_comb(&cubics, 1.0, 74.0 / maxk, false, 16)
-    }
-
     pub(crate) fn set_mark(&mut self, label: Option<&str>) {
         let (label, color) = semantic_mark(label);
         let _ =
@@ -2235,6 +2315,368 @@ impl Session {
         self.selected_component = None;
         self.selection = self.points().into_iter().map(|p| p.id).collect();
         self.selected_anchors = self.anchor_points().into_iter().map(|(id, _)| id).collect();
+    }
+}
+
+/// One object that a canvas press selects in place of every other object.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SelectionTarget {
+    /// A top-level component of the open glyph.
+    Component(ComponentId),
+    /// The picture of the layer.
+    Image,
+    /// Empty canvas.
+    Nothing,
+}
+
+/// An area that selects the points and anchors inside it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SelectionShape<'a> {
+    /// A marquee rectangle.
+    Rect(Rect),
+    /// A closed freehand boundary.
+    /// A position is inside when its winding number is not zero.
+    Path(&'a BezPath),
+}
+
+impl SelectionShape<'_> {
+    fn contains(self, position: Point) -> bool {
+        use kurbo::Shape as _;
+        match self {
+            Self::Rect(rect) => rect.contains(position),
+            Self::Path(path) => path.winding(position) != 0,
+        }
+    }
+}
+
+/// The modifier keys that change a press of the label tool.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LabelModifiers {
+    /// Shift is held: the press adds to the corner selection or starts a corner marquee.
+    pub shift: bool,
+    /// Option is held: the press takes one corner away from the corners that share its position.
+    pub alt: bool,
+}
+
+/// The gesture that a press of the label tool starts.
+/// The session already holds the selection and the moving shape.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum LabelPress {
+    /// The press changed the selection or opened a word, and no drag follows.
+    Selected,
+    /// One polygon corner follows the pointer.
+    Corner { region: usize, detach: bool },
+    /// The press added a corner to a polygon edge, and that corner follows the pointer.
+    NewCorner { region: usize },
+    /// The selected corners follow the pointer from `start`.
+    Corners { start: Point },
+    /// A whole polygon follows the pointer from `start`.
+    Region { region: usize, start: Point },
+    /// A box that selects corners starts at `start`.
+    Marquee { start: Point },
+    /// A freehand boundary starts at the pointer.
+    Freehand,
+    /// The press was on a polygon edge that could not take a corner.
+    Ignored,
+}
+
+impl Session {
+    /// Select `target` and deselect every metaball.
+    /// A component target that the glyph does not hold leaves the point, anchor and component selection unchanged.
+    /// A component target does not change whether the picture is selected.
+    pub(crate) fn select_only(&mut self, target: SelectionTarget) {
+        self.metaballs.selected.clear();
+        match target {
+            SelectionTarget::Component(component) => {
+                self.select_component_id(component);
+            }
+            SelectionTarget::Image | SelectionTarget::Nothing => {
+                self.clear_selection();
+                self.selected_component = None;
+                self.image_selected = target == SelectionTarget::Image;
+            }
+        }
+    }
+
+    /// Apply a primary press on a point.
+    /// With `toggle`, the press adds the point to the selection or removes it.
+    /// Without `toggle`, a press on an unselected point selects only that point.
+    /// A press on a selected point keeps the selection, so that a drag moves all of it.
+    pub(crate) fn press_point(&mut self, point: PointId, toggle: bool) {
+        self.metaballs.selected.clear();
+        self.image_selected = false;
+        if toggle {
+            if !self.selection.remove(&point) {
+                self.selection.insert(point);
+            }
+        } else if !self.selection.contains(&point) {
+            self.clear_selection();
+            self.selection.insert(point);
+        }
+        self.selected_component = None;
+    }
+
+    /// Apply a primary press on an anchor.
+    /// The rules are those of [`Self::press_point`].
+    pub(crate) fn press_anchor(&mut self, anchor: AnchorId, toggle: bool) {
+        self.metaballs.selected.clear();
+        self.image_selected = false;
+        self.selected_component = None;
+        if toggle {
+            if !self.selected_anchors.remove(&anchor) {
+                self.selected_anchors.insert(anchor);
+            }
+        } else if !self.selected_anchors.contains(&anchor) {
+            self.clear_selection();
+            self.selected_anchors.insert(anchor);
+        }
+    }
+
+    /// Replace the point selection with `points`.
+    /// The anchor, component, picture and metaball selections stay as they are.
+    pub(crate) fn replace_point_selection(&mut self, points: impl IntoIterator<Item = PointId>) {
+        self.selection = points.into_iter().collect();
+    }
+
+    /// Add `points` to the selection.
+    /// Without `additive`, the point and anchor selection is cleared first.
+    pub(crate) fn select_points(
+        &mut self,
+        points: impl IntoIterator<Item = PointId>,
+        additive: bool,
+    ) {
+        if !additive {
+            self.clear_selection();
+        }
+        self.selection.extend(points);
+    }
+
+    /// Select the points and anchors that `shape` contains.
+    /// `to_shape` maps glyph design space to the space of `shape`.
+    /// Without `additive`, the point and anchor selection is cleared first.
+    pub(crate) fn select_within(
+        &mut self,
+        shape: SelectionShape<'_>,
+        to_shape: kurbo::Affine,
+        additive: bool,
+    ) {
+        if !additive {
+            self.clear_selection();
+        }
+        for point in self.points() {
+            if shape.contains(to_shape * point.point) {
+                self.selection.insert(point.id);
+            }
+        }
+        for (anchor, position) in self.anchor_points() {
+            if shape.contains(to_shape * position) {
+                self.selected_anchors.insert(anchor);
+            }
+        }
+    }
+
+    /// Set whether the picture of the layer is selected.
+    /// The other selections stay as they are.
+    pub(crate) fn set_image_selected(&mut self, selected: bool) {
+        self.image_selected = selected;
+    }
+
+    /// Deselect every metaball, and discard the drafts, active group and error of the metaball tool.
+    pub(crate) fn clear_metaball_selection(&mut self) {
+        self.metaballs = metaballs::MetaballSelection::default();
+    }
+
+    /// Deselect the picked label shape.
+    pub(crate) fn clear_label_selection(&mut self) {
+        self.label.selected = None;
+    }
+
+    /// Apply a primary press of the label tool at `design`.
+    /// `reach` is the hit radius in design units.
+    /// The return value names the drag that the widget starts.
+    pub(crate) fn label_press(
+        &mut self,
+        design: Point,
+        reach: f64,
+        modifiers: LabelModifiers,
+    ) -> LabelPress {
+        use label::{LabelHit, LabelMoving, LabelSelection};
+        // A new press starts fresh: the last gesture's hint goes away.
+        self.label.error = None;
+        match self.label_hit(design, reach) {
+            LabelHit::Corner { region, corner } => {
+                self.activate_label_region(region);
+                let mut picked = self.selected_corners();
+                if modifiers.shift {
+                    // Shift adds a corner to the set, or takes it out.
+                    match picked.iter().position(|c| *c == (region, corner)) {
+                        Some(at) => {
+                            picked.remove(at);
+                        }
+                        None => picked.push((region, corner)),
+                    }
+                    self.label.selected = Some(LabelSelection::Corners(picked));
+                    return LabelPress::Selected;
+                }
+                if modifiers.alt || !picked.contains(&(region, corner)) {
+                    // Corners that meet here move as one; Option takes
+                    // only the one on top, to pull it away.
+                    let at = self.corner_point(region, corner);
+                    picked = if modifiers.alt {
+                        Vec::new()
+                    } else {
+                        at.map(|at| self.corners_at(at)).unwrap_or_default()
+                    };
+                    if picked.is_empty() {
+                        picked.push((region, corner));
+                    }
+                    self.label.selected = Some(LabelSelection::Corners(picked.clone()));
+                }
+                if picked.len() == 1 {
+                    self.label.moving = Some(LabelMoving::Corner {
+                        region,
+                        corner,
+                        to: design,
+                    });
+                    LabelPress::Corner {
+                        region,
+                        detach: modifiers.alt,
+                    }
+                } else {
+                    self.label.moving = Some(LabelMoving::Corners {
+                        by: kurbo::Vec2::ZERO,
+                    });
+                    LabelPress::Corners { start: design }
+                }
+            }
+            LabelHit::Edge {
+                region,
+                after,
+                at: on,
+            } => {
+                // A corner appears on the edge and follows the pointer.
+                self.activate_label_region(region);
+                let Some(corner) = self.add_label_corner(region, after, on) else {
+                    return LabelPress::Ignored;
+                };
+                self.label.selected = Some(LabelSelection::Corners(vec![(region, corner)]));
+                self.label.moving = Some(LabelMoving::Corner {
+                    region,
+                    corner,
+                    to: on,
+                });
+                LabelPress::NewCorner { region }
+            }
+            LabelHit::Lasso { region } => {
+                // A press inside a lasso picks it up: its letter becomes
+                // active and its corners show. A drag moves the whole shape.
+                self.activate_label_region(region);
+                self.label.selected = Some(LabelSelection::Region(region));
+                self.label.moving = Some(LabelMoving::Region {
+                    region,
+                    by: kurbo::Vec2::ZERO,
+                });
+                LabelPress::Region {
+                    region,
+                    start: design,
+                }
+            }
+            // Shift-drag: a box that selects corners.
+            LabelHit::Nothing if modifiers.shift && self.label.sample.is_some() => {
+                LabelPress::Marquee { start: design }
+            }
+            LabelHit::Nothing => {
+                // Words are not a mode: a press outside the open word
+                // opens the word under it, or closes the open one.
+                let open = self.label.sample;
+                let inside_open = open.is_some_and(|open| self.sample_contains(open, design));
+                let under = (!inside_open).then(|| self.sample_at(design)).flatten();
+                if open.is_some() && !inside_open && under.is_none() {
+                    self.select_sample(None);
+                }
+                if let Some(sample) = under {
+                    // A click on a word opens it.
+                    self.select_sample(Some(sample));
+                    LabelPress::Selected
+                } else {
+                    LabelPress::Freehand
+                }
+            }
+        }
+    }
+
+    /// Move the dragged label corner of `region` to the pointer at `to`.
+    /// With `detach`, the corner goes to the grid and does not snap to a corner of another polygon.
+    /// Returns whether a corner is being dragged.
+    pub(crate) fn drag_label_corner(
+        &mut self,
+        region: usize,
+        detach: bool,
+        to: Point,
+        reach: f64,
+    ) -> bool {
+        let Some(label::LabelMoving::Corner { corner, .. }) = self.label.moving else {
+            return false;
+        };
+        let to = if detach {
+            label::on_grid(to)
+        } else {
+            self.snapped_label_corner(to, reach, Some(region))
+        };
+        self.label.moving = Some(label::LabelMoving::Corner { region, corner, to });
+        true
+    }
+
+    /// Move the selected label corners by the pointer travel from `start` to `to`, in whole grid steps.
+    pub(crate) fn drag_label_corners(&mut self, start: Point, to: Point) {
+        // Whole grid steps, so the shape shows where it will land.
+        self.label.moving = Some(label::LabelMoving::Corners {
+            by: label::grid_step(to - start),
+        });
+    }
+
+    /// Move the label polygon `region` by the pointer travel from `start` to `to`, in whole grid steps.
+    pub(crate) fn drag_label_region(&mut self, region: usize, start: Point, to: Point) {
+        self.label.moving = Some(label::LabelMoving::Region {
+            region,
+            by: label::grid_step(to - start),
+        });
+    }
+
+    /// Select the label corners inside `rect`, or deselect when it holds none.
+    pub(crate) fn select_label_corners_in(&mut self, rect: Rect) {
+        let picked = self.corners_in(rect);
+        self.label.selected = if picked.is_empty() {
+            None
+        } else {
+            Some(label::LabelSelection::Corners(picked))
+        };
+    }
+
+    /// Finish a freehand drag of the label tool along `design`.
+    /// `moved` is false for a click, which deselects the picked shape.
+    /// A closed loop becomes a polygon, and any other drag sets the hint of the tool.
+    /// `near` is the distance in design units within which a loop counts as closed.
+    /// Returns whether the labels changed.
+    pub(crate) fn finish_label_freehand(
+        &mut self,
+        design: &[Point],
+        moved: bool,
+        near: f64,
+    ) -> bool {
+        if !moved {
+            // A click on nothing lets go of the picked shape.
+            self.label.selected = None;
+            return false;
+        }
+        // Labels are polygons: a loop makes one, any other drag
+        // does nothing.
+        if runebender::outline::label_pieces::is_loop(design, near) {
+            self.add_label_lasso(design)
+        } else {
+            self.label.error = Some("Drag a loop: close it near where it began".into());
+            false
+        }
     }
 }
 
@@ -2318,6 +2760,30 @@ fn combined_component_path(
 }
 
 impl Workspace {
+    pub(crate) fn enter_editor_mode(&mut self, index: usize) {
+        if !matches!(self.mode, Mode::Editor(_)) {
+            self.collapsed.remove("Coordinates");
+            self.collapsed.remove("Curves");
+            self.collapsed.extend([
+                "Proof",
+                "Transformations",
+                "Path Operations",
+                "Editor Glyph",
+                "Background",
+                "Mark",
+                "Shaping",
+                "Related",
+                "Editor Layers",
+                "Editor Axes",
+                "Measure",
+                "Samples",
+                "Neural",
+                "Local AI Shapes",
+            ]);
+        }
+        self.mode = Mode::Editor(index);
+    }
+
     fn text_context(&self) -> TextContext {
         TextContext {
             editor_text: self.initial_text.clone(),
@@ -2438,7 +2904,7 @@ impl Workspace {
             self.tool = tool;
             self.restore_text_context(text_context);
         }
-        self.selected_points = 0;
+        self.shapes_context_changed();
     }
 
     /// Make a tab the live one.
@@ -2446,6 +2912,7 @@ impl Workspace {
         let Some(tab) = self.tabs.get(index) else {
             return;
         };
+        let context_changed = self.active_tab != index || !matches!(self.mode, Mode::Editor(_));
         let (session, tool, text_context) =
             (tab.session.clone(), tab.tool, tab.text_context.clone());
         self.park();
@@ -2462,9 +2929,8 @@ impl Workspace {
         let name = self.session.glyph_name.clone();
         if let Some(glyph) = self.font.index_of(&name) {
             self.selected = Some(glyph);
-            self.mode = Mode::Editor(glyph);
+            self.enter_editor_mode(glyph);
         }
-        self.selected_points = 0;
         self.refresh_metric_bufs();
         self.refresh_coord_bufs();
         self.name_buf = name;
@@ -2474,6 +2940,9 @@ impl Workspace {
             .and_then(|g| g.codepoint)
             .map(|c| format!("{:04X}", c as u32))
             .unwrap_or_default();
+        if context_changed {
+            self.shapes_context_changed();
+        }
     }
 
     /// A second tab on the glyph that is open, with its own session.
@@ -2552,6 +3021,8 @@ impl Workspace {
         if let Some(entry) = self.font.glyphs.get(index)
             && let Some(session) = Session::new_from_model(&self.font, &entry.name)
         {
+            let context_changed = self.session.canonical_address() != session.canonical_address()
+                || !matches!(self.mode, Mode::Editor(_));
             self.advance_buf = format!("{}", round_units(session.advance()));
             let (l, r) = metric_bufs(&session);
             self.lsb_buf = l;
@@ -2575,8 +3046,10 @@ impl Workspace {
                 self.active_tab = self.tabs.len() - 1;
             }
             self.selected = Some(index);
-            self.selected_points = 0;
-            self.mode = Mode::Editor(index);
+            self.enter_editor_mode(index);
+            if context_changed {
+                self.shapes_context_changed();
+            }
             return true;
         }
         false
@@ -2631,6 +3104,7 @@ impl Workspace {
                         runebender::font::history::HistoryDirection::Undo,
                     );
                     self.metadata_undo.push(MetadataEdit::DocumentLayer {
+                        revision: self.font.project.document_revision(),
                         glyph: name.clone(),
                         address: address.clone(),
                         label: label.into(),
@@ -2641,6 +3115,7 @@ impl Workspace {
                         ),
                     });
                     self.metadata_redo.clear();
+                    self.overview_redo.clear();
                     if !session.reload_from_project(&self.font.project, &address) {
                         self.note = "The committed glyph layer could not be reloaded".into();
                         session.sync_rejected = true;
@@ -2672,7 +3147,6 @@ impl Workspace {
             if retain_session {
                 self.session = Arc::new(session.clone());
                 self.refresh_metric_bufs();
-                self.selected_points = self.session.selection.len();
             }
             return outcome;
         }
@@ -2681,7 +3155,6 @@ impl Workspace {
         // (sidebearing/advance drags). This path is never hit by typing in
         // the field, so it does not clobber input.
         self.refresh_metric_bufs();
-        self.selected_points = self.session.selection.len();
         outcome
     }
 
@@ -2741,7 +3214,6 @@ impl Workspace {
         }
         self.refresh_metric_bufs();
         self.refresh_coord_bufs();
-        self.selected_points = self.session.selection.len();
         self.modified = true;
         true
     }
@@ -2756,6 +3228,12 @@ impl Workspace {
             return;
         }
         self.follow_history_into_part(redo);
+        if !self.overview_metadata_is_next(redo)
+            && let Some(index) = self.overview_history_index(redo)
+        {
+            self.replay_overview_history(index, redo);
+            return;
+        }
         if self.metadata_history_step(redo) {
             return;
         }
@@ -2792,57 +3270,138 @@ impl Workspace {
         self.refresh_cells_if_reshaped();
         self.refresh_metric_bufs();
         self.refresh_coord_bufs();
-        self.selected_points = self.session.selection.len();
         self.modified = true;
         self.note.clear();
+    }
+
+    fn overview_history_index(&self, redo: bool) -> Option<usize> {
+        let entries = if redo {
+            &self.overview_redo
+        } else {
+            &self.overview_undo
+        };
+        entries.iter().rposition(|batch| {
+            !matches!(self.mode, Mode::Editor(_))
+                || (Some(batch.source) == self.font.project.source_id(self.font.active())
+                    && batch.glyphs.contains(&self.session.glyph_name))
+        })
+    }
+
+    /// Editor availability follows the same applicable overview and metadata action as dispatch.
+    pub(crate) fn can_editor_history_step(&self, redo: bool) -> bool {
+        if !self.overview_metadata_is_next(redo) {
+            return self.can_overview_history_step(redo);
+        }
+        let metadata = self.metadata_history_index(redo).map(|index| {
+            if redo {
+                &self.metadata_redo[index]
+            } else {
+                &self.metadata_undo[index]
+            }
+        });
+        if matches!(metadata, Some(MetadataEdit::DocumentGroup { .. })) {
+            return self.can_metadata_history_step(redo);
+        }
+        self.can_metadata_history_step(redo)
+            || self.font.can_replay_history(
+                &self.session.glyph_name,
+                if redo {
+                    runebender::font::history::HistoryDirection::Redo
+                } else {
+                    runebender::font::history::HistoryDirection::Undo
+                },
+            )
+    }
+
+    fn overview_metadata_is_next(&self, redo: bool) -> bool {
+        let batch = self.overview_history_index(redo).map(|index| {
+            if redo {
+                &self.overview_redo[index]
+            } else {
+                &self.overview_undo[index]
+            }
+        });
+        let metadata = self.metadata_history_index(redo).map(|index| {
+            if redo {
+                &self.metadata_redo[index]
+            } else {
+                &self.metadata_undo[index]
+            }
+        });
+        match (batch, metadata) {
+            (None, _) => true,
+            (Some(_), None) => false,
+            (Some(batch), Some(metadata)) => {
+                if redo {
+                    metadata.revision() < batch.revision
+                } else {
+                    metadata.revision() > batch.revision
+                }
+            }
+        }
+    }
+
+    /// Availability for the same chronological document action used by overview and graph Undo.
+    pub(crate) fn can_overview_history_step(&self, redo: bool) -> bool {
+        if self.overview_metadata_is_next(redo) {
+            return self.can_metadata_history_step(redo);
+        }
+        let Some(index) = self.overview_history_index(redo) else {
+            return false;
+        };
+        let batch = if redo {
+            &self.overview_redo[index]
+        } else {
+            &self.overview_undo[index]
+        };
+        let Some(source) = self.font.project.document_source(batch.source) else {
+            return false;
+        };
+        let layer = source.default_layer();
+        let direction = if redo {
+            runebender::font::history::HistoryDirection::Redo
+        } else {
+            runebender::font::history::HistoryDirection::Undo
+        };
+        batch.glyphs.iter().all(|glyph| {
+            self.font.project.can_replay_document_layer_history(
+                &runebender::font::variable::GlyphLayerAddress {
+                    glyph: glyph.clone(),
+                    layer: layer.clone(),
+                },
+                direction,
+            )
+        })
     }
 
     /// Undo in the active editing context. Overview actions may change a
     /// multi-selection, so their per-glyph engine snapshots travel as one batch.
     pub(crate) fn undo_active_edit(&mut self, redo: bool) {
-        if matches!(self.mode, Mode::Graph) {
-            self.metadata_history_step(redo);
-            return;
-        }
+        // The graph's own history is handled by the command dispatcher. Its document fallback
+        // shares the overview's chronological history, independent of the highlighted glyph.
         if matches!(self.mode, Mode::Editor(_)) {
             self.undo_open_glyph(redo);
             return;
         }
-        if !matches!(self.mode, Mode::Overview) {
+        if !matches!(self.mode, Mode::Overview | Mode::Graph) {
             return;
         }
-        if matches!(
-            if redo {
-                self.metadata_redo.last()
-            } else {
-                self.metadata_undo.last()
-            },
-            Some(MetadataEdit::AgentGroup { .. })
-        ) && self.metadata_history_step(redo)
-        {
+        let metadata_next = self.overview_metadata_is_next(redo);
+        if metadata_next {
+            // Do not fall through to an older layer edit when the next metadata action is stale.
+            self.metadata_history_step(redo);
             return;
         }
-        let has_overview_batch = if redo {
-            !self.overview_redo.is_empty()
-        } else {
-            !self.overview_undo.is_empty()
-        };
-        if !has_overview_batch && self.metadata_history_step(redo) {
-            return;
+        if let Some(index) = self.overview_history_index(redo) {
+            self.replay_overview_history(index, redo);
         }
+    }
+
+    fn replay_overview_history(&mut self, index: usize, redo: bool) {
         let batch = if redo {
-            self.overview_redo.pop()
+            self.overview_redo.remove(index)
         } else {
-            self.overview_undo.pop()
-        };
-        let Some(batch) = batch else {
-            self.note = if redo {
-                "Nothing to redo"
-            } else {
-                "Nothing to undo"
-            }
-            .into();
-            return;
+            self.overview_undo.remove(index)
         };
         let Some(layer) = self
             .font
@@ -2852,9 +3411,9 @@ impl Workspace {
         else {
             self.note = "Restore the removed source before undoing its glyph edits".into();
             if redo {
-                self.overview_redo.push(batch);
+                self.overview_redo.insert(index, batch);
             } else {
-                self.overview_undo.push(batch);
+                self.overview_undo.insert(index, batch);
             }
             return;
         };
@@ -2878,9 +3437,9 @@ impl Workspace {
         }) {
             self.note = "The overview edit changed before history replay".into();
             if redo {
-                self.overview_redo.push(batch);
+                self.overview_redo.insert(index, batch);
             } else {
-                self.overview_undo.push(batch);
+                self.overview_undo.insert(index, batch);
             }
             return;
         }
@@ -2893,27 +3452,48 @@ impl Workspace {
             {
                 self.note = "The overview edit changed before history replay".into();
                 if redo {
-                    self.overview_redo.push(batch);
+                    self.overview_redo.insert(index, batch);
                 } else {
-                    self.overview_undo.push(batch);
+                    self.overview_undo.insert(index, batch);
                 }
                 return;
             }
         }
         if Some(batch.source) == self.font.project.source_id(self.font.active()) {
             self.font.rebuild_cache();
+            if batch.glyphs.contains(&self.session.glyph_name)
+                && let Some(address) = self.font.active_layer_address(&self.session.glyph_name)
+            {
+                let _ = self.reload_canonical_layer(&address);
+            }
         }
-        if redo {
-            self.overview_undo.push(batch);
+        let entries = if redo {
+            &mut self.overview_undo
         } else {
-            self.overview_redo.push(batch);
-        }
+            &mut self.overview_redo
+        };
+        let position = entries.partition_point(|candidate| {
+            if redo {
+                candidate.revision < batch.revision
+            } else {
+                candidate.revision > batch.revision
+            }
+        });
+        entries.insert(position, batch);
         self.cells = Arc::new(cells_of(&self.font, &self.palette));
         self.modified = true;
     }
 
     pub(crate) fn set_master(&mut self, index: usize) {
-        if index == self.font.active() || index >= self.font.master_count() {
+        if index >= self.font.master_count() {
+            return;
+        }
+        if index == self.font.active() {
+            if !self.on_active_master() {
+                self.axis_values = self.font.master_axis_values(index);
+                self.font.project.snap_location_to_master(index);
+                self.cells = Arc::new(cells_of(&self.font, &self.palette));
+            }
             return;
         }
         if self.features_edited {
@@ -2929,7 +3509,6 @@ impl Workspace {
         let active_name =
             matches!(self.mode, Mode::Editor(_)).then(|| self.session.glyph_name.clone());
         let index = self.font.active();
-        self.source_name_buf = self.font.master_names()[index].to_string();
         self.features_buf = self.font.feature_text().to_owned();
         self.features_status = None;
         if self.show_all_masters {
@@ -2962,7 +3541,7 @@ impl Workspace {
                 self.active_tab = tab;
                 self.session = self.tabs[tab].session.clone();
                 self.selected = Some(glyph);
-                self.mode = Mode::Editor(glyph);
+                self.enter_editor_mode(glyph);
                 self.name_buf = name;
                 self.unicode_buf = self
                     .session
@@ -2971,11 +3550,11 @@ impl Workspace {
                     .unwrap_or_default();
                 self.refresh_metric_bufs();
                 self.refresh_coord_bufs();
-                self.selected_points = 0;
             } else {
                 self.settle_on_overview();
             }
         }
+        self.shapes_context_changed();
     }
 
     /// The current axis location as a name->value map (user units).
@@ -2990,7 +3569,7 @@ impl Workspace {
 
     /// True when the sliders sit exactly on the active master's location.
     pub(crate) fn on_active_master(&self) -> bool {
-        match self.font.project.master_locations.get(self.font.active()) {
+        match self.font.project.master_locations().get(self.font.active()) {
             Some(m) => self.font.axes.iter().enumerate().all(|(i, a)| {
                 // Axis values are user coordinates; the engine stores normalized locations.
                 let cur =
@@ -3009,9 +3588,31 @@ impl Workspace {
         if self.on_active_master() {
             return None;
         }
-        self.font
+        let axis_values: Vec<u64> = self
+            .axis_values
+            .iter()
+            .map(|value| value.to_bits())
+            .collect();
+        let revision = self.font.project.document_revision();
+        if let Some(last) = self.interp_preview_cache.borrow().as_ref()
+            && last.glyph == self.session.glyph_name
+            && last.axis_values == axis_values
+            && last.revision == revision
+        {
+            return last.outline.clone();
+        }
+        let outline = self
+            .font
             .interpolate_outline(&self.session.glyph_name, &self.axis_location())
-            .map(Arc::new)
+            .map(Arc::new);
+        *self.interp_preview_cache.borrow_mut() =
+            Some(crate::application::workspace::InterpPreview {
+                glyph: self.session.glyph_name.clone(),
+                axis_values,
+                revision,
+                outline: outline.clone(),
+            });
+        outline
     }
 
     /// Status shown under the axis sliders when the location is between masters.
@@ -3042,6 +3643,46 @@ impl Workspace {
             .zip(&self.axis_values)
             .map(|(axis, value)| (axis.name.clone(), axis.user_to_normalized(*value)))
             .collect();
+        {
+            let mut cells = cells_of(&self.font, &self.palette);
+            if !self.on_active_master() {
+                let compiled = self.font.preview_font().ok().flatten().and_then(|font| {
+                    let coords: Vec<_> = font
+                        .axis_tags
+                        .iter()
+                        .map(|tag| {
+                            self.font
+                                .axes
+                                .iter()
+                                .find(|axis| &axis.tag == tag)
+                                .and_then(|axis| self.font.project.location.get(&axis.name))
+                                .copied()
+                                .unwrap_or(0.0)
+                        })
+                        .collect();
+                    font.outlines(&coords).ok()
+                });
+                if let Some(paths) = compiled {
+                    let paths: HashMap<_, _> = paths.into_iter().collect();
+                    for cell in &mut cells {
+                        if let Some(path) = paths.get(cell.name.as_ref()) {
+                            cell.outline = path.clone();
+                        }
+                    }
+                } else {
+                    for cell in &mut cells {
+                        if let Ok(path) = self
+                            .font
+                            .project
+                            .interpolated_outline_at(&cell.name, &self.font.project.location)
+                        {
+                            cell.outline = Arc::new(path);
+                        }
+                    }
+                }
+            }
+            self.cells = Arc::new(cells);
+        }
     }
 
     pub(crate) fn refresh_open_glyph(&mut self) {
@@ -3358,7 +3999,7 @@ mod tests {
         );
         assert_eq!(session.active_contour, Some(contour));
 
-        session.pen_close();
+        session.pen_close(false);
         assert_eq!(
             workspace.sync_session_from(&mut session),
             SessionSyncOutcome::Changed
@@ -3472,7 +4113,8 @@ mod tests {
         let mut project = runebender::font::project::Project::from_source(SourceInput::from_font(
             font,
             std::path::PathBuf::new(),
-        ));
+        ))
+        .expect("valid source fixture");
         let source = project.document_sources().next().unwrap();
         let address = runebender::font::variable::GlyphLayerAddress {
             glyph: "composite".into(),
@@ -3482,6 +4124,7 @@ mod tests {
             &project,
             "composite",
             Metrics::of_canonical(project.document_font_info(source.id()).unwrap()),
+            None,
         )
         .expect("composite exists");
         let before_bounds = session.components.bounding_box();
@@ -3503,5 +4146,330 @@ mod tests {
         session.reload_from_project(&project, &address);
         assert_eq!(projected_glyph(&session).components.len(), 1);
         assert_eq!(session.components.bounding_box(), before_bounds);
+    }
+
+    /// `two_squares` with one anchor at (50, 300), far from every point.
+    fn two_squares_and_an_anchor() -> Session {
+        let mut font = norad::Font::new();
+        let mut glyph = norad::Glyph::new("test");
+        for offset in [0.0, 200.0] {
+            let mut contour = norad::Contour::default();
+            for (x, y) in [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)] {
+                contour.points.push(norad::ContourPoint::new(
+                    x + offset,
+                    y,
+                    norad::PointType::Line,
+                    false,
+                    None,
+                    None,
+                ));
+            }
+            glyph.contours.push(contour);
+        }
+        glyph.anchors.push(norad::Anchor::new(
+            50.0,
+            300.0,
+            Some(norad::Name::new("top").unwrap()),
+            None,
+            None,
+        ));
+        font.default_layer_mut().insert_glyph(glyph);
+        Session::new(&font, "test").expect("glyph is there")
+    }
+
+    fn point_ids_of_contour(session: &Session, contour: usize) -> HashSet<PointId> {
+        (0..4)
+            .map(|index| session.point_id_at(contour, index).expect("square point"))
+            .collect()
+    }
+
+    #[test]
+    fn select_only_nothing_or_the_image_clears_every_other_selection() {
+        let mut session = two_squares_and_an_anchor();
+        session.selection = point_ids_of_contour(&session, 0);
+        session.selected_anchors = session
+            .anchor_points()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        session.metaballs.selected.insert((0, 0));
+
+        session.select_only(SelectionTarget::Image);
+        assert!(session.image_selected);
+        assert!(!session.has_selection());
+        assert!(session.metaballs.selected.is_empty());
+        assert_eq!(session.selected_component, None);
+
+        session.selection = point_ids_of_contour(&session, 1);
+        session.select_only(SelectionTarget::Nothing);
+        assert!(!session.image_selected);
+        assert!(!session.has_selection());
+    }
+
+    #[test]
+    fn a_press_on_a_point_selects_it_and_keeps_a_selection_that_holds_it() {
+        let mut session = two_squares_and_an_anchor();
+        let first = session.point_id_at(0, 0).unwrap();
+        let second = session.point_id_at(0, 1).unwrap();
+        let anchor = session.anchor_points()[0].0;
+        session.selected_anchors.insert(anchor);
+        session.image_selected = true;
+        session.metaballs.selected.insert((0, 0));
+
+        session.press_point(first, false);
+        assert_eq!(session.selection, HashSet::from([first]));
+        assert!(
+            session.selected_anchors.is_empty(),
+            "a new selection drops the anchor"
+        );
+        assert!(!session.image_selected);
+        assert!(session.metaballs.selected.is_empty());
+
+        session.press_point(second, true);
+        assert_eq!(session.selection, HashSet::from([first, second]));
+        // A press on a selected point keeps the whole selection, so a drag moves all of it.
+        session.press_point(first, false);
+        assert_eq!(session.selection, HashSet::from([first, second]));
+        session.press_point(first, true);
+        assert_eq!(session.selection, HashSet::from([second]));
+    }
+
+    #[test]
+    fn a_press_on_an_anchor_follows_the_point_rules() {
+        let mut session = two_squares_and_an_anchor();
+        let point = session.point_id_at(0, 0).unwrap();
+        let anchor = session.anchor_points()[0].0;
+        session.selection.insert(point);
+
+        session.press_anchor(anchor, true);
+        assert_eq!(session.selection, HashSet::from([point]), "toggle adds");
+        assert_eq!(session.selected_anchors, HashSet::from([anchor]));
+        session.press_anchor(anchor, false);
+        assert_eq!(
+            session.selection,
+            HashSet::from([point]),
+            "already selected"
+        );
+        session.press_anchor(anchor, true);
+        assert!(session.selected_anchors.is_empty());
+        session.press_anchor(anchor, false);
+        assert!(session.selection.is_empty());
+        assert_eq!(session.selected_anchors, HashSet::from([anchor]));
+    }
+
+    #[test]
+    fn select_within_takes_the_points_and_anchors_inside_the_shape() {
+        let mut session = two_squares_and_an_anchor();
+        let anchor = session.anchor_points()[0].0;
+        let left = point_ids_of_contour(&session, 0);
+        let right = point_ids_of_contour(&session, 1);
+
+        // The left square and the anchor, in design space.
+        let rect = Rect::new(-10.0, -10.0, 110.0, 310.0);
+        session.select_within(SelectionShape::Rect(rect), kurbo::Affine::IDENTITY, false);
+        assert_eq!(session.selection, left);
+        assert_eq!(session.selected_anchors, HashSet::from([anchor]));
+
+        // A shape in another space: the transform maps design space into it.
+        let mut path = BezPath::new();
+        path.move_to((390.0, -20.0));
+        path.line_to((620.0, -20.0));
+        path.line_to((620.0, 220.0));
+        path.line_to((390.0, 220.0));
+        path.close_path();
+        let to_shape = kurbo::Affine::scale(2.0);
+        session.select_within(SelectionShape::Path(&path), to_shape, true);
+        let both: HashSet<PointId> = left.union(&right).copied().collect();
+        assert_eq!(session.selection, both, "additive keeps the left square");
+        assert_eq!(session.selected_anchors, HashSet::from([anchor]));
+
+        session.select_within(SelectionShape::Path(&path), to_shape, false);
+        assert_eq!(session.selection, right);
+        assert!(session.selected_anchors.is_empty());
+    }
+
+    #[test]
+    fn select_points_and_replace_point_selection_keep_the_other_selections() {
+        let mut session = two_squares_and_an_anchor();
+        let anchor = session.anchor_points()[0].0;
+        let first = session.point_id_at(0, 0).unwrap();
+        let second = session.point_id_at(1, 0).unwrap();
+        session.selected_anchors.insert(anchor);
+        session.image_selected = true;
+
+        session.select_points([first], true);
+        assert_eq!(session.selection, HashSet::from([first]));
+        assert_eq!(session.selected_anchors, HashSet::from([anchor]));
+        session.replace_point_selection([second]);
+        assert_eq!(session.selection, HashSet::from([second]));
+        assert_eq!(session.selected_anchors, HashSet::from([anchor]));
+        assert!(session.image_selected);
+        session.select_points(None, false);
+        assert!(!session.has_selection());
+    }
+
+    /// A label workspace: one word around a bar, with the letter ب labeled by a square.
+    fn labeled_word(tag: &str) -> (Workspace, std::path::PathBuf) {
+        let path = std::env::temp_dir().join(format!(
+            "xilem-session-label-{tag}-{}.ufo",
+            std::process::id()
+        ));
+        let mut font = norad::Font::new();
+        let mut glyph = norad::Glyph::new("item");
+        glyph.width = 700.0;
+        let mut contour = norad::Contour::default();
+        for (x, y) in [(100.0, 0.0), (600.0, 0.0), (600.0, 100.0), (100.0, 100.0)] {
+            contour.points.push(norad::ContourPoint::new(
+                x,
+                y,
+                norad::PointType::Line,
+                false,
+                None,
+                None,
+            ));
+        }
+        glyph.contours.push(contour);
+        font.default_layer_mut().insert_glyph(glyph);
+        font.save(&path).unwrap();
+        let mut app = Workspace::open(&path).unwrap();
+        app.open_glyph(app.font.index_of("item").unwrap());
+        app.select_tool(Tool::Label);
+        let around = |x0: f64, x1: f64, y0: f64, y1: f64| {
+            [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+                .into_iter()
+                .map(Point::from)
+                .collect::<Vec<_>>()
+        };
+        app.edit_label(|s| s.add_label_lasso(&around(50.0, 650.0, -50.0, 300.0)));
+        app.edit_label(|s| s.set_sample_text("بس".into()));
+        app.edit_label(|s| s.add_label_lasso(&around(60.0, 350.0, -40.0, 160.0)));
+        (app, path)
+    }
+
+    fn first_corner(session: &Session) -> Point {
+        let corner = session.neural_item().samples[0].regions[0].polygon[0];
+        Point::new(corner[0], corner[1])
+    }
+
+    #[test]
+    fn a_label_press_on_a_corner_picks_it_and_starts_a_corner_drag() {
+        use label::{LabelMoving, LabelSelection};
+        let (app, path) = labeled_word("corner");
+        let mut session = (*app.session).clone();
+        let corner = first_corner(&session);
+        session.label.error = Some("old hint".into());
+
+        let press = session.label_press(corner, 8.0, LabelModifiers::default());
+        assert_eq!(
+            press,
+            LabelPress::Corner {
+                region: 0,
+                detach: false
+            }
+        );
+        assert_eq!(session.label.error, None, "a new press clears the hint");
+        assert_eq!(
+            session.label.selected,
+            Some(LabelSelection::Corners(vec![(0, 0)]))
+        );
+        assert!(matches!(
+            session.label.moving,
+            Some(LabelMoving::Corner {
+                region: 0,
+                corner: 0,
+                ..
+            })
+        ));
+        let alt = LabelModifiers {
+            shift: false,
+            alt: true,
+        };
+        assert_eq!(
+            session.label_press(corner, 8.0, alt),
+            LabelPress::Corner {
+                region: 0,
+                detach: true
+            }
+        );
+
+        // Shift takes the corner out of the set, and puts it back, without a drag.
+        session.label.moving = None;
+        let shift = LabelModifiers {
+            shift: true,
+            alt: false,
+        };
+        assert_eq!(
+            session.label_press(corner, 8.0, shift),
+            LabelPress::Selected
+        );
+        assert_eq!(
+            session.label.selected,
+            Some(LabelSelection::Corners(Vec::new()))
+        );
+        assert_eq!(
+            session.label_press(corner, 8.0, shift),
+            LabelPress::Selected
+        );
+        assert_eq!(
+            session.label.selected,
+            Some(LabelSelection::Corners(vec![(0, 0)]))
+        );
+        assert_eq!(session.label.moving, None);
+        std::fs::remove_dir_all(&path).ok();
+    }
+
+    #[test]
+    fn a_label_press_inside_a_polygon_or_on_nothing_starts_the_matching_gesture() {
+        use label::LabelSelection;
+        let (app, path) = labeled_word("region");
+        let mut session = (*app.session).clone();
+        let inside = Point::new(200.0, 60.0);
+        assert_eq!(
+            session.label_press(inside, 8.0, LabelModifiers::default()),
+            LabelPress::Region {
+                region: 0,
+                start: inside
+            }
+        );
+        assert_eq!(session.label.selected, Some(LabelSelection::Region(0)));
+        session.label.moving = None;
+
+        // Shift on nothing inside the open word: a corner marquee.
+        let empty = Point::new(500.0, 250.0);
+        let shift = LabelModifiers {
+            shift: true,
+            alt: false,
+        };
+        assert_eq!(
+            session.label_press(empty, 8.0, shift),
+            LabelPress::Marquee { start: empty }
+        );
+        assert_eq!(session.label.sample, Some(0));
+
+        // A plain press far from every word closes the open word and starts a freehand drag.
+        let far = Point::new(5000.0, 5000.0);
+        assert_eq!(
+            session.label_press(far, 8.0, LabelModifiers::default()),
+            LabelPress::Freehand
+        );
+        assert_eq!(session.label.sample, None);
+        std::fs::remove_dir_all(&path).ok();
+    }
+
+    #[test]
+    fn a_label_freehand_click_deselects_and_an_open_drag_leaves_a_hint() {
+        use label::LabelSelection;
+        let (app, path) = labeled_word("freehand");
+        let mut session = (*app.session).clone();
+        session.label.selected = Some(LabelSelection::Region(0));
+        let click = [Point::new(500.0, 250.0)];
+        assert!(!session.finish_label_freehand(&click, false, 12.0));
+        assert_eq!(session.label.selected, None);
+        assert_eq!(session.label.error, None);
+
+        let line = [Point::new(400.0, 250.0), Point::new(640.0, 250.0)];
+        assert!(!session.finish_label_freehand(&line, true, 12.0));
+        assert!(session.label.error.is_some());
+        std::fs::remove_dir_all(&path).ok();
     }
 }

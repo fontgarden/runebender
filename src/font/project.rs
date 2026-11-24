@@ -25,7 +25,36 @@ use super::variable::{
 use crate::font::model::glyph_metadata::MarkColor;
 use crate::font::var_model::{Location, VariationModel};
 use crate::formats::binary_import::import_binary_font;
-use crate::formats::metadata::lib_keys::hoi_quad_at;
+
+/// Resolve one glyph outline with every component, failing on a missing or cyclic component.
+///
+/// `layer_at` supplies the interpolated layer of each glyph in the component graph.
+/// A graph deeper than 64 glyphs is rejected like a cycle.
+pub(super) fn resolve_component_outline(
+    glyph: &str,
+    layer_at: &mut impl FnMut(&str) -> Result<super::interpolation::InterpolatedLayer, String>,
+) -> Result<BezPath, String> {
+    fn resolve(
+        name: &str,
+        layer_at: &mut impl FnMut(&str) -> Result<super::interpolation::InterpolatedLayer, String>,
+        seen: &mut HashSet<String>,
+    ) -> Result<BezPath, String> {
+        if seen.len() >= 64 || !seen.insert(name.to_owned()) {
+            return Err(format!(
+                "{name}: cyclic or excessively deep component graph"
+            ));
+        }
+        let layer = layer_at(name)?;
+        let mut path = layer.contours_to_bezpath();
+        for component in layer.components() {
+            let outline = resolve(&component.reference, layer_at, seen)?;
+            path.extend((component.transform * outline).elements().iter().copied());
+        }
+        seen.remove(name);
+        Ok(path)
+    }
+    resolve(glyph, layer_at, &mut HashSet::new())
+}
 
 #[path = "project/glyph_transactions.rs"]
 mod glyph_transactions;
@@ -39,12 +68,15 @@ pub use edit_transactions::{
     DocumentEditObjectKind, DocumentEditOperation, DocumentEditTransactionError,
     DocumentEditTransactionOutcome, DocumentLayerEdit, EditHistoryGroupId, EditHistoryGroupState,
 };
+#[path = "project/import_error.rs"]
+mod import_error;
 #[path = "project/proposal_transactions.rs"]
 mod proposal_transactions;
 #[path = "project/save_as.rs"]
 mod save_as;
 #[path = "sources.rs"]
 mod sources;
+pub use import_error::ProjectImportError;
 
 /// One designspace axis, in design coordinates.
 #[derive(Debug, Clone)]
@@ -330,18 +362,18 @@ pub struct Project {
     pub(super) variable: VariableData,
     source_history: sources::SourceHistory,
     pub(super) hoi_history:
-        super::history::TransactionHistory<super::model::designspace::CanonicalDesignspace>,
+        super::history::UndoStack<super::model::designspace::CanonicalDesignspace>,
     document_history: super::history::DocumentHistory,
     edit_transaction_history: edit_transactions::EditTransactionHistory,
     source_metadata_history: super::history::SourceMetadataHistory,
     /// Index into `sources` of the source being edited.
     pub active: usize,
     /// Style names for the master switcher, one per master.
-    pub master_names: Vec<Arc<str>>,
+    master_names: Vec<Arc<str>>,
     /// The designspace axes, empty for a single UFO.
     pub axes: Vec<AxisInfo>,
     /// Normalized (-1..1) location of each master, by axis name.
-    pub master_locations: Vec<Location>,
+    master_locations: Vec<Location>,
     /// Font-wide variation model; glyph interpolation uses its own participating sources.
     pub model: Option<VariationModel>,
     /// Current preview location, normalized, by axis name.
@@ -463,41 +495,6 @@ impl Project {
         &self.variable.font
     }
 
-    /// The master sitting exactly at `location`, if any. Landing on a
-    /// master is a master switch, not an interpolation: the web treats
-    /// it that way so the outline stays editable.
-    pub fn master_at_location(&self) -> Option<usize> {
-        let designspace = self.document_designspace()?;
-        if designspace.axes().is_empty() {
-            return None;
-        }
-        designspace.sources().iter().find_map(|source| {
-            let there = source.location.to_normalized(designspace.axes()).ok()?;
-            designspace
-                .axes()
-                .iter()
-                .all(|axis| {
-                    let name = &axis.coordinates.name;
-                    let a = there.get(name).copied().unwrap_or(0.0);
-                    let b = self.location.get(name).copied().unwrap_or(0.0);
-                    (a - b).abs() < 1e-6
-                })
-                .then(|| self.source_index(source.id()))
-                .flatten()
-        })
-    }
-
-    /// True while the sliders sit between masters: what the canvas
-    /// shows is an interpolated instance, and nothing there is
-    /// editable.
-    pub fn showing_instance(&self) -> bool {
-        self.document_designspace().is_some_and(|designspace| {
-            !designspace.axes().is_empty()
-                && designspace.sources().len() > 1
-                && self.master_at_location().is_none()
-        })
-    }
-
     /// Put `location` back on a master, for a master switch.
     pub fn snap_location_to_master(&mut self, master: usize) {
         let Some(source) = self.source_id(master) else {
@@ -525,25 +522,34 @@ impl Project {
     }
 
     /// Canonicalize one transient format-adapter source.
-    pub fn from_source(input: SourceInput) -> Self {
+    ///
+    /// Invalid metadata is returned to the caller; decoded UFO data is not assumed valid.
+    pub fn from_source(input: SourceInput) -> Result<Self, ProjectImportError> {
         let name = input
             .font
             .font_info
             .style_name
             .clone()
             .unwrap_or_else(|| "Regular".into());
-        let variable = super::persistence::ufo_codec::decode_source(&input.font)
-            .expect("a Project source input must satisfy the UFO boundary contract");
-        let mut project = Self {
+        let variable = super::persistence::ufo_codec::decode_source(&input.font)?;
+        let mut project =
+            Self::single_source(variable, SourceState::from_input(input), name.into());
+        project.compute_compat();
+        Ok(project)
+    }
+
+    /// A project of one source, with empty histories and no designspace projections.
+    fn single_source(variable: VariableData, source: SourceState, name: Arc<str>) -> Self {
+        Self {
             variable,
             source_history: sources::SourceHistory::default(),
-            hoi_history: super::history::TransactionHistory::default(),
+            hoi_history: super::history::UndoStack::default(),
             document_history: super::history::DocumentHistory::default(),
             edit_transaction_history: edit_transactions::EditTransactionHistory::default(),
             source_metadata_history: super::history::SourceMetadataHistory::default(),
-            sources: vec![SourceState::from_input(input)],
+            sources: vec![source],
             active: 0,
-            master_names: vec![name.into()],
+            master_names: vec![name],
             axes: Vec::new(),
             master_locations: vec![Location::new()],
             model: None,
@@ -556,9 +562,7 @@ impl Project {
             experiments: super::experiments::Experiments::default(),
             foreign_source: None,
             import_warnings: Vec::new(),
-        };
-        project.compute_compat();
-        project
+        }
     }
 
     /// Opens a designspace, UFO, Glyphs source, Babelfont package, or binary font. Sets `export_source` to `path` when the loader left it unset.
@@ -642,7 +646,8 @@ impl Project {
                 })
             }
             super::persistence::ImportPlan::Ufo { path, source } => {
-                Ok(Self::from_source((*source).into_source_input(path)))
+                Self::from_source((*source).into_source_input(path))
+                    .map_err(|error| error.to_string())
             }
         }
     }
@@ -810,7 +815,8 @@ impl Project {
             Some(variable) => variable,
             None => super::persistence::ufo_codec::decode_sources(
                 inputs.iter().map(|source| &source.font),
-            )?,
+            )
+            .map_err(|error| error.to_string())?,
         };
         if variable.source_ids.len() != inputs.len() {
             return Err("canonical source count does not match Designspace sources".into());
@@ -842,29 +848,17 @@ impl Project {
             None
         };
         let location = axes.iter().map(|axis| (axis.name.clone(), 0.0)).collect();
-        let mut project = Self {
-            sources: inputs.into_iter().map(SourceState::from_input).collect(),
-            variable,
-            source_history: sources::SourceHistory::default(),
-            hoi_history: super::history::TransactionHistory::default(),
-            document_history: super::history::DocumentHistory::default(),
-            edit_transaction_history: edit_transactions::EditTransactionHistory::default(),
-            source_metadata_history: super::history::SourceMetadataHistory::default(),
-            active: default_index,
-            master_names,
-            axes,
-            master_locations,
-            model,
-            location,
-            compat: HashMap::new(),
-            export_source: None,
-            instances: Vec::new(),
-            ds_dirty: false,
-            brace,
-            experiments: super::experiments::Experiments::default(),
-            foreign_source: None,
-            import_warnings: Vec::new(),
-        };
+        let mut sources = inputs.into_iter().map(SourceState::from_input);
+        let first = sources.next().ok_or("designspace has no full sources")?;
+        let mut project = Self::single_source(variable, first, Arc::from(""));
+        project.sources.extend(sources);
+        project.active = default_index;
+        project.master_names = master_names;
+        project.axes = axes;
+        project.master_locations = master_locations;
+        project.model = model;
+        project.location = location;
+        project.brace = brace;
         project.refresh_instances_from_doc();
         Ok(project)
     }
@@ -1032,27 +1026,9 @@ impl Project {
         glyph_name: &str,
         location: &Location,
     ) -> Result<BezPath, String> {
-        fn resolve(
-            project: &Project,
-            name: &str,
-            location: &Location,
-            seen: &mut HashSet<String>,
-        ) -> Result<BezPath, String> {
-            if seen.len() >= 64 || !seen.insert(name.to_owned()) {
-                return Err(format!(
-                    "{name}: cyclic or excessively deep component graph"
-                ));
-            }
-            let layer = project.try_interpolated_layer_at(name, location)?;
-            let mut path = layer.contours_to_bezpath();
-            for component in layer.components() {
-                let outline = resolve(project, &component.reference, location, seen)?;
-                path.extend((component.transform * outline).elements().iter().copied());
-            }
-            seen.remove(name);
-            Ok(path)
-        }
-        resolve(self, glyph_name, location, &mut HashSet::new())
+        resolve_component_outline(glyph_name, &mut |name| {
+            self.try_interpolated_layer_at(name, location)
+        })
     }
 
     /// Interpolate resolved glyph-pair kerning, including each source's group fallback.
@@ -1160,69 +1136,6 @@ impl Project {
         let (layers, locations) = self.interpolation_layers(glyph_name, None)?;
         let mut interpolated =
             super::interpolation::interpolate_layers(&layers, &locations, location)?;
-        // HOI: nodes with an intermediate point follow their exact
-        // quadratic, overriding the piecewise answer the baked brace
-        // layers gave the model — the bake stays for compilers, the
-        // preview is exact.
-        if let (Some(axis), Some((lo, hi))) = (axes.first(), self.axis_end_sources()) {
-            let curves = self
-                .document_designspace()
-                .and_then(|designspace| {
-                    designspace
-                        .sources()
-                        .iter()
-                        .find(|source| source.id() == lo)
-                })
-                .and_then(|source| self.document_layer(glyph_name, &source.default_layer))
-                .and_then(super::LayerView::hoi_intermediates);
-            if let Some(curves) = curves.filter(|curves| !curves.is_empty()) {
-                let normalized = location.get(&axis.coordinates.name).copied().unwrap_or(0.0);
-                let design = crate::font::var_model::denormalize_value(
-                    normalized,
-                    axis.design_minimum(),
-                    axis.design_default(),
-                    axis.design_maximum(),
-                );
-                let t01 = ((design - axis.design_minimum())
-                    / (axis.design_maximum() - axis.design_minimum()))
-                .clamp(0.0, 1.0);
-                let endpoint_layer = |id| {
-                    self.document_designspace()
-                        .and_then(|designspace| {
-                            designspace
-                                .sources()
-                                .iter()
-                                .find(|source| source.id() == id)
-                        })
-                        .and_then(|source| self.document_layer(glyph_name, &source.default_layer))
-                };
-                if let (Some(a_layer), Some(b_layer)) = (endpoint_layer(lo), endpoint_layer(hi)) {
-                    for ((ci, pi), q) in curves.points() {
-                        let (Some(pa), Some(pb)) = (
-                            a_layer
-                                .contours()
-                                .nth(ci)
-                                .and_then(|contour| contour.points().nth(pi)),
-                            b_layer
-                                .contours()
-                                .nth(ci)
-                                .and_then(|contour| contour.points().nth(pi)),
-                        ) else {
-                            continue;
-                        };
-                        let pos = hoi_quad_at(
-                            (pa.position().x, pa.position().y),
-                            (pb.position().x, pb.position().y),
-                            q,
-                            t01,
-                        );
-                        if let Some(point) = interpolated.point_at_mut(ci, pi) {
-                            point.position = pos.into();
-                        }
-                    }
-                }
-            }
-        }
         self.apply_hoi_trajectories(glyph_name, location, &mut interpolated, records)?;
         Ok(interpolated)
     }
@@ -1592,6 +1505,18 @@ impl Project {
         })
     }
 
+    /// Source display names in the same order as [`Self::document_sources`].
+    ///
+    /// Source operations update this read-only projection together with source identities.
+    pub fn master_names(&self) -> &[Arc<str>] {
+        &self.master_names
+    }
+
+    /// Normalized source locations in the same order as [`Self::document_sources`].
+    pub fn master_locations(&self) -> &[Location] {
+        &self.master_locations
+    }
+
     /// Read one source's stable identity and metadata without its UFO projection.
     pub fn document_source(&self, id: SourceId) -> Option<SourceView<'_>> {
         let index = self.source_index(id)?;
@@ -1790,6 +1715,23 @@ impl Project {
     /// Current canonical document revision used by derived compiler data.
     pub fn document_revision(&self) -> u64 {
         self.variable.revision
+    }
+
+    /// What changed between `revision` and the current revision, when layer edits alone
+    /// produced every revision in between.
+    ///
+    /// `None` means something else changed too, such as kerning, features, sources or the
+    /// glyph list, or the journal no longer reaches back that far; read the document again.
+    /// Data derived from the whole font uses this to follow an edit to one glyph without
+    /// reading every glyph.
+    pub fn layer_changes_since(&self, revision: u64) -> Option<Vec<super::variable::LayerChange>> {
+        Some(
+            self.variable
+                .layer_changes_since(revision)?
+                .into_iter()
+                .cloned()
+                .collect(),
+        )
     }
 
     /// Clone the canonical editing state without source-format preservation or Master projections.
@@ -2366,10 +2308,15 @@ impl Project {
         &self.variable
     }
 
-    /// Save every source from the variable project, then its Designspace metadata.
+    /// Save every edited source from the variable project, then its Designspace metadata.
     pub fn save(&mut self) -> Result<(), String> {
         let mut exports = Vec::with_capacity(self.sources.len());
         for index in 0..self.sources.len() {
+            // A source without edits since it was read or saved is already on disk.
+            let source = &self.sources[index];
+            if !source.dirty && source.source_path.exists() {
+                continue;
+            }
             let font = super::persistence::ufo_codec::encode_source(
                 &self.variable,
                 self.source_id(index).expect("source identity"),
@@ -2394,6 +2341,14 @@ impl Project {
         } else {
             None
         };
+        if self.sources.is_empty() {
+            return Err("a filesystem export needs at least one UFO source".into());
+        }
+        // Nothing was edited since the last save, so the files on disk are current.
+        if exports.is_empty() && designspace.is_none() {
+            self.mark_saved();
+            return Ok(());
+        }
         super::persistence::ExportPlan::new(exports, designspace)?.execute()?;
         self.mark_saved();
         if let (Some(foreign), Some(working)) = (&self.foreign_source, &self.export_source) {
@@ -2442,7 +2397,6 @@ fn character_named(query: &str) -> Option<char> {
 mod tests {
     use super::*;
     use crate::analysis::measure::joining_band;
-    use crate::font::model::hoi::HoiIntermediates;
     use crate::testing::fonts;
 
     #[test]
@@ -2484,9 +2438,17 @@ mod tests {
         let instance = project.document_designspace().unwrap().instances()[0].id();
         assert!(project.remove_instance(instance).unwrap());
         assert_eq!(project.instances.len(), before - 1);
-        assert!(project.undo_sources(false).unwrap());
+        assert!(
+            project
+                .undo_sources(crate::font::history::HistoryDirection::Undo)
+                .unwrap()
+        );
         assert_eq!(project.instances.len(), before);
-        assert!(project.undo_sources(true).unwrap());
+        assert!(
+            project
+                .undo_sources(crate::font::history::HistoryDirection::Redo)
+                .unwrap()
+        );
         assert_eq!(project.instances.len(), before - 1);
     }
 
@@ -2538,12 +2500,20 @@ mod tests {
             refined.contours[0].points[0].x,
             orig + 40.0,
         );
-        assert!(project.undo_sources(false).unwrap());
+        assert!(
+            project
+                .undo_sources(crate::font::history::HistoryDirection::Undo)
+                .unwrap()
+        );
         let linear = project
             .try_encode_interpolated_ufo_at(name, &loc_500)
             .unwrap_or_else(|error| panic!("interpolates without the sparse source: {error}"));
         assert!((linear.contours[0].points[0].x - (orig + 40.0)).abs() > 1.0);
-        assert!(project.undo_sources(true).unwrap());
+        assert!(
+            project
+                .undo_sources(crate::font::history::HistoryDirection::Redo)
+                .unwrap()
+        );
         let restored = project
             .try_encode_interpolated_ufo_at(name, &loc_500)
             .unwrap_or_else(|error| {
@@ -2646,33 +2616,35 @@ mod tests {
         );
         let mut glyph = norad::Glyph::new("joined");
         glyph.contours = vec![stroke];
-        let path = crate::outline::glyph_paths::contour_to_bezpath(&glyph.contours[0]);
+        let path = crate::testing::ufo_oracle::contour_to_bezpath(&glyph.contours[0]);
         assert_eq!(joining_band(&path, 200.0, true, 2.0), Some((40.0, 120.0)));
         assert_eq!(joining_band(&path, 200.0, false, 2.0), Some((40.0, 120.0)));
         // Pull the ink off the edge: no band.
         for p in glyph.contours[0].points.iter_mut() {
             p.x += 10.0;
         }
-        let moved = crate::outline::glyph_paths::contour_to_bezpath(&glyph.contours[0]);
+        let moved = crate::testing::ufo_oracle::contour_to_bezpath(&glyph.contours[0]);
         assert_eq!(joining_band(&moved, 200.0, true, 2.0), None);
+    }
 
-        // And the real Arabic set: a medial beh (a composite —
-        // components must resolve) touches both edges.
-        let project = Project::load(&fonts::designspace()).expect("loads");
+    #[cfg(feature = "integration-fonts")]
+    #[test]
+    fn virtua_medial_beh_joins_both_edges() {
+        // Real Arabic composites must resolve before measuring their joining bands.
+        let project = Project::load(&fonts::virtua_designspace()).expect("loads");
         let source = project.source_id(project.active).unwrap();
-        if let Some(glyph) = project
+        let glyph = project
             .document_source_glyph_entry(source, "beh-ar.medi")
             .unwrap()
-        {
-            assert!(
-                joining_band(glyph.outline(), glyph.advance(), true, 2.0).is_some(),
-                "medial joins left"
-            );
-            assert!(
-                joining_band(glyph.outline(), glyph.advance(), false, 2.0).is_some(),
-                "medial joins right"
-            );
-        }
+            .expect("Virtua contains medial beh");
+        assert!(
+            joining_band(glyph.outline(), glyph.advance(), true, 2.0).is_some(),
+            "medial joins left"
+        );
+        assert!(
+            joining_band(glyph.outline(), glyph.advance(), false, 2.0).is_some(),
+            "medial joins right"
+        );
     }
 
     #[test]
@@ -2722,66 +2694,6 @@ mod tests {
                 .unwrap();
             assert_eq!(back, Some("=n+10"));
         }
-    }
-
-    #[test]
-    fn hoi_preview_is_exact_without_baking() {
-        // An intermediate point in the lib key alone (no baked brace
-        // layers) must already curve the preview: at mid-axis the
-        // node sits exactly on Q, at quarter-axis on the quadratic.
-        let mut project = Project::load(&fonts::designspace()).expect("loads");
-        let name = "n";
-        let axis = project.axes[0].clone();
-        let (lo, hi) = project.axis_end_masters().expect("two ends");
-        let first_point = |index| {
-            let source = project.source_id(index).unwrap();
-            let layer = project.document_source(source).unwrap().default_layer();
-            let point = project
-                .document_layer(name, &layer)
-                .unwrap()
-                .contours()
-                .next()
-                .unwrap()
-                .points()
-                .next()
-                .unwrap()
-                .position();
-            (point.x, point.y)
-        };
-        let a = first_point(lo);
-        let b = first_point(hi);
-        let q = ((a.0 + b.0) / 2.0 + 80.0, (a.1 + b.1) / 2.0 + 40.0);
-        let source = project.source_id(lo).unwrap();
-        let layer = project.document_source(source).unwrap().default_layer();
-        project
-            .edit_document_layer(name, &layer, |draft| {
-                draft.set_hoi_intermediates(HoiIntermediates::from_points([((0, 0), q)]).unwrap());
-                Ok(())
-            })
-            .unwrap();
-        let at = |project: &Project, design: f64| {
-            let mut location = Location::new();
-            location.insert(
-                axis.name.clone(),
-                crate::font::var_model::normalize_value(design, axis.min, axis.default, axis.max),
-            );
-            let g = project.encode_interpolated_ufo_at(name, &location).unwrap();
-            let p = &g.contours[0].points[0];
-            (p.x, p.y)
-        };
-        let mid_design = axis.min + (axis.max - axis.min) * 0.5;
-        let mid = at(&project, mid_design);
-        assert!(
-            (mid.0 - q.0).abs() < 1e-6 && (mid.1 - q.1).abs() < 1e-6,
-            "mid-axis sits on Q: {mid:?} vs {q:?}"
-        );
-        let quarter_design = axis.min + (axis.max - axis.min) * 0.25;
-        let quarter = at(&project, quarter_design);
-        let expected = hoi_quad_at(a, b, q, 0.25);
-        assert!(
-            (quarter.0 - expected.0).abs() < 1e-6 && (quarter.1 - expected.1).abs() < 1e-6,
-            "quarter-axis on the quadratic: {quarter:?} vs {expected:?}"
-        );
     }
 
     #[test]

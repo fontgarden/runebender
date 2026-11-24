@@ -16,7 +16,9 @@ pub(crate) struct References {
     signature: Vec<(PathBuf, u64, Option<SystemTime>)>,
     checked: Option<Instant>,
 }
-pub(crate) fn directory(document: &Path) -> Option<PathBuf> {
+/// The project root of a document: the nearest Git root, or the folder of the document outside
+/// Git. A document without a path has none.
+pub(crate) fn project_root(document: &Path) -> Option<PathBuf> {
     if document.as_os_str().is_empty() {
         return None;
     }
@@ -29,7 +31,10 @@ pub(crate) fn directory(document: &Path) -> Option<PathBuf> {
         .ancestors()
         .find(|p| p.join(".git").exists())
         .unwrap_or(parent);
-    Some(root.join("reference-fonts"))
+    Some(root.to_path_buf())
+}
+pub(crate) fn directory(document: &Path) -> Option<PathBuf> {
+    Some(project_root(document)?.join("reference-fonts"))
 }
 fn scan(folder: &Path, paths: &mut Vec<(PathBuf, u64, Option<SystemTime>)>) -> Result<(), String> {
     if !folder.exists() {
@@ -53,6 +58,17 @@ fn scan(folder: &Path, paths: &mut Vec<(PathBuf, u64, Option<SystemTime>)>) -> R
     }
     Ok(())
 }
+/// The reference font files of a document's project now: path, length and modification time.
+/// `None` when the folder cannot be read.
+pub(crate) fn disk_signature(document: &Path) -> Option<Vec<(PathBuf, u64, Option<SystemTime>)>> {
+    let mut signature = Vec::new();
+    if let Some(folder) = directory(document) {
+        scan(&folder, &mut signature).ok()?;
+    }
+    signature.sort();
+    Some(signature)
+}
+
 impl References {
     pub(crate) fn refresh(&mut self, document: &Path) {
         let folder = directory(document);

@@ -16,6 +16,11 @@
 // Load the program's interface, platform, and command-line modules from `application/`.
 mod application;
 
+#[cfg(test)]
+#[cfg(feature = "integration-fonts")]
+#[path = "../tests/support/virtua.rs"]
+mod integration_fonts;
+
 // The browser builds this file as a library and starts through `application::browser`.
 // Only the native executable needs the CLI, window launcher, event loop, and exit code.
 #[cfg(not(target_arch = "wasm32"))]
@@ -27,6 +32,10 @@ use xilem::EventLoop;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> ExitCode {
+    // The library reports feature-file and outline failures through this hook.
+    runebender::text::shape::set_shaping_failure_reporter(|message| {
+        eprintln!("Text shaping failed: {message}");
+    });
     // Headless commands finish in `cli::run`; the remaining path opens the graphical editor.
     let font_path = match cli::run() {
         cli::Startup::Exit(code) => return code,

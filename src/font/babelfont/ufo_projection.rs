@@ -127,13 +127,12 @@ pub(in crate::font) fn layer_from_ufo(
         .iter()
         .map(|component| component.id)
         .collect::<Vec<_>>();
-    let smart_component_axes = SmartComponentAxes::take_from_lib(&mut lib)
-        .expect("UFO smart-component axes must satisfy the canonical metadata contract");
+    // File data that does not fit the typed model stays in the lib and round-trips unchanged.
+    let smart_component_axes = SmartComponentAxes::take_from_lib(&mut lib).ok().flatten();
     let smart_component_values = SmartComponentValues::take_from_lib(&mut lib, &component_order)
-        .expect("UFO smart-component values must satisfy the canonical metadata contract");
-    let smart_component_pole = SmartComponentPole::take_from_lib(&mut lib)
-        .expect("UFO smart-component poles must satisfy the canonical metadata contract");
-    let hoi_intermediates = HoiIntermediates::take_from_lib(&mut lib);
+        .ok()
+        .flatten();
+    let smart_component_pole = SmartComponentPole::take_from_lib(&mut lib).ok().flatten();
     (
         layer,
         LayerPreservation {
@@ -153,7 +152,6 @@ pub(in crate::font) fn layer_from_ufo(
             smart_component_axes,
             smart_component_values,
             smart_component_pole,
-            hoi_intermediates,
             contours,
             components,
             anchors,
@@ -250,7 +248,6 @@ pub(in crate::font) fn copy_contours_only(
     preserved.smart_component_axes = None;
     preserved.smart_component_values = None;
     preserved.smart_component_pole = None;
-    preserved.hoi_intermediates = None;
     preserved.components.clear();
     preserved.anchors.clear();
     (layer, preserved)
@@ -349,9 +346,6 @@ pub(in crate::font) fn project_layer(layer: &Layer, preserved: &LayerPreservatio
     }
     if let Some(pole) = &preserved.smart_component_pole {
         pole.write_to_lib(&mut glyph.lib);
-    }
-    if let Some(points) = &preserved.hoi_intermediates {
-        points.write_to_lib(&mut glyph.lib);
     }
     if layer.width != preserved.width as f32 {
         glyph.width = f64::from(layer.width);

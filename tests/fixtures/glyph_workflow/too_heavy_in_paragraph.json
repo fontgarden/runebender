@@ -16,7 +16,7 @@
   },
   "grade_legend": {
     "green": "human-approved reference; never edit",
-    "purple": "approved frozen composite reference; never edit",
+    "purple": "machine draft not yet reviewed by the designer; not a reference",
     "blue": "composite needing diagnosis and repair; not a reference or blanket replacement target",
     "pink": "composite needing smaller edits; not a reference",
     "yellow": "preserve drawing; local edits only; not a reference",
@@ -43,7 +43,7 @@
       {
         "glyph": "demo_looped_join-ar.fina",
         "glyph_id": "demo-protected-final",
-        "human_grade": "purple",
+        "human_grade": "green",
         "reason": "final form is a comparison reference, never an optical-edit target"
       }
     ],

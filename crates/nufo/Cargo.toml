@@ -2,7 +2,7 @@
 name = "nufo"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.96"
 license = "Apache-2.0 OR MIT"
 description = "The NUFO neural font source format: labeled samples of writing in a UFO"
 repository = "https://github.com/fontgarden/runebender"

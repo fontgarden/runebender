@@ -85,15 +85,15 @@ function readFiles(directory, files = []) {
     assert.equal((await state()).interpolation.selected.length, 1, 'Shift removes a selected path');
 
 
-    await page.mouse.click(1125, 421); // Ease In.
+    await page.mouse.click(1127, 462); // Ease In.
     await pause();
     assert.equal((await state()).interpolation.records[0].easing, 'ease-in');
-    await page.mouse.click(1220, 261); // Scrub the exact preview.
+    await page.mouse.click(1220, 283); // Scrub the exact preview.
     await pause();
     assert.ok((await state()).interpolation.progress > 0.5);
-    await page.mouse.click(1205, 288); // Compare Export.
+    await page.mouse.click(1207, 314); // Compare Export.
     await page.waitForFunction(() => window.runebender.state().interpolation.comparison === 'Export overlay ready');
-    await page.mouse.click(1140, 508); // Select all paths.
+    await page.mouse.click(1148, 556); // Select all paths.
     await pause();
     assert.equal((await state()).interpolation.selected.length, 4);
     await page.mouse.click(400, 223); // Refocus an already-selected path.
@@ -110,10 +110,10 @@ function readFiles(directory, files = []) {
     }
     // Clean preview uses the same coordinates and cannot edit hidden paths.
     const selected = (await state()).interpolation.selected;
-    await page.mouse.click(1205, 233);
+    await page.mouse.click(1207, 252);
     await pause();
     assert.equal((await state()).interpolation.preview_only, true);
-    await page.mouse.click(1220, 261);
+    await page.mouse.click(1220, 283);
     await page.mouse.move(400, 223); await page.mouse.down();
     await page.mouse.move(420, 200, { steps: 4 }); await page.mouse.up();
     await page.keyboard.press('ArrowUp');
@@ -122,22 +122,22 @@ function readFiles(directory, files = []) {
     assert.deepEqual((await state()).interpolation.records, authored);
     assert.deepEqual((await state()).interpolation.selected, selected);
     assert.deepEqual((await state()).points, original.points);
-    await page.mouse.click(1075, 233);
+    await page.mouse.click(1091, 252);
     await pause();
     assert.equal((await state()).interpolation.preview_only, false);
     assert.deepEqual((await state()).interpolation.selected, selected);
-    await page.mouse.click(1140, 479); // Reset Selected.
+    await page.mouse.click(1148, 524); // Reset Selected.
     await pause();
     assert.deepEqual((await state()).interpolation.records, []);
     await page.keyboard.press('Meta+z');
     await pause();
     assert.deepEqual((await state()).interpolation.records, authored);
-    await page.mouse.click(1140, 130); // Neighboring Light/Regular interval.
+    await page.mouse.click(1148, 143); // Neighboring Light/Regular interval.
     await pause();
     assert.equal((await state()).interpolation.interval, 0);
     assert.deepEqual((await state()).interpolation.selected, []);
-    await page.mouse.click(1140, 508);
-    await page.mouse.click(1200, 421); // Ease Out in the other interval.
+    await page.mouse.click(1148, 556);
+    await page.mouse.click(1200, 462); // Ease Out in the other interval.
     await pause();
     assert.equal((await state()).interpolation.records.length, 8);
     assert.deepEqual((await state()).interpolation.records.slice(0, 4), authored);

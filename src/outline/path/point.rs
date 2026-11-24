@@ -8,12 +8,11 @@
 //! `PathPoint` pairs a `kurbo::Point` position with a `PointType`
 //! (on-curve smooth/corner, or off-curve handle) and a unique
 //! `EntityId`. Points are stored in `PathPoints` collections inside
-//! each `CubicPath`, `QuadraticPath`, or `HyperPath`. The `PointType`
+//! each `BezierPath` or `HyperPath`. The `PointType`
 //! determines drawing style (filled circle vs. open square) and drag
 //! behavior (smooth points maintain tangent continuity).
 
 use crate::font::model::entity_id::EntityId;
-use crate::outline::path::hyper_model::{self as workspace, PointType as WsPointType};
 use kurbo::Point;
 
 /// A point type in a bezier path.
@@ -56,14 +55,6 @@ pub struct PathPoint {
 }
 
 impl PathPoint {
-    fn new(point: Point, typ: PointType) -> Self {
-        Self {
-            id: EntityId::next(),
-            point,
-            typ,
-        }
-    }
-
     /// Returns `true` when this point lies on the curve.
     pub fn is_on_curve(&self) -> bool {
         self.typ.is_on_curve()
@@ -72,27 +63,5 @@ impl PathPoint {
     /// Returns `true` when this point is a control handle.
     pub fn is_off_curve(&self) -> bool {
         self.typ.is_off_curve()
-    }
-
-    /// Convert from a workspace contour point (norad-shaped).
-    pub fn from_contour_point(pt: &workspace::ContourPoint) -> Self {
-        let point = Point::new(pt.x, pt.y);
-        let typ = match pt.point_type {
-            WsPointType::OffCurve => PointType::OffCurve { auto: false },
-            WsPointType::Hyper => PointType::OnCurve { smooth: true },
-            WsPointType::HyperCorner => PointType::OnCurve { smooth: false },
-            _ => PointType::OnCurve { smooth: pt.smooth },
-        };
-        Self::new(point, typ)
-    }
-
-    /// Convert from a workspace contour point for quadratic paths.
-    pub fn from_contour_point_quadratic(pt: &workspace::ContourPoint) -> Self {
-        let point = Point::new(pt.x, pt.y);
-        let typ = match pt.point_type {
-            WsPointType::OffCurve => PointType::OffCurve { auto: false },
-            _ => PointType::OnCurve { smooth: pt.smooth },
-        };
-        Self::new(point, typ)
     }
 }

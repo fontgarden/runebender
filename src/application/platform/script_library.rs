@@ -8,17 +8,15 @@
 //! writers that race the final same-directory rename.
 
 use std::fmt;
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
-use sha2::{Digest, Sha256};
+use super::guarded_file::{self, GuardedFileError};
 
 const MAX_SCRIPT_BYTES: usize = 256 * 1024;
 const MAX_NAME_BYTES: usize = 128;
-static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Content and disk identity for one saved recipe.
 #[derive(Clone, Debug)]
@@ -97,6 +95,18 @@ impl From<io::Error> for ScriptLibraryError {
     }
 }
 
+impl From<GuardedFileError> for ScriptLibraryError {
+    fn from(error: GuardedFileError) -> Self {
+        match error {
+            GuardedFileError::NotFound => Self::NotFound,
+            GuardedFileError::TooLarge => Self::TooLarge,
+            GuardedFileError::AlreadyExists => Self::AlreadyExists,
+            GuardedFileError::Conflict { actual_revision } => Self::Conflict { actual_revision },
+            GuardedFileError::Io(error) => Self::Io(error),
+        }
+    }
+}
+
 /// One selected directory containing ordinary Python recipe files.
 #[derive(Clone, Debug)]
 pub(crate) struct ScriptLibrary {
@@ -132,7 +142,11 @@ impl ScriptLibrary {
             }
             match self.load(&name) {
                 Ok(document) => scripts.push(document.metadata),
-                Err(ScriptLibraryError::NotFound | ScriptLibraryError::InvalidUtf8) => {}
+                Err(
+                    ScriptLibraryError::NotFound
+                    | ScriptLibraryError::InvalidUtf8
+                    | ScriptLibraryError::TooLarge,
+                ) => {}
                 Err(error) => return Err(error),
             }
         }
@@ -143,8 +157,7 @@ impl ScriptLibrary {
     /// Load one direct script and compute the revision of its exact bytes.
     pub(crate) fn load(&self, name: &str) -> Result<ScriptDocument, ScriptLibraryError> {
         let path = self.script_path(name)?;
-        let (file, metadata) = open_regular_file(&path)?;
-        let bytes = read_bounded(file, metadata.len())?;
+        let (bytes, metadata) = guarded_file::read_regular(&path, MAX_SCRIPT_BYTES)?;
         let content = String::from_utf8(bytes).map_err(|_| ScriptLibraryError::InvalidUtf8)?;
         Ok(document(name, content, metadata.modified().ok()))
     }
@@ -163,22 +176,14 @@ impl ScriptLibrary {
             return Err(ScriptLibraryError::TooLarge);
         }
         let path = self.script_path(name)?;
-        self.check_expected(&path, expected_revision)?;
-
-        let (temporary, mut file) = self.create_temporary()?;
-        let staged = (|| -> Result<(), ScriptLibraryError> {
-            file.write_all(content.as_bytes())?;
-            file.sync_all()?;
-            drop(file);
-            self.check_expected(&path, expected_revision)?;
-            fs::rename(&temporary, &path)?;
-            sync_directory(&self.root)?;
-            Ok(())
-        })();
-        if staged.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-        staged?;
+        guarded_file::write_guarded(
+            &self.root,
+            &path,
+            content.as_bytes(),
+            expected_revision,
+            MAX_SCRIPT_BYTES,
+            ".runebender-script",
+        )?;
         self.load(name)
     }
 
@@ -191,7 +196,7 @@ impl ScriptLibrary {
     ) -> Result<ScriptDocument, ScriptLibraryError> {
         let old_path = self.script_path(old_name)?;
         let new_path = self.script_path(new_name)?;
-        self.check_expected(&old_path, Some(expected_revision))?;
+        guarded_file::check_expected(&old_path, Some(expected_revision), MAX_SCRIPT_BYTES)?;
         if old_path == new_path {
             return self.load(old_name);
         }
@@ -200,64 +205,15 @@ impl ScriptLibrary {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
-        self.check_expected(&old_path, Some(expected_revision))?;
+        guarded_file::check_expected(&old_path, Some(expected_revision), MAX_SCRIPT_BYTES)?;
         fs::rename(old_path, new_path)?;
-        sync_directory(&self.root)?;
+        guarded_file::sync_directory(&self.root)?;
         self.load(new_name)
     }
 
     fn script_path(&self, name: &str) -> Result<PathBuf, ScriptLibraryError> {
         validate_name(name)?;
         Ok(self.root.join(name))
-    }
-
-    fn check_expected(
-        &self,
-        path: &Path,
-        expected_revision: Option<&str>,
-    ) -> Result<(), ScriptLibraryError> {
-        match (expected_revision, fs::symlink_metadata(path)) {
-            (None, Err(error)) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            (None, Ok(_)) => Err(ScriptLibraryError::AlreadyExists),
-            (None, Err(error)) => Err(error.into()),
-            (Some(_), Err(error)) if error.kind() == io::ErrorKind::NotFound => {
-                Err(ScriptLibraryError::NotFound)
-            }
-            (Some(expected), Ok(_)) => {
-                let actual = self.load_path_revision(path)?;
-                if actual == expected {
-                    Ok(())
-                } else {
-                    Err(ScriptLibraryError::Conflict {
-                        actual_revision: actual,
-                    })
-                }
-            }
-            (Some(_), Err(error)) => Err(error.into()),
-        }
-    }
-
-    fn load_path_revision(&self, path: &Path) -> Result<String, ScriptLibraryError> {
-        let (file, metadata) = open_regular_file(path)?;
-        let bytes = read_bounded(file, metadata.len())?;
-        Ok(hex_digest(Sha256::digest(bytes)))
-    }
-
-    fn create_temporary(&self) -> Result<(PathBuf, File), ScriptLibraryError> {
-        for _ in 0..32 {
-            let sequence = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
-            let name = format!(".runebender-script-{}-{sequence}.tmp", std::process::id());
-            let path = self.root.join(name);
-            match OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(file) => return Ok((path, file)),
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(error.into()),
-            }
-        }
-        Err(ScriptLibraryError::Io(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "could not allocate a unique temporary script file",
-        )))
     }
 }
 
@@ -271,43 +227,11 @@ fn document(name: &str, content: String, modified: Option<SystemTime>) -> Script
     let metadata = ScriptMetadata {
         name: name.into(),
         description,
-        revision: hex_digest(Sha256::digest(content.as_bytes())),
+        revision: guarded_file::revision(content.as_bytes()),
         size: content.len(),
         modified,
     };
     ScriptDocument { metadata, content }
-}
-
-fn open_regular_file(path: &Path) -> Result<(File, fs::Metadata), ScriptLibraryError> {
-    let path_metadata = fs::symlink_metadata(path).map_err(|error| {
-        if error.kind() == io::ErrorKind::NotFound {
-            ScriptLibraryError::NotFound
-        } else {
-            ScriptLibraryError::Io(error)
-        }
-    })?;
-    if path_metadata.file_type().is_symlink() || !path_metadata.is_file() {
-        return Err(ScriptLibraryError::NotFound);
-    }
-    let file = File::open(path)?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file() {
-        return Err(ScriptLibraryError::NotFound);
-    }
-    Ok((file, metadata))
-}
-
-fn read_bounded(file: File, observed_size: u64) -> Result<Vec<u8>, ScriptLibraryError> {
-    if observed_size > MAX_SCRIPT_BYTES as u64 {
-        return Err(ScriptLibraryError::TooLarge);
-    }
-    let mut bytes = Vec::with_capacity(usize::try_from(observed_size).unwrap_or(MAX_SCRIPT_BYTES));
-    file.take(MAX_SCRIPT_BYTES.saturating_add(1) as u64)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > MAX_SCRIPT_BYTES {
-        return Err(ScriptLibraryError::TooLarge);
-    }
-    Ok(bytes)
 }
 
 fn validate_name(name: &str) -> Result<(), ScriptLibraryError> {
@@ -326,29 +250,19 @@ fn validate_name(name: &str) -> Result<(), ScriptLibraryError> {
     Ok(())
 }
 
-fn sync_directory(path: &Path) -> Result<(), ScriptLibraryError> {
-    #[cfg(unix)]
-    File::open(path)?.sync_all()?;
-    Ok(())
-}
-
-fn hex_digest(digest: impl AsRef<[u8]>) -> String {
-    digest
-        .as_ref()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
     struct TestDirectory(PathBuf);
 
     impl TestDirectory {
         fn new(label: &str) -> Self {
-            let sequence = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+            let sequence = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
                 "runebender-script-library-{label}-{}-{sequence}",
                 std::process::id()

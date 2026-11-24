@@ -1,20 +1,27 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! The launch path: the event loop, the window, and the first frame.
 
+use crate::application::launch_options::{CompileMode, LaunchOptions};
+use crate::application::platform::frame_times;
 use crate::application::platform::screenshot;
 use crate::application::view::render::root_logic;
 use crate::application::view::{UI_FONT, default_property_set};
 use crate::application::workspace::AppState;
 use masonry::core::{ErasedAction, WidgetId};
-use masonry_winit::app::{AppDriver, DriverCtx, WgpuContext, WindowId};
+use masonry_winit::app::{
+    AppDriver, DriverCtx, MasonryState, MasonryUserEvent, WgpuContext, WindowId,
+};
 use std::cell::Cell;
 use std::path::Path as FsPath;
 use std::rc::Rc;
 use std::sync::Arc;
+use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::error::EventLoopError;
+use winit::event::WindowEvent;
+use winit::event_loop::ActiveEventLoop;
 use winit::window::Theme;
 use xilem::view::sized_box;
 use xilem::{EventLoopBuilder, Xilem};
@@ -23,201 +30,40 @@ pub(crate) fn run(
     event_loop: EventLoopBuilder,
     path: Option<&FsPath>,
 ) -> Result<(), EventLoopError> {
-    crate::application::platform::config::load().apply();
+    let (config, config_error) = crate::application::platform::config::load();
+    config.apply();
+    let options = LaunchOptions::current();
+    // A capture compiles its previews before it renders its one frame; a window compiles them
+    // on worker threads.
+    CompileMode::set_current(options.compile_mode);
     let mut app = AppState::open(path);
     // RUNEBENDER_GLYPH=<name> starts in the editor on that glyph, so
     // a headless screenshot reaches edit mode without clicks.
-    if let Ok(name) = std::env::var("RUNEBENDER_GLYPH")
-        && let Some(workspace) = app.workspace.as_mut()
-        && let Some(index) = workspace.font.index_of(&name)
-    {
-        workspace.open_glyph(index);
-        if workspace.proof_view {
-            workspace.pin_review_before();
-        }
-        // RUNEBENDER_PROOF_SAMPLE=1 proposes a wider open glyph through the
-        // live tools, so a headless render of the proof view has a proposal
-        // to compare.
-        if std::env::var("RUNEBENDER_PROOF_SAMPLE").as_deref() == Ok("1") {
-            proof_sample(workspace);
-        }
-        // RUNEBENDER_COMPONENT=<n> opens the glyph's nth component in place.
-        if let Some(id) = std::env::var("RUNEBENDER_COMPONENT")
-            .ok()
-            .and_then(|n| n.parse::<usize>().ok())
-            .and_then(|n| {
-                let layer = workspace.session.current_layer()?;
-                layer.components().nth(n).map(|component| component.id())
-            })
-        {
-            workspace.enter_component(id);
-        }
-        // RUNEBENDER_LABEL_SAMPLE=<n> opens the label tool on that sample.
-        if let Some(sample) = std::env::var("RUNEBENDER_LABEL_SAMPLE")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-        {
-            Arc::make_mut(&mut workspace.session).select_sample(Some(sample));
-        }
-    }
-    if std::env::var("RUNEBENDER_SELECTALL").is_ok()
-        && let Some(workspace) = app.workspace.as_mut()
-    {
-        let mut sess = (*workspace.session).clone();
-        sess.select_all();
-        workspace.selected_points = sess.selection_bounds().map(|_| 999).unwrap_or(0);
-        workspace.selected_points = sess.point_count();
-        workspace.session = Arc::new(sess);
-        workspace.refresh_coord_bufs();
-    }
-    // The review mode can be captured without changing the user's running editor.
-    if let Some(workspace) = app.workspace.as_mut()
-        && matches!(
-            std::env::var("RUNEBENDER_PROOF_VIEW").as_deref(),
-            Ok("toggle" | "before")
-        )
-    {
-        workspace.review.mode = crate::application::editor::tools::review::ReviewMode::Toggle;
-        workspace.review.show_before =
-            std::env::var("RUNEBENDER_PROOF_VIEW").as_deref() == Ok("before");
-    }
     if let Some(workspace) = app.workspace.as_mut() {
-        workspace.review.dark = std::env::var("RUNEBENDER_PROOF_DARK").as_deref() == Ok("1");
-    }
-    if let Some(workspace) = app.workspace.as_mut() {
-        match std::env::var("RUNEBENDER_PROOF_VIEW").as_deref() {
-            Ok("waterfall") => {
-                workspace.review.mode =
-                    crate::application::editor::tools::review::ReviewMode::Waterfall;
-            }
-            Ok("text") => {
-                workspace.review.mode = crate::application::editor::tools::review::ReviewMode::Text;
-            }
-            _ => {}
+        options.apply(workspace);
+        // A settings file that cannot be used falls back to defaults, so say so.
+        if let Some(error) = config_error {
+            workspace.note = error;
         }
-        if let Ok(text) = std::env::var("RUNEBENDER_PROOF_TEXT") {
-            workspace.review.reading.custom = text.chars().take(4096).collect();
-            workspace.review.reading.sample =
-                crate::application::editor::tools::review_reading::Sample::Custom;
-        }
-        workspace.refresh_review_references();
     }
     // Headless: render one frame and exit. No window, no event loop.
-    if let Ok(path) = std::env::var("RUNEBENDER_SCREENSHOT") {
-        if let Ok(name) = std::env::var("RUNEBENDER_SELECTED")
-            && let Some(workspace) = app.workspace.as_mut()
-            && let Some(index) = workspace.font.index_of(&name)
-        {
-            workspace.grid_select(index, false, false);
-        }
-        // RUNEBENDER_PREVIEW_TEXT=<text> sets the proof strip's text.
-        if let Ok(text) = std::env::var("RUNEBENDER_PREVIEW_TEXT")
-            && let Some(workspace) = app.workspace.as_mut()
-        {
-            workspace.preview_text = text;
-        }
-        // RUNEBENDER_PREVIEW=pieces|model shows that view of the proof strip; the model view
-        // waits for the worker's first drawing.
-        if let Ok(view) = std::env::var("RUNEBENDER_PREVIEW")
-            && let Some(workspace) = app.workspace.as_mut()
-        {
-            use crate::application::pieces::PreviewView;
-            workspace.preview_view = match view.as_str() {
-                "pieces" => PreviewView::Pieces,
-                "model" => PreviewView::Model,
-                _ => PreviewView::Outline,
-            };
-            if workspace.preview_view == PreviewView::Model {
-                workspace.refresh_model();
-                for _ in 0..400 {
-                    workspace.model_pump();
-                    if workspace.model.render.is_some() || workspace.model.error.is_some() {
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                }
-            }
-        }
-        // RUNEBENDER_NEURAL_STATUS=<text> shows the Neural section mid-run, for review captures.
-        if let Ok(status) = std::env::var("RUNEBENDER_NEURAL_STATUS")
-            && let Some(workspace) = app.workspace.as_mut()
-        {
-            workspace.train.status = status;
-        }
-        if let Ok(section) = std::env::var("RUNEBENDER_EXPAND")
-            && let Some(workspace) = app.workspace.as_mut()
-        {
-            workspace.collapsed.remove(section.as_str());
-        }
-        // In the Graph view, wait for the specimen's first render.
-        // RUNEBENDER_GRAPH_EXPANDED=1 then shows its first image expanded.
-        #[cfg(unix)]
-        if let Some(workspace) = app.workspace.as_mut()
-            && matches!(workspace.mode, crate::application::workspace::Mode::Graph)
-            && workspace.live_graph.is_some()
-        {
-            // A capture shows the graph rendered, as if the designer pressed Run.
-            workspace.graph.auto_run = true;
-            crate::application::editor::tools::graph::controls::live_autorun_tick(workspace);
-            for _ in 0..1200 {
-                workspace.live_graph_pump();
-                workspace.sync_live_graph_presentation();
-                if workspace.graph.proof_images.len()
-                    > runebender::workflows::graph_live::SPECIMEN_PAGES
-                {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            // Let the finished run settle so the nodes show it as current.
-            for _ in 0..20 {
-                workspace.live_graph_pump();
-                workspace.sync_live_graph_presentation();
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            eprintln!(
-                "DEBUG graph wait: images={} note={}",
-                workspace.graph.proof_images.len(),
-                workspace.note
-            );
-            if std::env::var_os("RUNEBENDER_GRAPH_EXPANDED").is_some() {
-                workspace.graph.expanded = workspace.live_graph.as_ref().and_then(|state| {
-                    let graph = state.session.snapshot().graph;
-                    graph
-                        .nodes
-                        .iter()
-                        .find(|node| node.type_name == "live.proof")
-                        .map(|node| node.id)
-                });
-            }
+    if let Some(capture) = &options.capture {
+        if let Some(workspace) = app.workspace.as_mut() {
+            options.apply_capture(workspace);
         }
 
         // The harness needs a root widget with a concrete type, so wrap
         // the app's root view in a sized box.
-        // RUNEBENDER_SIZE=1000x680 renders at a chosen logical size for
-        // repeatable review captures.
-        let size = std::env::var("RUNEBENDER_SIZE")
-            .ok()
-            .and_then(|spec| {
-                let (w, h) = spec.split_once('x')?;
-                Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
-            })
-            .unwrap_or((1100, 720));
-        // Keep the logical layout fixed while exercising device-pixel scaling.
-        // This produces a true 2x proof rather than a larger, reflowed window.
-        let scale = std::env::var("RUNEBENDER_SCALE")
-            .ok()
-            .and_then(|value| value.parse::<f64>().ok())
-            .filter(|value| value.is_finite() && *value > 0.0)
-            .unwrap_or(1.0);
+        // The capture keeps the logical layout fixed at its size and applies the device-pixel
+        // scale to it, so a scale of 2 is a true 2x proof and not a larger, reflowed window.
         let background = app.background();
         screenshot::render_to(
             app,
             background,
             |app: &mut AppState| sized_box(root_logic(app)),
-            size,
-            scale,
-            &path,
+            capture.size,
+            capture.scale,
+            &capture.path,
         );
         return Ok(());
     }
@@ -255,11 +101,12 @@ pub(crate) fn run(
         };
         let content = root_logic(app);
         // RUNEBENDER_FRAME_STATS=1 renders every frame and reports the cadence on stderr.
-        let content = match std::env::var_os(crate::application::widgets::frame_stats::ENV) {
-            Some(_) => xilem::core::one_of::OneOf2::A(
-                crate::application::widgets::frame_stats::frame_stats(content),
-            ),
-            None => xilem::core::one_of::OneOf2::B(content),
+        let content = if options.frame_stats {
+            xilem::core::one_of::OneOf2::A(crate::application::widgets::frame_stats::frame_stats(
+                content,
+            ))
+        } else {
+            xilem::core::one_of::OneOf2::B(content)
         };
         #[cfg(target_os = "macos")]
         let content = xilem::view::resize_observer(
@@ -337,7 +184,98 @@ pub(crate) fn run(
         theme: window_theme,
         applied: initial_theme,
     };
-    masonry_winit::app::run_with(event_loop, windows, driver, default_property_set())
+    if let Some(target) = &options.frame_times {
+        frame_times::enable(target);
+    }
+    // This is `masonry_winit::app::run_with` with a clock around each event.
+    let _ = masonry::app::try_init_tracing();
+    let mut event_loop_state = TimedEventLoop {
+        state: MasonryState::new(event_loop.create_proxy(), windows, default_property_set()),
+        driver,
+    };
+    event_loop.run_app(&mut event_loop_state)
+}
+
+/// The Masonry event loop, with each window event reported to the frame time recorder.
+///
+/// It forwards every callback to [`MasonryState`] as the stock Masonry handler does.
+/// The recorder is off unless `RUNEBENDER_FRAME_TIMES` is set, and then a callback costs one
+/// read of a flag.
+struct TimedEventLoop<D> {
+    state: MasonryState,
+    driver: D,
+}
+
+impl<D: AppDriver> ApplicationHandler<MasonryUserEvent> for TimedEventLoop<D> {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        self.state.handle_resumed(event_loop, &mut self.driver);
+    }
+
+    fn suspended(&mut self, event_loop: &ActiveEventLoop) {
+        self.state.handle_suspended(event_loop);
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window: winit::window::WindowId,
+        event: WindowEvent,
+    ) {
+        let started = frame_times::start();
+        // The name of the event and whether the user caused it; `None` for a redraw.
+        let kind = match &event {
+            WindowEvent::RedrawRequested => None,
+            WindowEvent::CursorMoved { .. } => Some(("pointer move", true)),
+            WindowEvent::MouseInput { .. } => Some(("pointer button", true)),
+            WindowEvent::MouseWheel { .. }
+            | WindowEvent::PinchGesture { .. }
+            | WindowEvent::PanGesture { .. } => Some(("scroll", true)),
+            WindowEvent::KeyboardInput { .. } | WindowEvent::Ime(_) => Some(("key", true)),
+            WindowEvent::Touch(_) => Some(("touch", true)),
+            WindowEvent::Resized(_) => Some(("resize", false)),
+            _ => Some(("window event", false)),
+        };
+        self.state
+            .handle_window_event(event_loop, window, event, &mut self.driver);
+        match kind {
+            None => frame_times::redraw(started),
+            Some((name, user)) => frame_times::input(name, started, user),
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        device: winit::event::DeviceId,
+        event: winit::event::DeviceEvent,
+    ) {
+        self.state
+            .handle_device_event(event_loop, device, event, &mut self.driver);
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: MasonryUserEvent) {
+        let started = frame_times::start();
+        self.state
+            .handle_user_event(event_loop, event, &mut self.driver);
+        frame_times::input("background result", started, false);
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.state.handle_about_to_wait(event_loop);
+    }
+
+    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: winit::event::StartCause) {
+        self.state.handle_new_events(event_loop, cause);
+    }
+
+    fn exiting(&mut self, event_loop: &ActiveEventLoop) {
+        self.state.handle_exiting(event_loop);
+        frame_times::finish();
+    }
+
+    fn memory_warning(&mut self, event_loop: &ActiveEventLoop) {
+        self.state.handle_memory_warning(event_loop);
+    }
 }
 
 /// Forward Xilem events while keeping the application's single native window themed.
@@ -365,7 +303,9 @@ impl<D: AppDriver> AppDriver for WindowAppearanceDriver<D> {
         widget_id: WidgetId,
         action: ErasedAction,
     ) {
+        let started = frame_times::start();
         self.inner.on_action(window_id, ctx, widget_id, action);
+        frame_times::logic(started);
         self.sync_theme(window_id, ctx);
     }
 
@@ -375,11 +315,13 @@ impl<D: AppDriver> AppDriver for WindowAppearanceDriver<D> {
         ctx: &mut DriverCtx<'_>,
         action: ErasedAction,
     ) {
+        let started = frame_times::start();
         self.inner.on_async_action(window_id, ctx, action);
+        frame_times::logic(started);
         self.sync_theme(window_id, ctx);
     }
 
-    fn on_start(&mut self, state: &mut masonry_winit::app::MasonryState) {
+    fn on_start(&mut self, state: &mut MasonryState) {
         self.inner.on_start(state);
     }
 
@@ -401,34 +343,4 @@ impl<D: AppDriver> AppDriver for WindowAppearanceDriver<D> {
         self.inner.on_file_dropped(window_id, path, ctx);
         self.sync_theme(window_id, ctx);
     }
-}
-
-/// Propose the open glyph 64 units wider through the live tools, as a
-/// model would, so the proof view has something to compare.
-fn proof_sample(app: &mut crate::application::workspace::Workspace) {
-    use runebender::automation::agent::ToolCall;
-    let Some(source) = app.font.project.source_id(app.font.active()) else {
-        return;
-    };
-    let glyph = app.session.glyph_name.clone();
-    let read = app.call_live(&ToolCall {
-        name: "read_glyph".into(),
-        arguments: serde_json::json!({"glyph": glyph, "source": source.0}),
-    });
-    let x_min = read["advance"].as_f64().unwrap_or(0.0) / 2.0;
-    let proposed = app.call_live(&ToolCall {
-        name: "propose_edits".into(),
-        arguments: serde_json::json!({
-            "source": source.0, "task": "wider-sample",
-            "reason": "A sample proposal for the proof view",
-            "edits": [{"glyph": glyph, "expected_revision": read["revision"],
-                "operations": [
-                    {"op": "transform_points", "x_min": x_min, "dx": 64},
-                    {"op": "adjust_width", "delta": 64}
-                ]}]
-        }),
-    });
-    eprintln!("proof sample proposal: {proposed}");
-    app.refresh_proposals();
-    app.select_review_proposal(Some("wider-sample".into()));
 }

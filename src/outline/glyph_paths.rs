@@ -3,21 +3,14 @@
 
 //! Font outline contours → kurbo `BezPath`, shared by all Runebender editors.
 //!
-//! New document callers read canonical layers directly.
-//! Norad entry points remain for compatibility callers and format adapters.
+//! Every entry point reads canonical document layers.
+//! The historical UFO conversions used as test oracles are in `crate::testing::ufo_oracle`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use kurbo::{Affine, BezPath, Point};
-#[cfg(test)]
-use norad::{Contour, ContourPoint, Font, Glyph, PointType};
 
 use crate::font::model::smart_components::SmartComponentAxes;
-#[cfg(test)]
-use crate::font::model::smart_components::{
-    SMART_COMPONENT_AXES_KEY, SMART_COMPONENT_POLE_KEY, SMART_COMPONENT_VALUES_KEY,
-    SmartComponentPole, SmartComponentValues,
-};
 use crate::font::{ComponentView, ContourView, LayerPointType, LayerShapeView, LayerView};
 use crate::outline::drawing::{self, DrawingContour};
 
@@ -134,34 +127,6 @@ pub fn point_key(x: f64, y: f64) -> (i64, i64) {
     (round_units(x), round_units(y))
 }
 
-/// Build a `BezPath` for a glyph, with components resolved
-/// recursively through `font`.
-///
-/// Component transforms apply in full. A missing base glyph
-/// contributes nothing.
-#[cfg(test)]
-pub fn glyph_to_bezpath(glyph: &Glyph, font: &Font) -> BezPath {
-    let mut path = BezPath::new();
-    for contour in &glyph.contours {
-        append_contour(&mut path, contour);
-    }
-    if let Ok(preview) = super::metaballs::glyph_preview(glyph) {
-        path.extend(preview);
-    }
-    append_components(&mut path, glyph, font, Affine::IDENTITY, 0);
-    path
-}
-
-/// Only the glyph's own contours (no components).
-#[cfg(test)]
-pub fn contours_to_bezpath(glyph: &Glyph) -> BezPath {
-    let mut path = BezPath::new();
-    for contour in &glyph.contours {
-        append_contour(&mut path, contour);
-    }
-    path
-}
-
 /// Convert one canonical document layer's contours without constructing a UFO glyph.
 ///
 /// Hyperbezier contours use their spline solver; ordinary cubic and quadratic contours use their
@@ -246,148 +211,12 @@ pub fn canonical_component_to_bezpath<'a>(
     Ok(path)
 }
 
-/// Resolve one top-level canonical component into its ordinary structural path.
-///
-/// `root_name` keeps cycles through the containing glyph visible even though the returned path is
-/// scoped to one component.
-/// Use [`canonical_component_to_bezpath`] when smart-component or metaball rendering is required.
-pub fn ordinary_component_to_bezpath<'a>(
-    root_name: &str,
-    component: ComponentView<'a>,
-    mut resolve: impl FnMut(&str) -> Option<LayerView<'a>>,
-) -> Result<BezPath, ComponentResolveError> {
-    let name = component.reference();
-    if name == root_name {
-        return Err(ComponentResolveError::Cycle(vec![
-            root_name.to_owned(),
-            root_name.to_owned(),
-        ]));
-    }
-    let base = resolve(name).ok_or_else(|| ComponentResolveError::Missing(name.to_owned()))?;
-    let mut path = BezPath::new();
-    let mut stack = vec![root_name.to_owned(), name.to_owned()];
-    append_document_shapes(
-        &mut path,
-        base,
-        &mut resolve,
-        &mut stack,
-        component.transform(),
-    )?;
-    Ok(path)
-}
-
-/// One contour as a `BezPath`.
-#[cfg(test)]
-pub fn contour_to_bezpath(contour: &Contour) -> BezPath {
-    let mut path = BezPath::new();
-    append_contour(&mut path, contour);
-    path
-}
-
-/// Only the glyph's components, recursively resolved.
-#[cfg(test)]
-pub fn components_to_bezpath(glyph: &Glyph, font: &Font) -> BezPath {
-    let mut path = BezPath::new();
-    append_components(&mut path, glyph, font, Affine::IDENTITY, 0);
-    path
-}
-
 /// A sparse-layer pole: the axis tags it sits at the top of, and its
 /// point coordinates in that layer.
-type Pole = (BTreeSet<String>, Vec<(f64, f64)>);
+pub(crate) type Pole = (BTreeSet<String>, Vec<(f64, f64)>);
 
-/// The affine of a norad component transform.
-#[cfg(test)]
-pub fn component_affine(t: &norad::AffineTransform) -> Affine {
-    Affine::new([
-        t.x_scale, t.xy_scale, t.yx_scale, t.y_scale, t.x_offset, t.y_offset,
-    ])
-}
-
-/// Interpolated contours for a smart part at the given axis values.
-///
-/// Each smart axis has a bottom pole and a top pole. The bottom
-/// pole is the default glyph, or a layer marked `{axis: 1}`. The
-/// top pole is a layer marked `{axis: 2}`. A layer marked 2 on
-/// several axes is a corner pole.
-///
-/// The blend is the standard corner-delta (variation) model: the
-/// default plus, per pole layer, its inclusion-exclusion delta
-/// scaled by the product of the normalized values on that layer's
-/// top axes. For one axis that is plain linear interpolation; for
-/// two axes with all corners, bilinear.
-///
-/// Only point-compatible layers take part. Anything else falls
-/// back to the default outline.
-#[cfg(test)]
-fn smart_contours(
-    base: &Glyph,
-    font: &Font,
-    axes: &SmartComponentAxes,
-    values: &BTreeMap<String, f64>,
-) -> Option<Vec<Contour>> {
-    let flat = |glyph: &Glyph| -> Option<Vec<(f64, f64)>> {
-        if glyph.contours.len() != base.contours.len() {
-            return None;
-        }
-        let mut coords = Vec::new();
-        for (a, b) in base.contours.iter().zip(glyph.contours.iter()) {
-            if a.points.len() != b.points.len() {
-                return None;
-            }
-            for p in &b.points {
-                coords.push((p.x, p.y));
-            }
-        }
-        Some(coords)
-    };
-    let default_coords = flat(base)?;
-    let mut poles: Vec<Pole> = Vec::new();
-    for layer in font.layers.iter() {
-        let Some(candidate) = layer.get_glyph(base.name()) else {
-            continue;
-        };
-        let Some(pole) = candidate
-            .lib
-            .get(SMART_COMPONENT_POLE_KEY)
-            .and_then(|value| SmartComponentPole::from_plist(value).ok())
-        else {
-            continue;
-        };
-        let tops: BTreeSet<String> = axes
-            .axes()
-            .iter()
-            .filter(|axis| {
-                (axis.top_value() - axis.bottom_value()).abs() >= 1e-9 && pole.is_top(axis.name())
-            })
-            .map(|axis| axis.name().to_owned())
-            .collect();
-        if tops.is_empty() {
-            continue;
-        }
-        let coords = flat(candidate)?;
-        poles.push((tops, coords));
-    }
-    let coords = interpolate_smart_coordinates(axes, values, default_coords, poles)?;
-    // Reassemble along the default glyph's structure.
-    let mut out = Vec::with_capacity(base.contours.len());
-    let mut cursor = 0_usize;
-    for contour in &base.contours {
-        let points = contour
-            .points
-            .iter()
-            .map(|p| {
-                let (x, y) = coords[cursor];
-                cursor += 1;
-                ContourPoint::new(x, y, p.typ, p.smooth, None, None)
-            })
-            .collect();
-        out.push(Contour::new(points, None));
-    }
-    Some(out)
-}
-
-fn interpolate_smart_coordinates(
+/// Blend smart-component pole coordinates at the given axis values.
+pub(crate) fn interpolate_smart_coordinates(
     axes: &SmartComponentAxes,
     values: &BTreeMap<String, f64>,
     default_coords: Vec<(f64, f64)>,
@@ -527,81 +356,6 @@ fn canonical_smart_contours(
     Some(contours)
 }
 
-#[cfg(test)]
-fn append_components(
-    path: &mut BezPath,
-    glyph: &Glyph,
-    font: &Font,
-    parent_transform: Affine,
-    depth: u8,
-) {
-    // Guard against reference cycles in malformed UFOs.
-    if depth > 8 {
-        return;
-    }
-    let component_order: Vec<_> = (0..glyph.components.len()).collect();
-    let smart_values = glyph
-        .lib
-        .get(SMART_COMPONENT_VALUES_KEY)
-        .and_then(|value| SmartComponentValues::from_plist(value, &component_order).ok());
-    for (index, component) in glyph.components.iter().enumerate() {
-        let Some(base) = font.get_glyph(&component.base) else {
-            continue;
-        };
-        let t = component.transform;
-        let combined = parent_transform
-            * Affine::new([
-                t.x_scale, t.xy_scale, t.yx_scale, t.y_scale, t.x_offset, t.y_offset,
-            ]);
-        // A smart part with values interpolates between its poles.
-        let axes = base
-            .lib
-            .get(SMART_COMPONENT_AXES_KEY)
-            .and_then(|value| SmartComponentAxes::from_plist(value).ok());
-        let values = axes.as_ref().map(|axes| {
-            axes.axes()
-                .iter()
-                .filter_map(|axis| {
-                    smart_values
-                        .as_ref()?
-                        .value(index, axis.name())
-                        .map(|value| (axis.name().to_owned(), value))
-                })
-                .collect::<BTreeMap<_, _>>()
-        });
-        let smart = axes
-            .as_ref()
-            .zip(values)
-            .filter(|(_, values)| !values.is_empty())
-            .and_then(|(axes, values)| smart_contours(base, font, axes, &values));
-        match smart {
-            Some(contours) => {
-                for contour in &contours {
-                    let mut contour_path = BezPath::new();
-                    append_contour(&mut contour_path, contour);
-                    path.extend((combined * &contour_path).elements().iter().cloned());
-                }
-            }
-            None => {
-                for contour in &base.contours {
-                    let mut contour_path = BezPath::new();
-                    append_contour(&mut contour_path, contour);
-                    path.extend((combined * &contour_path).elements().iter().cloned());
-                }
-            }
-        }
-        if let Ok(preview) = super::metaballs::glyph_preview(base) {
-            path.extend(combined * preview);
-        }
-        append_components(path, base, font, combined, depth + 1);
-    }
-}
-
-#[cfg(test)]
-fn pt(p: &ContourPoint) -> Point {
-    Point::new(p.x, p.y)
-}
-
 #[derive(Clone, Copy)]
 struct OutlinePoint {
     position: Point,
@@ -610,26 +364,23 @@ struct OutlinePoint {
 
 fn append_document_contour(path: &mut BezPath, contour: ContourView<'_>) {
     if contour.is_hyper() {
-        let contour = crate::outline::path::hyper_model::Contour {
+        use crate::outline::path::hyper_model::{Contour, ContourPoint, PointType};
+        let closed = contour.is_closed();
+        let contour = Contour {
             points: contour
                 .points()
-                .map(|point| crate::outline::path::hyper_model::ContourPoint {
+                .enumerate()
+                .map(|(index, point)| ContourPoint {
                     x: point.position().x,
                     y: point.position().y,
                     smooth: point.is_smooth(),
                     point_type: match point.point_type() {
-                        LayerPointType::Move | LayerPointType::Curve => {
-                            crate::outline::path::hyper_model::PointType::Hyper
-                        }
-                        LayerPointType::Line => {
-                            crate::outline::path::hyper_model::PointType::HyperCorner
-                        }
-                        LayerPointType::OffCurve => {
-                            crate::outline::path::hyper_model::PointType::OffCurve
-                        }
-                        LayerPointType::QCurve => {
-                            crate::outline::path::hyper_model::PointType::QCurve
-                        }
+                        // The hyperbezier conversion reads an open contour from a leading move.
+                        _ if index == 0 && !closed => PointType::Move,
+                        LayerPointType::Move | LayerPointType::Curve => PointType::Hyper,
+                        LayerPointType::Line => PointType::HyperCorner,
+                        LayerPointType::OffCurve => PointType::OffCurve,
+                        LayerPointType::QCurve => PointType::QCurve,
                     },
                 })
                 .collect(),
@@ -647,6 +398,7 @@ fn append_document_contour(path: &mut BezPath, contour: ContourView<'_>) {
     append_points(path, &points, contour.is_closed());
 }
 
+/// Append canonical points of one contour, expanding implied quadratic on-curves.
 pub(crate) fn append_canonical_points(
     path: &mut BezPath,
     points: impl IntoIterator<Item = (Point, LayerPointType)>,
@@ -667,9 +419,6 @@ fn append_rendered_layer<'a>(
     stack: &mut Vec<String>,
     transform: Affine,
 ) -> Result<(), ComponentResolveError> {
-    if stack.len() > 64 {
-        return Err(ComponentResolveError::TooDeep);
-    }
     for contour in layer.contours() {
         let mut contour_path = BezPath::new();
         append_document_contour(&mut contour_path, contour);
@@ -687,9 +436,6 @@ fn append_rendered_components<'a>(
     stack: &mut Vec<String>,
     transform: Affine,
 ) -> Result<(), ComponentResolveError> {
-    if stack.len() > 64 {
-        return Err(ComponentResolveError::TooDeep);
-    }
     for component in layer.components() {
         append_rendered_component(path, layer, component, resolve, layers, stack, transform)?;
     }
@@ -705,36 +451,73 @@ fn append_rendered_component<'a>(
     stack: &mut Vec<String>,
     transform: Affine,
 ) -> Result<(), ComponentResolveError> {
-    if stack.len() > 64 {
-        return Err(ComponentResolveError::TooDeep);
-    }
     let name = component.reference();
+    let combined = transform * component.transform();
+    let base = resolve(name);
+    enter_component(
+        stack,
+        name,
+        base,
+        finite_transform(combined),
+        |base, stack| {
+            let candidates = layers(name);
+            match canonical_smart_contours(parent, component, base, &candidates) {
+                Some(contours) => {
+                    for contour in contours {
+                        let mut contour_path = BezPath::new();
+                        append_points(&mut contour_path, &contour.points, contour.closed);
+                        append_transformed_path(path, combined, contour_path)?;
+                    }
+                    append_document_metaballs(path, base, combined)?;
+                    append_rendered_components(path, base, resolve, layers, stack, combined)
+                }
+                None => append_rendered_layer(path, base, resolve, layers, stack, combined),
+            }
+        },
+    )
+}
+
+/// The deepest chain of nested components a layer may have.
+const MAX_COMPONENT_DEPTH: usize = 64;
+
+/// Enter one component reference and visit its base layer with the reference on `stack`.
+///
+/// `stack` holds the glyph names being resolved, outermost first, and `base` is the caller's
+/// resolution of `name`.
+/// The checks run in a fixed order: a name already on the stack is a cycle, an unresolved base is
+/// missing, then the caller's `ready` result applies, then a stack deeper than
+/// `MAX_COMPONENT_DEPTH` is too deep.
+pub(crate) fn enter_component<'a, T>(
+    stack: &mut Vec<String>,
+    name: &str,
+    base: Option<LayerView<'a>>,
+    ready: Result<(), ComponentResolveError>,
+    visit: impl FnOnce(LayerView<'a>, &mut Vec<String>) -> Result<T, ComponentResolveError>,
+) -> Result<T, ComponentResolveError> {
     if let Some(start) = stack.iter().position(|entry| entry == name) {
         let mut cycle = stack[start..].to_vec();
         cycle.push(name.to_owned());
         return Err(ComponentResolveError::Cycle(cycle));
     }
-    let base = resolve(name).ok_or_else(|| ComponentResolveError::Missing(name.to_owned()))?;
-    let combined = transform * component.transform();
-    if !combined.as_coeffs().iter().all(|value| value.is_finite()) {
-        return Err(ComponentResolveError::NonFinite);
-    }
-    let candidates = layers(name);
-    let smart = canonical_smart_contours(parent, component, base, &candidates);
+    let base = base.ok_or_else(|| ComponentResolveError::Missing(name.to_owned()))?;
+    ready?;
     stack.push(name.to_owned());
-    let result = if let Some(contours) = smart {
-        for contour in contours {
-            let mut contour_path = BezPath::new();
-            append_points(&mut contour_path, &contour.points, contour.closed);
-            append_transformed_path(path, combined, contour_path)?;
-        }
-        append_document_metaballs(path, base, combined)?;
-        append_rendered_components(path, base, resolve, layers, stack, combined)
+    let result = if stack.len() > MAX_COMPONENT_DEPTH {
+        Err(ComponentResolveError::TooDeep)
     } else {
-        append_rendered_layer(path, base, resolve, layers, stack, combined)
+        visit(base, stack)
     };
     stack.pop();
     result
+}
+
+/// Reject a component transform with a nonfinite coefficient.
+fn finite_transform(transform: Affine) -> Result<(), ComponentResolveError> {
+    if transform.as_coeffs().iter().all(|value| value.is_finite()) {
+        Ok(())
+    } else {
+        Err(ComponentResolveError::NonFinite)
+    }
 }
 
 fn append_document_metaballs(
@@ -780,37 +563,24 @@ fn append_document_shapes<'a>(
     stack: &mut Vec<String>,
     transform: Affine,
 ) -> Result<(), ComponentResolveError> {
-    if stack.len() > 64 {
-        return Err(ComponentResolveError::TooDeep);
-    }
     for shape in layer.shapes() {
         match shape {
             LayerShapeView::Contour(contour) => {
                 let mut contour_path = BezPath::new();
                 append_document_contour(&mut contour_path, contour);
-                let transformed = transform * contour_path;
-                if !transformed.elements().iter().all(path_element_is_finite) {
-                    return Err(ComponentResolveError::NonFinite);
-                }
-                path.extend(transformed.elements().iter().copied());
+                append_transformed_path(path, transform, contour_path)?;
             }
             LayerShapeView::Component(component) => {
                 let name = component.reference();
-                if let Some(start) = stack.iter().position(|entry| entry == name) {
-                    let mut cycle = stack[start..].to_vec();
-                    cycle.push(name.to_owned());
-                    return Err(ComponentResolveError::Cycle(cycle));
-                }
-                let base =
-                    resolve(name).ok_or_else(|| ComponentResolveError::Missing(name.to_owned()))?;
                 let combined = transform * component.transform();
-                if !combined.as_coeffs().iter().all(|value| value.is_finite()) {
-                    return Err(ComponentResolveError::NonFinite);
-                }
-                stack.push(name.to_owned());
-                let result = append_document_shapes(path, base, resolve, stack, combined);
-                stack.pop();
-                result?;
+                let base = resolve(name);
+                enter_component(
+                    stack,
+                    name,
+                    base,
+                    finite_transform(combined),
+                    |base, stack| append_document_shapes(path, base, resolve, stack, combined),
+                )?;
             }
         }
     }
@@ -827,41 +597,6 @@ fn path_element_is_finite(element: &kurbo::PathEl) -> bool {
         }
         kurbo::PathEl::ClosePath => true,
     }
-}
-
-#[cfg(test)]
-fn append_contour(path: &mut BezPath, contour: &Contour) {
-    let points = &contour.points;
-    if points.is_empty() {
-        return;
-    }
-    // Hyperbezier contours carry only on-curve points; their curves
-    // come from the spline solver, not the point list.
-    if crate::outline::path::hyper_model::norad_contour_is_hyper(contour) {
-        let ws = crate::outline::path::hyper_model::Contour::from_norad(contour);
-        crate::outline::path::Path::from_contour(&ws).append_to_bezpath(path);
-        return;
-    }
-    let points: Vec<_> = points
-        .iter()
-        .map(|point| OutlinePoint {
-            position: pt(point),
-            kind: match point.typ {
-                PointType::Move => LayerPointType::Move,
-                PointType::Line => LayerPointType::Line,
-                PointType::OffCurve => LayerPointType::OffCurve,
-                PointType::Curve => LayerPointType::Curve,
-                PointType::QCurve => LayerPointType::QCurve,
-            },
-        })
-        .collect();
-    append_points(
-        path,
-        &points,
-        points
-            .first()
-            .is_none_or(|point| point.kind != LayerPointType::Move),
-    );
 }
 
 fn append_points(path: &mut BezPath, points: &[OutlinePoint], closed: bool) {
@@ -950,12 +685,17 @@ fn append_points(path: &mut BezPath, points: &[OutlinePoint], closed: bool) {
 mod canonical_render_tests {
     use super::*;
     use crate::font::model::glyph_metadata::{Metaball, MetaballGroup, Metaballs};
+    use crate::font::model::smart_components::{
+        SMART_COMPONENT_AXES_KEY, SMART_COMPONENT_POLE_KEY, SMART_COMPONENT_VALUES_KEY,
+    };
     use crate::font::project::Project;
     use crate::font::source::SourceInput;
     use crate::font::variable::{GlyphLayerAddress, LayerId, SourceId};
     use crate::formats::metadata::metaballs::write_metaballs;
+    use crate::testing::ufo_oracle::{contours_to_bezpath, glyph_to_bezpath};
     use kurbo::Shape;
     use norad::{AffineTransform, Component, Name};
+    use norad::{Contour, ContourPoint, Font, Glyph, PointType};
 
     fn rectangle(name: &str, x1: f64, y1: f64) -> Glyph {
         let mut glyph = Glyph::new(name);
@@ -1098,7 +838,8 @@ mod canonical_render_tests {
         ));
         let expected = glyph_to_bezpath(&user, &font);
         font.default_layer_mut().insert_glyph(user);
-        let project = Project::from_source(SourceInput::from_font(font, "Hyper.ufo".into()));
+        let project = Project::from_source(SourceInput::from_font(font, "Hyper.ufo".into()))
+            .expect("valid source fixture");
         let id = project
             .document_source(SourceId(0))
             .expect("default source")
@@ -1112,6 +853,50 @@ mod canonical_render_tests {
         assert_path_and_bounds(
             &canonical_component_path(&project, "hyper.user", &id, 0),
             &expected,
+        );
+    }
+
+    #[test]
+    fn open_hyperbezier_contour_renders_open() {
+        use kurbo::ParamCurve as _;
+        let mut glyph = Glyph::new("hyper");
+        glyph.contours.push(Contour::new(
+            vec![
+                ContourPoint::new(0.0, 0.0, PointType::Move, false, None, None),
+                ContourPoint::new(100.0, 200.0, PointType::Curve, true, None, None),
+                ContourPoint::new(200.0, 0.0, PointType::Curve, true, None, None),
+                ContourPoint::new(300.0, 150.0, PointType::Line, false, None, None),
+            ],
+            Some(norad::Identifier::new("hyper-open").unwrap()),
+        ));
+        let mut font = Font::default();
+        font.default_layer_mut().insert_glyph(glyph);
+        let project = Project::from_source(SourceInput::from_font(font, "Hyper.ufo".into()))
+            .expect("valid source fixture");
+        let id = project
+            .document_source(SourceId(0))
+            .expect("default source")
+            .default_layer();
+        let canonical = project.document_layer("hyper", &id).expect("hyper layer");
+        let contour = canonical.contours().next().expect("hyper contour");
+        assert!(contour.is_hyper());
+        assert!(!contour.is_closed());
+
+        let path = ordinary_layer_contours_to_bezpath(canonical);
+        assert!(
+            !path
+                .elements()
+                .iter()
+                .any(|element| matches!(element, kurbo::PathEl::ClosePath)),
+            "an open hyperbezier contour must not close: {path:?}"
+        );
+        assert_eq!(
+            path.elements().first(),
+            Some(&kurbo::PathEl::MoveTo((0.0, 0.0).into()))
+        );
+        assert_eq!(
+            path.segments().last().map(|segment| segment.end()),
+            Some((300.0, 150.0).into())
         );
     }
 
@@ -1147,7 +932,8 @@ mod canonical_render_tests {
             font.default_layer_mut().insert_glyph(glyph);
         }
         let expected = glyph_to_bezpath(font.get_glyph("top").unwrap(), &font);
-        let project = Project::from_source(SourceInput::from_font(font, "Affine.ufo".into()));
+        let project = Project::from_source(SourceInput::from_font(font, "Affine.ufo".into()))
+            .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()
@@ -1184,7 +970,8 @@ mod canonical_render_tests {
         ));
         proposal.insert_glyph(top.clone());
         let expected = glyph_to_bezpath(&top, &font);
-        let project = Project::from_source(SourceInput::from_font(font, "Overlay.ufo".into()));
+        let project = Project::from_source(SourceInput::from_font(font, "Overlay.ufo".into()))
+            .expect("valid source fixture");
         let selected = LayerId {
             source: SourceId(0),
             name: "com.runebender.proposal.test".into(),
@@ -1217,7 +1004,8 @@ mod canonical_render_tests {
         font.default_layer_mut()
             .insert_glyph(rectangle("base", 80.0, 50.0));
         font.default_layer_mut().insert_glyph(top);
-        let project = Project::from_source(SourceInput::from_font(font, "NonFinite.ufo".into()));
+        let project = Project::from_source(SourceInput::from_font(font, "NonFinite.ufo".into()))
+            .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()
@@ -1287,7 +1075,8 @@ mod canonical_render_tests {
         }
         let direct_expected = glyph_to_bezpath(font.get_glyph("blob").unwrap(), &font);
         let nested_expected = glyph_to_bezpath(font.get_glyph("top").unwrap(), &font);
-        let project = Project::from_source(SourceInput::from_font(font, "Metaballs.ufo".into()));
+        let project = Project::from_source(SourceInput::from_font(font, "Metaballs.ufo".into()))
+            .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()
@@ -1344,7 +1133,8 @@ mod canonical_render_tests {
             .unwrap()
             .insert_glyph(wide);
         let expected = glyph_to_bezpath(&user, &font);
-        let project = Project::from_source(SourceInput::from_font(font, "SmartOne.ufo".into()));
+        let project = Project::from_source(SourceInput::from_font(font, "SmartOne.ufo".into()))
+            .expect("valid source fixture");
         let layer = LayerId {
             source: SourceId(0),
             name: "proposal.smart".into(),
@@ -1391,7 +1181,8 @@ mod canonical_render_tests {
         );
         font.default_layer_mut().insert_glyph(user);
         let expected = glyph_to_bezpath(font.get_glyph("boxdemo").unwrap(), &font);
-        let project = Project::from_source(SourceInput::from_font(font, "SmartTwo.ufo".into()));
+        let project = Project::from_source(SourceInput::from_font(font, "SmartTwo.ufo".into()))
+            .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()
@@ -1431,7 +1222,8 @@ mod canonical_render_tests {
             }
             font.default_layer_mut().insert_glyph(glyph);
         }
-        let project = Project::from_source(SourceInput::from_font(font, "SmartDepth.ufo".into()));
+        let project = Project::from_source(SourceInput::from_font(font, "SmartDepth.ufo".into()))
+            .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()
@@ -1455,7 +1247,8 @@ mod canonical_render_tests {
             .push(component("top", AffineTransform::default()));
         let mut font = Font::default();
         font.default_layer_mut().insert_glyph(top);
-        let project = Project::from_source(SourceInput::from_font(font, "Cycle.ufo".into()));
+        let project = Project::from_source(SourceInput::from_font(font, "Cycle.ufo".into()))
+            .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()
@@ -1473,7 +1266,27 @@ mod canonical_render_tests {
 
 #[cfg(test)]
 mod smart_component_tests {
-    use super::*;
+    use crate::font::project::{Project, SourceInput};
+    use crate::font::variable::{GlyphLayerAddress, SourceId};
+    use kurbo::{BezPath, Shape as _};
+    use norad::{Font, Glyph};
+
+    /// Render one glyph of the font's default layer through the canonical document.
+    fn rendered(font: &Font, glyph: &str) -> BezPath {
+        let project =
+            Project::from_source(SourceInput::from_font(font.clone(), "Smart.ufo".into()))
+                .expect("valid source fixture");
+        let layer = project
+            .document_source(SourceId(0))
+            .expect("default source")
+            .default_layer();
+        project
+            .document_layer_path(&GlyphLayerAddress {
+                glyph: glyph.into(),
+                layer,
+            })
+            .expect("renders")
+    }
 
     #[test]
     fn smart_component_interpolates_between_poles() {
@@ -1525,10 +1338,9 @@ mod smart_component_tests {
             "com.schriftgestaltung.Glyphs.componentsSmartComponentValues".into(),
             plist::Value::Array(vec![plist::Value::Dictionary(values)]),
         );
-        font.default_layer_mut().insert_glyph(user.clone());
-        use kurbo::Shape as _;
-        let path = components_to_bezpath(&user, &font);
-        let bbox = path.bounding_box();
+        let mut plain = user.clone();
+        font.default_layer_mut().insert_glyph(user);
+        let bbox = rendered(&font, "smartdemo").bounding_box();
         // Halfway between 200 and 500.
         assert!(
             (bbox.x1 - 350.0).abs() < 1.0,
@@ -1536,12 +1348,11 @@ mod smart_component_tests {
             bbox.x1
         );
         // No value -> the plain narrow base.
-        let mut plain = user.clone();
         plain
             .lib
             .remove("com.schriftgestaltung.Glyphs.componentsSmartComponentValues");
-        let plain_path = components_to_bezpath(&plain, &font);
-        assert!((plain_path.bounding_box().x1 - 200.0).abs() < 1.0);
+        font.default_layer_mut().insert_glyph(plain);
+        assert!((rendered(&font, "smartdemo").bounding_box().x1 - 200.0).abs() < 1.0);
     }
 
     #[test]
@@ -1608,9 +1419,8 @@ mod smart_component_tests {
             "com.schriftgestaltung.Glyphs.componentsSmartComponentValues".into(),
             plist::Value::Array(vec![plist::Value::Dictionary(values)]),
         );
-        font.default_layer_mut().insert_glyph(user.clone());
-        use kurbo::Shape as _;
-        let bbox = components_to_bezpath(&user, &font).bounding_box();
+        font.default_layer_mut().insert_glyph(user);
+        let bbox = rendered(&font, "boxdemo").bounding_box();
         // Bilinear at (.5,.5): w = 100 + .5*300 + .5*0 + .25*(500-400-100+100)
         //                        = 100 + 150 + 25 = 275
         //                      h = 100 + 0 + .5*200 + .25*(350-100-300+100)

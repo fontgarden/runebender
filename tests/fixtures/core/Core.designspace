@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<designspace format="5.0">
+  <axes>
+    <axis name="Weight" tag="wght" minimum="400" default="400" maximum="700"/>
+  </axes>
+  <sources>
+    <source filename="Core-Regular.ufo" familyname="Runebender Core Fixture" stylename="Regular">
+      <location><dimension name="Weight" xvalue="400"/></location>
+    </source>
+    <source filename="Core-Bold.ufo" familyname="Runebender Core Fixture" stylename="Bold">
+      <location><dimension name="Weight" xvalue="700"/></location>
+    </source>
+  </sources>
+  <instances>
+    <instance name="Regular" stylename="Regular"><location><dimension name="Weight" xvalue="400"/></location></instance>
+    <instance name="Medium" stylename="Medium"><location><dimension name="Weight" xvalue="500"/></location></instance>
+    <instance name="Semibold" stylename="Semibold"><location><dimension name="Weight" xvalue="600"/></location></instance>
+    <instance name="Bold" stylename="Bold"><location><dimension name="Weight" xvalue="700"/></location></instance>
+  </instances>
+</designspace>

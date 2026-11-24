@@ -28,6 +28,8 @@ pub(crate) fn scripts_panel(app: &Workspace) -> impl WidgetView<Workspace> + use
     let editor = draft.map(|draft| {
         let dirty = if draft.dirty {
             "Unsaved changes"
+        } else if draft.saved_name.is_some() {
+            "Saved"
         } else {
             "Not saved"
         };

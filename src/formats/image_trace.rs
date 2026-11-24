@@ -476,18 +476,26 @@ const MAX_PLACED_IMAGE_PIXELS: u64 = 64_000_000;
 /// origin at the lower left corner and y up, to font units. The outline lands on the ink of the
 /// image as it is shown, at any size; nothing is fitted into a glyph box. This is how a word or
 /// a line of calligraphy is traced. The placement must scale both axes equally and not rotate.
+/// `grid_spacing` supplies the edit context's design grid; `dot_grid` overrides it.
 pub fn trace_image_placed(
     image_bytes: &[u8],
     placement: kurbo::Affine,
     options: PlacedTraceOptions,
+    grid_spacing: f64,
 ) -> Result<crate::font::ImportedContours, String> {
-    crate::formats::ufo::decode_contours(&placed_contours(image_bytes, placement, options)?)
+    crate::formats::ufo::decode_contours(&placed_contours(
+        image_bytes,
+        placement,
+        options,
+        grid_spacing,
+    )?)
 }
 
 fn placed_contours(
     image_bytes: &[u8],
     placement: kurbo::Affine,
     options: PlacedTraceOptions,
+    grid_spacing: f64,
 ) -> Result<Vec<norad::Contour>, String> {
     use img2bez::PointKind;
     use img2bez::image::{ImageReader, guess_format};
@@ -531,7 +539,7 @@ fn placed_contours(
     let spacing = if options.dot_grid {
         crate::outline::point_ops::DOT_GRID_SPACING
     } else {
-        crate::outline::point_ops::grid_spacing()
+        grid_spacing
     };
     let snap = |value| crate::outline::point_ops::snap_to_spacing(value, spacing);
     let contours: Vec<norad::Contour> = outline
@@ -598,12 +606,23 @@ mod placed_tests {
             profile: TraceProfile::Clean,
             ..Default::default()
         };
-        let contours = placed_contours(&block_png(), placement, options).unwrap();
+        let contours = placed_contours(
+            &block_png(),
+            placement,
+            options,
+            crate::outline::point_ops::DEFAULT_GRID_SPACING,
+        )
+        .unwrap();
         assert_eq!(contours.len(), 1);
         assert_eq!(
-            trace_image_placed(&block_png(), placement, options)
-                .unwrap()
-                .len(),
+            trace_image_placed(
+                &block_png(),
+                placement,
+                options,
+                crate::outline::point_ops::DEFAULT_GRID_SPACING
+            )
+            .unwrap()
+            .len(),
             1
         );
         // the block spans x 40..120 px and, from the bottom, y 40..80 px
@@ -623,13 +642,13 @@ mod placed_tests {
 
     #[test]
     fn a_placed_trace_lands_on_the_design_grid() {
-        let spacing = crate::outline::point_ops::grid_spacing();
+        let spacing = 3.0;
         let placement = kurbo::Affine::new([3.7, 0.0, 0.0, 3.7, 11.0, -7.0]);
         let options = PlacedTraceOptions {
             profile: TraceProfile::Clean,
             ..Default::default()
         };
-        for contour in placed_contours(&block_png(), placement, options).unwrap() {
+        for contour in placed_contours(&block_png(), placement, options, spacing).unwrap() {
             for point in contour.points {
                 assert_eq!(point.x % spacing, 0.0, "{}", point.x);
                 assert_eq!(point.y % spacing, 0.0, "{}", point.y);
@@ -646,7 +665,13 @@ mod placed_tests {
             dot_grid: true,
             ..Default::default()
         };
-        let contours = placed_contours(&block_png(), placement, options).unwrap();
+        let contours = placed_contours(
+            &block_png(),
+            placement,
+            options,
+            crate::outline::point_ops::DEFAULT_GRID_SPACING,
+        )
+        .unwrap();
         assert!(!contours.is_empty());
         for contour in contours {
             for point in contour.points {
@@ -659,8 +684,12 @@ mod placed_tests {
     #[test]
     fn a_rotated_or_uneven_placement_is_refused() {
         let uneven = kurbo::Affine::new([10.0, 0.0, 0.0, 12.0, 0.0, 0.0]);
-        assert!(trace_image_placed(&block_png(), uneven, PlacedTraceOptions::default()).is_err());
+        assert!(
+            trace_image_placed(&block_png(), uneven, PlacedTraceOptions::default(), 1.0).is_err()
+        );
         let turned = kurbo::Affine::rotate(0.3);
-        assert!(trace_image_placed(&block_png(), turned, PlacedTraceOptions::default()).is_err());
+        assert!(
+            trace_image_placed(&block_png(), turned, PlacedTraceOptions::default(), 1.0).is_err()
+        );
     }
 }

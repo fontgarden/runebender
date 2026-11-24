@@ -1,0 +1,18 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<glyph name="n" format="2">
+  <advance width="672" />
+  <unicode hex="006E" />
+  <anchor name="top" x="320" y="520" />
+  <outline>
+    <contour>
+      <point x="32" y="0" type="line" />
+      <point x="32" y="500" type="line" />
+      <point x="608" y="500" type="line" />
+      <point x="608" y="0" type="line" />
+      <point x="480" y="0" type="line" />
+      <point x="480" y="420" type="line" />
+      <point x="160" y="420" type="line" />
+      <point x="160" y="0" type="line" />
+    </contour>
+  </outline>
+</glyph>

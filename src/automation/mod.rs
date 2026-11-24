@@ -20,3 +20,7 @@ pub mod live_socket;
 pub mod prompts;
 pub mod script_recipe;
 pub mod tool_contracts;
+
+/// Maximum number of tool calls the MCP stdio server queues for its ordered worker.
+/// A call that arrives while the queue is full is rejected without running.
+pub const MAX_MCP_QUEUED_REQUESTS: usize = 32;

@@ -3,8 +3,10 @@
 
 //! Agent operations on the editor-owned project, with no filesystem reads or saves.
 
+use serde::Deserialize as _;
 use serde_json::{Value, json};
 
+use super::agent_edit::EditAuthorization;
 use super::{agent, script_recipe};
 use crate::font::{
     LayerView,
@@ -78,6 +80,14 @@ pub fn tools() -> Vec<agent::Tool> {
         parameters: json!({"type":"object", "properties":{}, "additionalProperties":false}),
     });
     result.push(agent::Tool {
+        name: "editor_set_source".into(),
+        description: "Navigate to an editable master by stable source ID. Requires a fresh editor context. Does not write or save a glyph.".into(),
+        parameters: json!({"type":"object","properties":{
+            "source":{"type":"integer","minimum":0},
+            "expected_context_revision":{"type":"string"}
+        },"required":["source","expected_context_revision"],"additionalProperties":false}),
+    });
+    result.push(agent::Tool {
         name: "editor_open_glyph".into(),
         description: "Open a named glyph in the current editor tab while preserving its text and preview context, active source and current tool. Rejects an active canvas gesture. Does not edit or save the font.".into(),
         parameters: json!({"type":"object", "properties":{
@@ -136,7 +146,7 @@ pub fn tools() -> Vec<agent::Tool> {
     });
     result.push(agent::Tool {
         name: "flag_glyph".into(),
-        description: "Mark one live glyph pink with a dated note so the designer looks at it: the agent's needs-eyes flag. Refuses glyphs marked green, purple or yellow, which only the designer grades, and never clears a mark. The note is appended to the glyph's UFO note and stays with the font until the designer removes it. Give one reason with a number, such as 'kink at 312,640' or 'stem 136 against a median of 192'.".into(),
+        description: "Mark one live glyph pink with a dated note so the designer looks at it: the agent's needs-eyes flag. Refuses glyphs marked green or yellow, which only the designer grades, and purple drafts, which wait for the designer's review, and never clears a mark. The note is appended to the glyph's UFO note and stays with the font until the designer removes it. Give one reason with a number, such as 'kink at 312,640' or 'stem 136 against a median of 192'.".into(),
         parameters: json!({"type":"object", "properties":{
             "glyph":{"type":"string","minLength":1},
             "reason":{"type":"string","minLength":3,"maxLength":400},
@@ -224,6 +234,7 @@ pub fn tools() -> Vec<agent::Tool> {
         if !matches!(
             tool.name.as_str(),
             "editor_context"
+                | "editor_set_source"
                 | "editor_open_glyph"
                 | "editor_review"
                 | "editor_select_points"
@@ -418,6 +429,7 @@ fn handle(project: &mut Project, name: &str, args: &Value) -> Result<Value, Stri
     if matches!(
         name,
         "editor_context"
+            | "editor_set_source"
             | "editor_open_glyph"
             | "editor_review"
             | "editor_select_points"
@@ -431,7 +443,10 @@ fn handle(project: &mut Project, name: &str, args: &Value) -> Result<Value, Stri
     if matches!(
         name,
         "proposal_install" | "experiment_apply" | "experiment_undo_apply"
-    ) && object.get("authorization").and_then(Value::as_str) != Some("user-approved")
+    ) && !object
+        .get("authorization")
+        .and_then(|value| EditAuthorization::deserialize(value).ok())
+        .is_some_and(EditAuthorization::is_user_approved)
     {
         return Err(
             "explicit user authorization required: set authorization to user-approved only after the user asks"
@@ -458,7 +473,7 @@ fn handle(project: &mut Project, name: &str, args: &Value) -> Result<Value, Stri
             "precedence":"A later layer wins where it disagrees with an earlier one: font over personal over default.",
             "files": crate::automation::context::to_json(&files),
             "documentation":["https://runebender.org/docs/type-design.html", "https://runebender.org/docs/mcp.html", "https://runebender.org/llms-full.txt"],
-            "workflow":["Read the project DESIGN.md with your file tools and the official type-design guide with your web tools.",
+            "workflow":["Read the font's design rules with design_context and the official type-design guide with your web tools.",
                 "Confirm stable source identities, Unicode mapping, mark meanings, reference glyphs and target glyphs. Missing and empty are different.",
                 "Read references and targets, then inspect actual proof images. If your client does not deliver images, stop visual judgments and report the limitation.",
                 "Draft explicit contours or point edits with foreground revisions. Keep green references unchanged unless asked. For multiple masters preserve compatible point structure or report incompatibility.",
@@ -864,7 +879,7 @@ fn handle(project: &mut Project, name: &str, args: &Value) -> Result<Value, Stri
                 .get("reason")
                 .and_then(Value::as_str)
                 .map(str::trim)
-                .filter(|reason| (3..=400).contains(&reason.len()))
+                .filter(|reason| (3..=400).contains(&reason.chars().count()))
                 .ok_or("reason is required, 3 to 400 characters")?;
             if reason.chars().any(|c| c.is_control()) {
                 return Err("reason must be one line without control characters".into());
@@ -886,8 +901,13 @@ fn handle(project: &mut Project, name: &str, args: &Value) -> Result<Value, Stri
                     layer.note().map(str::to_owned),
                 )
             };
+            if previous.as_deref() == Some("purple") {
+                return Err(format!(
+                    "{glyph} is a purple draft that waits for the designer's review; report it in words instead"
+                ));
+            }
             if let Some(label) = previous.as_deref()
-                && matches!(label, "green" | "purple" | "yellow")
+                && matches!(label, "green" | "yellow")
             {
                 return Err(format!(
                     "{glyph} is marked {label}, a grade only the designer changes; report it in words instead"

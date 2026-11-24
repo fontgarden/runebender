@@ -28,7 +28,7 @@ The coordinator's earlier scratch trial and retained model evidence remain in `/
    Inspect any error; Cancel stops a pending trace, while Release or Retry becomes available after it settles.
 5. Choose **Open comparison**, then **Run** to produce unchanged and changed proofs.
    Inspect the Arabic word and outline before selecting the changed proof or Python node and choosing **Apply**.
-6. Try Cmd+Z and Cmd+Shift+Z in Nodes to verify Undo and Redo.
+6. Try Cmd+Z and Cmd+Shift+Z in Graph to verify Undo and Redo.
 
 If an existing comparison contains the default Latin proof, reselect the Arabic occurrence in Text before creating another graph.
 The current UI rejects mismatched proof context rather than silently comparing the wrong text.
@@ -51,5 +51,6 @@ The selected green reference remains review context and is not fed to this model
 Keep failures and corrections as evidence for future training; do not auto-approve the output.
 
 A saved Latin e sketch from FontGarden's clean1/generalize packet also ran through the native adapter: two contours, 28 points, recognizable e shape.
-This control uses three samples, temperature 0.5, identity 1.0 and seed 0; the Brush uses these same sampling defaults.
+This control uses three samples, temperature 0.5, identity 1.0 and seed 0.
+The Brush uses one sample at temperature 0 and seed 0.
 Neither trial establishes optical approval or release readiness.

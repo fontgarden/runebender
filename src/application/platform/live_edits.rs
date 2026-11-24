@@ -8,7 +8,7 @@ use runebender::automation::agent_cancellation::{
     AgentCancellationError, AgentCancellationIdentity, AgentCancellationTerminal, AgentCommitClaim,
 };
 use runebender::automation::agent_edit::{
-    AgentEditRequest,
+    AgentEditRequest, EditAuthorization,
     results::{AgentApplyResponse, AgentHistoryResponse, AgentReceiptResponse},
 };
 use runebender::automation::agent_session::{
@@ -21,7 +21,7 @@ use runebender::font::project::CanonicalDocumentEditTransaction;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::application::workspace::Workspace;
+use crate::application::workspace::{DocumentGroupScope, Workspace};
 
 pub(crate) const MAX_ACTORS: usize = 8;
 pub(crate) const RECEIPTS_PER_ACTOR: usize = 256;
@@ -40,7 +40,7 @@ struct HistoryRequest {
     expected_document_epoch: String,
     actor: String,
     operation_key: String,
-    authorization: String,
+    authorization: EditAuthorization,
     direction: ReplayDirection,
 }
 
@@ -118,24 +118,16 @@ impl Workspace {
         self.apply_agent_edit_candidate(request, None, None)
     }
 
-    /// Commit a host-retained preview through the same authorization, cancellation and history path.
+    /// Commit a host-retained graph result through the same authorization, cancellation and
+    /// history path, bound to its graph ancestry as well as its explicit edit intent.
     /// Only the candidate owner supplies this pair; it is not a transport entry point.
-    pub(crate) fn apply_retained_agent_edit(
-        &mut self,
-        request: AgentEditRequest,
-        candidate: CanonicalDocumentEditTransaction,
-    ) -> Value {
-        self.apply_retained_agent_edit_bound(request, candidate, None)
-    }
-
-    /// Bind a retained DAG result to its graph ancestry as well as its explicit edit intent.
     pub(crate) fn apply_retained_agent_edit_bound(
         &mut self,
         request: AgentEditRequest,
         candidate: CanonicalDocumentEditTransaction,
-        payload_digest: Option<AgentPayloadDigest>,
+        payload_digest: AgentPayloadDigest,
     ) -> Value {
-        self.apply_agent_edit_candidate(request, Some(candidate), payload_digest)
+        self.apply_agent_edit_candidate(request, Some(candidate), Some(payload_digest))
     }
 
     fn apply_agent_edit_candidate(
@@ -170,7 +162,7 @@ impl Workspace {
             .expect("validated native endpoint remains available")
             .cancellations();
         let payload_digest = retained_digest.unwrap_or_else(|| request.payload_digest());
-        if request.authorization != "user-approved" {
+        if !request.authorization.is_user_approved() {
             let _ = cancellations.release_unqueued(&cancellation_identity, payload_digest);
             return failure(
                 "authorization_required",
@@ -268,7 +260,7 @@ impl Workspace {
                 ..
             } = applied.receipt().outcome()
         {
-            self.record_agent_group(*history_group, change);
+            self.record_document_group(*history_group, change, DocumentGroupScope::Contextual);
         }
         serde_json::to_value(AgentApplyResponse::from_engine(
             applied.receipt(),
@@ -303,7 +295,7 @@ impl Workspace {
     }
 
     fn replay_agent_edit(&mut self, request: HistoryRequest) -> Value {
-        if request.authorization != "user-approved" {
+        if !request.authorization.is_user_approved() {
             return failure(
                 "authorization_required",
                 "history replay requires existing user authorization",
@@ -327,7 +319,7 @@ impl Workspace {
             ReplayDirection::Undo => HistoryDirection::Undo,
             ReplayDirection::Redo => HistoryDirection::Redo,
         };
-        match self.replay_agent_group(group, direction) {
+        match self.replay_document_group(group, direction) {
             Ok(replay) => serde_json::to_value(AgentHistoryResponse::from_engine(
                 &receipt,
                 &self.font.project,

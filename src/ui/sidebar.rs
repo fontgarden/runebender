@@ -9,7 +9,6 @@
 //! port of runebender-web's glyphSidebarData.ts and the matching
 //! functions in Runebender.vue.
 
-use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use serde::Deserialize;
@@ -79,8 +78,6 @@ pub struct LanguageGroup {
     pub id: String,
     /// Label shown on the group row.
     pub label: String,
-    /// Icon text for the group; the shells no longer draw it.
-    pub icon: String,
     /// What the group row itself selects: the script's own Unicode
     /// blocks. The glyphsets carry Latin punctuation, so OR-ing the
     /// sub-filters would drag half the Latin alphabet in.
@@ -355,7 +352,6 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             LanguageGroup {
                 id: "Arab".into(),
                 label: "Arabic".into(),
-                icon: "ض".into(),
                 // Arabic, Supplement, Extended-A/B, presentation forms.
                 script_ranges: vec![
                     (0x0600, 0x06ff),
@@ -392,7 +388,6 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             LanguageGroup {
                 id: "Hans".into(),
                 label: "Chinese".into(),
-                icon: "字".into(),
                 script_ranges: Vec::new(),
                 name_suffix: None,
                 filters: vec![CharacterFilter {
@@ -407,7 +402,6 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             LanguageGroup {
                 id: "Cyrl".into(),
                 label: "Cyrillic".into(),
-                icon: "Я".into(),
                 script_ranges: vec![(0x0400, 0x052f), (0x2de0, 0x2dff), (0xa640, 0xa69f)],
                 name_suffix: None,
                 filters: glyphset_filters_for_script("Cyrillic"),
@@ -415,7 +409,6 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             LanguageGroup {
                 id: "Deva".into(),
                 label: "Devanagari".into(),
-                icon: "दे".into(),
                 script_ranges: Vec::new(),
                 name_suffix: None,
                 filters: vec![CharacterFilter {
@@ -430,7 +423,6 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             LanguageGroup {
                 id: "Grek".into(),
                 label: "Greek".into(),
-                icon: "Ω".into(),
                 script_ranges: vec![(0x0370, 0x03ff), (0x1f00, 0x1fff)],
                 name_suffix: None,
                 filters: glyphset_filters_for_script("Greek"),
@@ -438,7 +430,6 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             LanguageGroup {
                 id: "Hebr".into(),
                 label: "Hebrew".into(),
-                icon: "א".into(),
                 script_ranges: vec![(0x0590, 0x05ff), (0xfb1d, 0xfb4f)],
                 name_suffix: Some("-hb".into()),
                 filters: vec![
@@ -479,7 +470,6 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             LanguageGroup {
                 id: "Jpan".into(),
                 label: "Japanese".into(),
-                icon: "あ".into(),
                 script_ranges: Vec::new(),
                 name_suffix: None,
                 filters: vec![CharacterFilter {
@@ -494,7 +484,6 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             LanguageGroup {
                 id: "Kore".into(),
                 label: "Korean".into(),
-                icon: "한".into(),
                 script_ranges: Vec::new(),
                 name_suffix: None,
                 filters: vec![CharacterFilter {
@@ -509,7 +498,6 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             LanguageGroup {
                 id: "Latn".into(),
                 label: "Latin".into(),
-                icon: "G".into(),
                 script_ranges: vec![
                     (0x0041, 0x024f),
                     (0x1e00, 0x1eff),
@@ -522,7 +510,6 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             LanguageGroup {
                 id: "Thai".into(),
                 label: "Thai".into(),
-                icon: "ก".into(),
                 script_ranges: Vec::new(),
                 name_suffix: None,
                 filters: vec![CharacterFilter {
@@ -536,23 +523,45 @@ pub fn language_groups() -> &'static [LanguageGroup] {
             },
         ];
         // Remaining scripts that only exist as glyphsets.
-        for (id, label, icon, script) in [
-            ("Phon", "Phonetics", "ə", "Phonetics"),
-            ("Tran", "TransLatin", "Ǧ", "TransLatin"),
+        for (id, label, script) in [
+            ("Phon", "Phonetics", "Phonetics"),
+            ("Tran", "TransLatin", "TransLatin"),
         ] {
             let filters = glyphset_filters_for_script(script);
             if !filters.is_empty() {
                 groups.push(LanguageGroup {
                     id: id.into(),
                     label: label.into(),
-                    icon: icon.into(),
                     script_ranges: Vec::new(),
                     name_suffix: None,
                     filters,
                 });
             }
         }
+        // A filter is listed under its script, so its label leaves out the script's name.
+        for group in &mut groups {
+            for filter in &mut group.filters {
+                filter.label = label_within_group(&group.label, &filter.label);
+            }
+        }
         groups
+    })
+}
+
+/// A filter label shown under the group `group`: the group's name removed wherever it is a
+/// whole word, with the first letter capitalized. A label that is only the group's name stays.
+fn label_within_group(group: &str, label: &str) -> String {
+    let words: Vec<&str> = label
+        .split_whitespace()
+        .filter(|word| *word != group)
+        .collect();
+    if words.is_empty() {
+        return label.to_owned();
+    }
+    let joined = words.join(" ");
+    let mut chars = joined.chars();
+    chars.next().map_or(joined.clone(), |first| {
+        first.to_uppercase().chain(chars).collect()
     })
 }
 
@@ -590,31 +599,6 @@ pub fn builtin_filters() -> &'static [BuiltinFilter] {
         }
         filters
     })
-}
-
-/// The targets a filter still misses in a font: no glyph carries the
-/// target's name or codepoint. Only target-bearing filters can
-/// report missing glyphs. This is the web's
-/// `missingTargetsForCharacterFilter`.
-pub fn missing_targets<'f>(
-    glyphs: &[(String, Vec<u32>)],
-    filter: &'f CharacterFilter,
-) -> Vec<&'f GlyphTarget> {
-    if filter.targets.is_empty() {
-        return Vec::new();
-    }
-    let names: HashSet<&str> = glyphs.iter().map(|(name, _)| name.as_str()).collect();
-    let codepoints: HashSet<u32> = glyphs
-        .iter()
-        .flat_map(|(_, cps)| cps.iter().copied())
-        .collect();
-    filter
-        .targets
-        .iter()
-        .filter(|target| {
-            !names.contains(target.name.as_str()) && !codepoints.contains(&target.unicode)
-        })
-        .collect()
 }
 
 /// Report whether a glyph, by name or codepoint, belongs to a
@@ -784,10 +768,38 @@ pub fn glyph_matches_subfilter(name: &str, codepoints: &[u32], subfilter: &str) 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn filter_labels_leave_out_their_script_name() {
+        assert_eq!(label_within_group("Hebrew", "Hebrew letters"), "Letters");
+        assert_eq!(
+            label_within_group("Hebrew", "Google Fonts Hebrew"),
+            "Google Fonts"
+        );
+        assert_eq!(
+            label_within_group("Hebrew", "Hebrew points and marks"),
+            "Points and marks"
+        );
+        assert_eq!(label_within_group("Latin", "GF Latin Core"), "GF Core");
+        assert_eq!(label_within_group("Devanagari", "Devanagari"), "Devanagari");
+        assert_eq!(label_within_group("Japanese", "Kana + Han"), "Kana + Han");
+        let hebrew = language_groups()
+            .iter()
+            .find(|group| group.label == "Hebrew")
+            .unwrap();
+        assert!(
+            hebrew
+                .filters
+                .iter()
+                .all(|filter| !filter.label.contains("Hebrew"))
+        );
+    }
+
     use super::*;
 
+    #[cfg(feature = "integration-fonts")]
     fn fixture_glyphs() -> Vec<(String, Vec<u32>)> {
-        let font = norad::Font::load(crate::testing::fonts::regular_ufo()).expect("fixture font");
+        let font =
+            norad::Font::load(crate::testing::fonts::virtua_regular_ufo()).expect("fixture font");
         font.iter_layers()
             .next()
             .expect("default layer")
@@ -801,6 +813,7 @@ mod tests {
             .collect()
     }
 
+    #[cfg(feature = "integration-fonts")]
     fn count_filter(glyphs: &[(String, Vec<u32>)], filter: &CharacterFilter) -> usize {
         glyphs
             .iter()
@@ -841,6 +854,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "integration-fonts")]
     #[test]
     fn fixture_font_coverage_matches_the_web_sidebar() {
         let glyphs = fixture_glyphs();
@@ -870,6 +884,7 @@ mod tests {
         assert_eq!(latin_core.expected_count, Some(324));
     }
 
+    #[cfg(feature = "integration-fonts")]
     #[test]
     fn language_group_rows_match_scripts_not_glyphset_latin() {
         let glyphs = fixture_glyphs();

@@ -6,6 +6,85 @@
 use super::*;
 
 impl TextBuffer {
+    /// Direction of the bidi run containing the active glyph.
+    pub fn active_run_is_rtl(&self) -> Option<bool> {
+        let active = self.active_sort()?;
+        let (start, end) = self.line_range_for_number(self.line_number_for_sort(active));
+        self.visual_runs_for_line(start, end)
+            .iter()
+            .find(|r| r.visual_order().contains(&active))
+            .map(|r| r.rtl)
+    }
+
+    /// Pair on a physical side of the active shaped sort, in font kerning order.
+    pub fn active_visual_kern(&self, left: bool) -> Option<(&str, &str, f64)> {
+        let active = self.active_sort()?;
+        let (start, end) = self.line_range_for_number(self.line_number_for_sort(active));
+        let runs = self.visual_runs_for_line(start, end);
+        for run in runs.iter() {
+            let mut previous = None;
+            for &index in run.visual_order() {
+                if self.sorts[index].absorbed {
+                    continue;
+                }
+                if let Some(prev) = previous
+                    && ((left && index == active) || (!left && prev == active))
+                {
+                    let (first, second) = if run.rtl {
+                        (index, prev)
+                    } else {
+                        (prev, index)
+                    };
+                    let a = self.sort_glyph_name(first)?;
+                    let b = self.sort_glyph_name(second)?;
+                    return Some((a, b, self.lookup_kerning(a, b)));
+                }
+                previous = Some(index);
+            }
+        }
+        None
+    }
+
+    /// Set a temporary displacement at one visual boundary, after shaping.
+    pub fn preview_drag_gap(&mut self, gap: Option<(usize, f64)>) {
+        self.drag_gap = gap;
+    }
+
+    /// Logical pair ending at the grabbed sort, plus the visual boundary to move.
+    pub fn drag_pair(&self, grabbed: usize) -> Option<(&str, &str, usize, bool, f64)> {
+        let (start, end) = self.line_range_for_number(self.line_number_for_sort(grabbed));
+        let runs = self.visual_runs_for_line(start, end);
+        let run = runs.iter().find(|r| r.sorts.contains(&grabbed))?;
+        let at = run.sorts.iter().position(|&i| i == grabbed)?;
+        let prev = *run.sorts[..at]
+            .iter()
+            .rev()
+            .find(|&&i| !self.sorts[i].absorbed)?;
+        let a = self.sort_glyph_name(prev)?;
+        let b = self.sort_glyph_name(grabbed)?;
+        Some((
+            a,
+            b,
+            if run.rtl { prev } else { grabbed },
+            run.rtl,
+            self.lookup_kerning(a, b),
+        ))
+    }
+
+    /// Match the card's most specific existing pair, then use available groups.
+    pub fn kern_scope(&self, a: &str, b: &str) -> [bool; 2] {
+        let [ga, gb] = self.pair_groups(a, b);
+        [[false, false], [false, true], [true, false], [true, true]]
+            .into_iter()
+            .find(|s| {
+                let x = if s[0] { ga } else { Some(a) };
+                let y = if s[1] { gb } else { Some(b) };
+                x.zip(y)
+                    .is_some_and(|(x, y)| self.stored_kern(x, y).is_some())
+            })
+            .unwrap_or([ga.is_some(), gb.is_some()])
+    }
+
     /// Index of the sort being dragged in a manual kerning session, or `None` when no drag is in progress.
     pub fn manual_kerning_sort(&self) -> Option<usize> {
         self.manual_kerning.map(|session| session.sort_index)
@@ -13,12 +92,30 @@ impl TextBuffer {
 
     /// Replace the kerning model. Any manual kerning edits in the old model are lost.
     pub fn set_kerning_model(&mut self, kerning: TextKerningModel) {
+        self.kerning = Arc::new(kerning);
+    }
+
+    /// Replace the kerning model with one shared between buffers, without copying it.
+    pub fn set_shared_kerning_model(&mut self, kerning: Arc<TextKerningModel>) {
         self.kerning = kerning;
     }
 
     /// The current kerning model, including pairs written by manual kerning.
     pub fn kerning_model(&self) -> &TextKerningModel {
         &self.kerning
+    }
+
+    /// Groups for the logical first and second members of a shaped pair.
+    pub fn pair_groups(&self, first: &str, second: &str) -> [Option<&str>; 2] {
+        [
+            self.kerning.right_groups.get(first).map(String::as_str),
+            self.kerning.left_groups.get(second).map(String::as_str),
+        ]
+    }
+
+    /// Stored value at exactly this scope, including an explicit zero.
+    pub fn stored_kern(&self, first: &str, second: &str) -> Option<f64> {
+        self.kerning.kerning.get(first)?.get(second).copied()
     }
 
     /// Start dragging the kerning of the pair that ends at `sort_index`, with the pointer at `start_x`.
@@ -96,17 +193,18 @@ impl TextBuffer {
     }
 
     pub(super) fn set_direct_kerning(&mut self, left: &str, right: &str, value: f64) {
+        // This buffer's own pairs change, so it takes its own copy of a shared model.
+        let kerning = &mut Arc::make_mut(&mut self.kerning).kerning;
         if value == 0.0 {
-            if let Some(pairs) = self.kerning.kerning.get_mut(left) {
+            if let Some(pairs) = kerning.get_mut(left) {
                 pairs.remove(right);
                 if pairs.is_empty() {
-                    self.kerning.kerning.remove(left);
+                    kerning.remove(left);
                 }
             }
             return;
         }
-        self.kerning
-            .kerning
+        kerning
             .entry(left.to_string())
             .or_default()
             .insert(right.to_string(), value);

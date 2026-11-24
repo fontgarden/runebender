@@ -41,7 +41,6 @@ use super::model::glyph_metadata::{
     COMPOSITION_RECIPE_KEY, ComponentAlignment, LEFT_METRICS_KEY, MARK_COLOR_KEY, MARK_LABEL_KEY,
     METABALLS_KEY, MarkColor, Metaballs, MetricsFormula, RIGHT_METRICS_KEY, parse_metrics_key,
 };
-use super::model::hoi::HoiIntermediates;
 use super::model::smart_components::{
     SmartComponentAxes, SmartComponentPole, SmartComponentValues,
 };
@@ -255,7 +254,6 @@ pub(super) struct LayerPreservation {
     smart_component_axes: Option<SmartComponentAxes>,
     smart_component_values: Option<SmartComponentValues<ComponentId>>,
     smart_component_pole: Option<SmartComponentPole>,
-    hoi_intermediates: Option<HoiIntermediates>,
     contours: Vec<PreservedContour>,
     components: Vec<PreservedComponent>,
     anchors: Vec<PreservedAnchor>,
@@ -455,6 +453,15 @@ impl CanonicalLayerSnapshot {
         &self.address
     }
 
+    pub(super) fn matches_layer(&self, layer: &Layer, preserved: &LayerPreservation) -> bool {
+        self.layer == *layer && self.preserved == *preserved
+    }
+
+    pub(super) fn contours_only_at(&self, address: super::variable::GlyphLayerAddress) -> Self {
+        let (layer, preserved) = copy_contours_only(&self.layer, &self.preserved, &address.layer);
+        Self::new(address, layer, preserved)
+    }
+
     /// Read immutable canonical geometry and stable object identities from this snapshot.
     pub fn view(&self) -> LayerView<'_> {
         LayerView::new(&self.layer, &self.preserved)
@@ -558,6 +565,7 @@ pub struct PastedContours {
 pub struct LayerEditDraft {
     layer: Layer,
     preserved: LayerPreservation,
+    grid_spacing: f64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -565,6 +573,11 @@ pub(super) struct LayerDelta {
     pub(super) geometry: bool,
     pub(super) metrics: bool,
     pub(super) metadata: bool,
+    /// The Unicode code points changed. Also counted in `metadata`.
+    pub(super) codepoints: bool,
+    /// The anchors or components changed: the inputs of generated mark features.
+    /// Also counted in `geometry` or `metadata`.
+    pub(super) mark_inputs: bool,
 }
 
 impl LayerDelta {

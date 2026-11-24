@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use masonry::kurbo::{Affine, BezPath, Point};
+use masonry::kurbo::{BezPath, Point};
 use runebender::text::buffer::{TextBuffer, TextDirection, TextGlyphInventory, TextKerningModel};
 
 use crate::application::font_model::FontModel;
@@ -26,14 +26,16 @@ use crate::application::font_model::FontModel;
 /// both. So the view passes this, which is plain data, and the widget
 /// builds the buffer on the other side. The buffer then lives where the
 /// editing happens, which is where it wanted to live anyway.
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub(crate) struct TextInputs {
     /// Document and tab identity. A change means the widget must restore a
     /// different parked buffer instead of refreshing the current one.
     context_id: (u64, u64),
-    inventory: TextGlyphInventory,
-    kerning: TextKerningModel,
-    outlines: Arc<Vec<(String, Arc<BezPath>)>>,
+    inventory: Arc<TextGlyphInventory>,
+    kerning: Arc<TextKerningModel>,
+    outlines: GlyphOutlines,
+    /// The glyph being edited and its unsaved outline, drawn in place of its entry above.
+    live_outline: Option<(String, Arc<BezPath>)>,
     compiled: Option<Arc<Vec<u8>>>,
     normalized: Vec<f64>,
     line_height: f64,
@@ -56,6 +58,44 @@ pub(crate) struct TextInputs {
     language: Option<String>,
 }
 
+/// Whether two shared values are the same allocation, or hold equal contents.
+/// The first check is what makes comparing unchanged inputs cheap.
+fn same<T: PartialEq>(a: &Arc<T>, b: &Arc<T>) -> bool {
+    Arc::ptr_eq(a, b) || a == b
+}
+
+impl PartialEq for TextInputs {
+    /// A widget compares its inputs on every rebuild, so the glyph inventory, kerning model
+    /// and outlines are compared by identity before by content. Unchanged inputs share them.
+    fn eq(&self, other: &Self) -> bool {
+        self.context_id == other.context_id
+            && self.normalized == other.normalized
+            && self.line_height == other.line_height
+            && self.ascender == other.ascender
+            && self.descender == other.descender
+            && self.initial == other.initial
+            && self.active_glyph == other.active_glyph
+            && self.initial_selection == other.initial_selection
+            && self.direction == other.direction
+            && self.feature_overrides == other.feature_overrides
+            && self.script == other.script
+            && self.language == other.language
+            && match (&self.compiled, &other.compiled) {
+                (Some(a), Some(b)) => same(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+            && match (&self.live_outline, &other.live_outline) {
+                (Some((a_name, a)), Some((b_name, b))) => a_name == b_name && same(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+            && same(&self.inventory, &other.inventory)
+            && same(&self.kerning, &other.kerning)
+            && self.outlines == other.outlines
+    }
+}
+
 /// What `TextInputs::new` last read, with the document state it read it from.
 ///
 /// Every rebuild of a view with a text line asks for the inputs again, and reading them walks
@@ -66,13 +106,101 @@ pub(crate) struct CachedTextInputs {
     inputs: TextInputs,
 }
 
+/// Glyph outlines by name, shared between the text inputs and every buffer made from them.
+///
+/// Two values are equal when they are the same shared source, which is how unchanged inputs
+/// compare; sources built separately are treated as different.
+#[derive(Clone)]
+pub(crate) struct GlyphOutlines(Arc<OutlineSource>);
+
+enum OutlineSource {
+    /// Outlines listed by name.
+    Listed(std::collections::HashMap<String, Arc<BezPath>>),
+    /// The glyph list's outlines, in its order, with its name index.
+    /// Sharing the index means an edit copies no names, only one pointer per glyph.
+    Model {
+        index: Arc<std::collections::HashMap<String, usize>>,
+        outlines: Vec<Arc<BezPath>>,
+    },
+    /// A compiled font at one location. A glyph is drawn the first time text shows it;
+    /// drawing all of them after every compile took longer than the rest of a rebuild.
+    Compiled {
+        font: Arc<runebender::font::compiler::CompiledFont>,
+        normalized: Vec<f64>,
+        drawn: std::sync::Mutex<std::collections::HashMap<String, Option<Arc<BezPath>>>>,
+    },
+}
+
+impl Default for GlyphOutlines {
+    fn default() -> Self {
+        Self(Arc::new(OutlineSource::Listed(
+            std::collections::HashMap::new(),
+        )))
+    }
+}
+
+impl PartialEq for GlyphOutlines {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl GlyphOutlines {
+    fn compiled(font: Arc<runebender::font::compiler::CompiledFont>, normalized: Vec<f64>) -> Self {
+        Self(Arc::new(OutlineSource::Compiled {
+            font,
+            normalized,
+            drawn: std::sync::Mutex::default(),
+        }))
+    }
+
+    fn contains(&self, name: &str) -> bool {
+        match &*self.0 {
+            OutlineSource::Listed(outlines) => outlines.contains_key(name),
+            OutlineSource::Model { index, .. } => index.contains_key(name),
+            OutlineSource::Compiled { font, .. } => font.glyph_ids.contains_key(name),
+        }
+    }
+
+    fn get(&self, name: &str) -> Option<Arc<BezPath>> {
+        match &*self.0 {
+            OutlineSource::Listed(outlines) => outlines.get(name).cloned(),
+            OutlineSource::Model { index, outlines } => outlines.get(*index.get(name)?).cloned(),
+            OutlineSource::Compiled {
+                font,
+                normalized,
+                drawn,
+            } => {
+                let mut drawn = drawn.lock().unwrap_or_else(|error| error.into_inner());
+                if let Some(found) = drawn.get(name) {
+                    return found.clone();
+                }
+                let outline = match font.outline(name, normalized) {
+                    Ok(outline) => outline.map(Arc::new),
+                    Err(error) => {
+                        runebender::text::shape::log_shaping_failure(&error);
+                        None
+                    }
+                };
+                drawn.insert(name.to_owned(), outline.clone());
+                outline
+            }
+        }
+    }
+}
+
 /// The compiled preview font read at one normalized location: every glyph's outline and
 /// advance, which take a pass over the whole binary to extract.
 pub(crate) struct CachedTextLocation {
+    kerning: Arc<TextKerningModel>,
     compiled: Arc<runebender::font::compiler::CompiledFont>,
     normalized: Vec<f64>,
-    outlines: Arc<Vec<(String, Arc<BezPath>)>>,
-    advances: Vec<(String, f64)>,
+    outlines: GlyphOutlines,
+    advances: std::collections::HashMap<String, f64>,
+    /// The inventory these advances were applied to, and the result. Applying them walks every
+    /// glyph, so it is done once for a compiled font and inventory, not on every rebuild.
+    base_inventory: Arc<TextGlyphInventory>,
+    inventory: Arc<TextGlyphInventory>,
 }
 
 impl TextInputs {
@@ -90,12 +218,72 @@ impl TextInputs {
         if let Some(cached) = cache.as_ref().filter(|cached| cached.key == key) {
             return cached.inputs.clone();
         }
-        let inputs = Self::read(font);
+        let inputs = cache
+            .as_ref()
+            .and_then(|cached| Self::follow_layer_edits(font, cached, key))
+            .unwrap_or_else(|| Self::read(font));
         *cache = Some(CachedTextInputs {
             key,
             inputs: inputs.clone(),
         });
         inputs
+    }
+
+    /// The inputs after layer edits to a few glyphs, made from the inputs before them.
+    ///
+    /// Reading the inputs generates mark features from every glyph's anchors, which is most of
+    /// its cost. A layer edit that changed no anchors, components or code points leaves the
+    /// features and the code point map as they were, so only the edited glyphs' advances and
+    /// the outline list are read again.
+    /// `None` when the inputs have to be read in full.
+    fn follow_layer_edits(
+        font: &FontModel,
+        cached: &CachedTextInputs,
+        key: (u64, usize, usize),
+    ) -> Option<Self> {
+        // Another master or a changed glyph list is a different inventory.
+        if (cached.key.1, cached.key.2) != (key.1, key.2) {
+            return None;
+        }
+        let changes = font.project.layer_changes_since(cached.key.0)?;
+        if changes
+            .iter()
+            .any(|change| change.codepoints || change.mark_inputs)
+        {
+            return None;
+        }
+        let source = font
+            .project
+            .document_sources()
+            .nth(font.project.active)?
+            .id();
+        let mut inputs = cached.inputs.clone();
+        if changes.iter().any(|change| change.metrics) {
+            let mut inventory = (*inputs.inventory).clone();
+            inventory.refresh_widths(
+                &font.project,
+                source,
+                changes
+                    .iter()
+                    .filter(|change| change.metrics)
+                    .map(|change| change.glyph.as_str()),
+            )?;
+            inputs.inventory = Arc::new(inventory);
+        }
+        inputs.outlines = Self::model_outlines(font);
+        Some(inputs)
+    }
+
+    /// Every glyph's outline as the glyph list holds it.
+    fn model_outlines(font: &FontModel) -> GlyphOutlines {
+        GlyphOutlines(Arc::new(OutlineSource::Model {
+            index: font.name_index(),
+            outlines: font
+                .glyphs
+                .iter()
+                .map(|glyph| glyph.outline.clone())
+                .collect(),
+        }))
     }
 
     fn read(font: &FontModel) -> Self {
@@ -107,16 +295,16 @@ impl TextInputs {
             .id();
         Self {
             context_id: (0, 0),
-            inventory: TextGlyphInventory::from_project(&font.project, source)
-                .expect("the active source has canonical text inputs"),
-            kerning: TextKerningModel::from_project(&font.project, source)
-                .expect("the active source has canonical kerning inputs"),
-            outlines: Arc::new(
-                font.glyphs
-                    .iter()
-                    .map(|glyph| (glyph.name.clone(), glyph.outline.clone()))
-                    .collect(),
+            inventory: Arc::new(
+                TextGlyphInventory::from_project(&font.project, source)
+                    .expect("the active source has canonical text inputs"),
             ),
+            kerning: Arc::new(
+                TextKerningModel::from_project(&font.project, source)
+                    .expect("the active source has canonical kerning inputs"),
+            ),
+            outlines: Self::model_outlines(font),
+            live_outline: None,
             compiled: None,
             normalized: Vec::new(),
             line_height: (font.units_per_em().max(font.ascender()) - font.descender()).max(1.0),
@@ -132,6 +320,11 @@ impl TextInputs {
         }
     }
 
+    pub(crate) fn for_editor(app: &crate::application::workspace::Workspace) -> Self {
+        let inputs = Self::for_glyph(&app.font, app.session.root_glyph());
+        inputs.located(&app.font, &app.axis_values, app.on_active_master())
+    }
+
     /// Read a master and remember the glyph whose editor tab is open.
     pub(crate) fn for_glyph(font: &FontModel, glyph_name: &str) -> Self {
         let mut inputs = Self::new(font);
@@ -145,7 +338,11 @@ impl TextInputs {
 
     /// Preview the live variable font at the sliders' user coordinates.
     /// Advances, kerning, substitutions and outlines come from the same binary.
-    pub(crate) fn with_location(mut self, font: &FontModel, values: &[f64]) -> Self {
+    pub(crate) fn with_location(self, font: &FontModel, values: &[f64]) -> Self {
+        self.located(font, values, false)
+    }
+
+    fn located(mut self, font: &FontModel, values: &[f64], editing_master: bool) -> Self {
         if font.glyphs.is_empty() {
             return self;
         }
@@ -157,7 +354,21 @@ impl TextInputs {
                 axis.user_to_normalized(values.get(index).copied().unwrap_or(axis.default))
             })
             .collect();
-        if let Ok(Some(compiled)) = font.preview_font() {
+        // An outline nudge invalidates the compiled font. Keep shaping with
+        // the previous binary during the rebuild so neighbors keep their origins.
+        // At a master the outlines themselves always come from the live source.
+        let compiled = match font.preview_font() {
+            Ok(Some(compiled)) => Some(compiled),
+            Ok(None) if editing_master => font
+                .text_location
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref()
+                .filter(|c| c.kerning == self.kerning)
+                .map(|c| c.compiled.clone()),
+            _ => None,
+        };
+        if let Some(compiled) = compiled {
             self.normalized = compiled
                 .axis_tags
                 .iter()
@@ -174,45 +385,51 @@ impl TextInputs {
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
             let fresh = cache.as_ref().is_some_and(|c| {
-                Arc::ptr_eq(&c.compiled, &compiled) && c.normalized == self.normalized
+                Arc::ptr_eq(&c.compiled, &compiled)
+                    && c.normalized == self.normalized
+                    && Arc::ptr_eq(&c.base_inventory, &self.inventory)
             });
             if !fresh {
-                let outlines = match compiled.outlines(&self.normalized) {
-                    Ok(outlines) => Arc::new(outlines),
-                    Err(error) => {
-                        runebender::text::shape::log_shaping_failure(&error);
-                        return self;
-                    }
-                };
+                let outlines = GlyphOutlines::compiled(compiled.clone(), self.normalized.clone());
+                let advances: std::collections::HashMap<String, f64> = compiled
+                    .advances(&self.normalized)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect();
+                let mut inventory = (*self.inventory).clone();
+                for (name, advance) in &advances {
+                    inventory.set_advance(name.clone(), *advance);
+                }
                 *cache = Some(CachedTextLocation {
+                    kerning: self.kerning.clone(),
                     compiled: compiled.clone(),
                     normalized: self.normalized.clone(),
                     outlines,
-                    advances: compiled.advances(&self.normalized).unwrap_or_default(),
+                    advances,
+                    base_inventory: self.inventory.clone(),
+                    inventory: Arc::new(inventory),
                 });
             }
             let located = cache.as_ref().expect("the location was just read");
-            self.outlines = located.outlines.clone();
-            self.compiled = Some(compiled.bytes.clone());
-            for (name, advance) in &located.advances {
-                if let Some((active, _, width)) = &mut self.active_glyph
-                    && active == name
-                {
-                    *width = *advance;
-                }
-                self.inventory.set_advance(name.clone(), *advance);
+            if !editing_master {
+                self.outlines = located.outlines.clone();
             }
+            self.compiled = Some(compiled.bytes.clone());
+            if let Some((active, _, width)) = &mut self.active_glyph
+                && let Some(advance) = located.advances.get(active.as_str())
+            {
+                *width = *advance;
+            }
+            self.inventory = located.inventory.clone();
         }
         self
     }
 
     /// Substitute the editor's live draft without recompiling the shaping font.
     pub(crate) fn with_live_outline(mut self, name: &str, outline: Arc<BezPath>) -> Self {
-        if let Some((_, path)) = Arc::make_mut(&mut self.outlines)
-            .iter_mut()
-            .find(|(glyph, _)| glyph == name)
-        {
-            *path = outline;
+        // Kept beside the shared outlines; replacing one entry in them would copy them all.
+        if self.outlines.contains(name) {
+            self.live_outline = Some((name.to_owned(), outline));
         }
         self
     }
@@ -282,7 +499,8 @@ pub(crate) struct TextState {
     ascender: f64,
     descender: f64,
     /// Outlines by glyph name, so painting does not touch the font.
-    outlines: Arc<Vec<(String, Arc<BezPath>)>>,
+    outlines: GlyphOutlines,
+    live_outline: Option<(String, Arc<BezPath>)>,
 }
 
 impl TextState {
@@ -299,13 +517,19 @@ impl TextState {
         }
         let project = runebender::font::project::Project::from_source(
             runebender::font::project::SourceInput::from_font(font, "text-test.ufo".into()),
-        );
+        )
+        .expect("valid source fixture");
         let source = project.source_id(0).unwrap();
         Self::new(&TextInputs {
             context_id: (0, 0),
-            inventory: TextGlyphInventory::from_project(&project, source).unwrap(),
-            kerning: TextKerningModel::from_project(&project, source).unwrap(),
-            outlines: Arc::new(Vec::new()),
+            inventory: TextGlyphInventory::from_project(&project, source)
+                .unwrap()
+                .into(),
+            kerning: TextKerningModel::from_project(&project, source)
+                .unwrap()
+                .into(),
+            outlines: GlyphOutlines::default(),
+            live_outline: None,
             compiled: None,
             normalized: Vec::new(),
             line_height: 1000.0,
@@ -324,18 +548,17 @@ impl TextState {
     /// A buffer wired to a master.
     pub(crate) fn new(inputs: &TextInputs) -> Self {
         let mut buffer = TextBuffer::new();
-        buffer.set_glyph_inventory(inputs.inventory.clone());
+        buffer.set_shared_glyph_inventory(inputs.inventory.clone());
         buffer.set_compiled_font(inputs.compiled.clone(), inputs.normalized.clone());
-        buffer.set_kerning_model(inputs.kerning.clone());
+        buffer.set_shared_kerning_model(inputs.kerning.clone());
         buffer.set_feature_overrides(inputs.feature_overrides.clone());
         buffer.set_shaping_locale(inputs.script.clone(), inputs.language.clone());
         match inputs.direction {
             Some(direction) => buffer.set_direction(direction),
             None => buffer.set_auto_direction(),
         }
-        for character in inputs.initial.chars() {
-            buffer.insert_character(character);
-        }
+        // The stored text holds a line break as a line ending, so restore it as one.
+        buffer.insert_text(&inputs.initial);
         if let Some((name, codepoint, advance)) = &inputs.active_glyph {
             let existing = {
                 buffer
@@ -349,11 +572,11 @@ impl TextState {
                 None if buffer.is_empty() => {
                     // An empty line still needs the open glyph as an edit target.
                     buffer.insert_glyph(name.clone(), *codepoint, *advance);
+                    buffer.shape_arabic_if_rtl();
                 }
                 None => {} // Preserve a supplied line without the open glyph.
             }
         }
-        buffer.shape_arabic_if_rtl();
         if let Some((start, end)) = inputs.initial_selection {
             buffer.select_range(start, end);
         }
@@ -364,6 +587,7 @@ impl TextState {
             ascender: inputs.ascender,
             descender: inputs.descender,
             outlines: inputs.outlines.clone(),
+            live_outline: inputs.live_outline.clone(),
         }
     }
 
@@ -371,10 +595,11 @@ impl TextState {
     /// or editing a glyph changes advances and outlines, and a text line
     /// that does not follow is showing yesterday's spacing.
     pub(crate) fn refresh(&mut self, inputs: &TextInputs) {
-        self.buffer.set_glyph_inventory(inputs.inventory.clone());
+        self.buffer
+            .set_shared_glyph_inventory(inputs.inventory.clone());
         self.buffer
             .set_compiled_font(inputs.compiled.clone(), inputs.normalized.clone());
-        self.buffer.set_kerning_model(inputs.kerning.clone());
+        self.buffer.set_shared_kerning_model(inputs.kerning.clone());
         self.buffer
             .set_feature_overrides(inputs.feature_overrides.clone());
         self.buffer
@@ -397,16 +622,17 @@ impl TextState {
         }
         self.buffer.refresh_shaping();
         self.outlines = inputs.outlines.clone();
+        self.live_outline = inputs.live_outline.clone();
         self.line_height = inputs.line_height;
         self.ascender = inputs.ascender;
         self.descender = inputs.descender;
     }
 
-    fn outline(&self, name: &str) -> Option<&Arc<BezPath>> {
-        self.outlines
-            .iter()
-            .find(|(candidate, _)| candidate == name)
-            .map(|(_, path)| path)
+    fn outline(&self, name: &str) -> Option<Arc<BezPath>> {
+        match &self.live_outline {
+            Some((live, path)) if live == name => Some(path.clone()),
+            _ => self.outlines.get(name),
+        }
     }
 
     /// Type a character. Returns false when the font has no glyph for it,
@@ -441,7 +667,7 @@ impl TextState {
         changed
     }
 
-    /// Every sort to draw, as a path already placed on the line.
+    /// Every sort to draw, sharing its untransformed outline and carrying its line origin.
     ///
     /// Absorbed sorts (a character folded into a ligature drawn by an
     /// earlier sort) contribute nothing, which is what `is_absorbed` is
@@ -474,7 +700,6 @@ impl TextState {
                 }
                 let name = sort.glyph_name()?;
                 let outline = self.outline(name)?;
-                let placed = Affine::translate((item.x, item.y)) * (**outline).clone();
                 let cluster_end = ((item.index + 1)..buffer.len())
                     .find(|index| !buffer.sort(*index).is_some_and(|sort| sort.is_absorbed()))
                     .unwrap_or(buffer.len());
@@ -482,9 +707,12 @@ impl TextState {
                     .as_ref()
                     .is_some_and(|range| range.start < cluster_end && range.end > item.index);
                 Some(PlacedSort {
-                    path: placed,
+                    index: item.index,
+                    outline: outline.clone(),
                     origin: Point::new(item.x, item.y),
                     advance: item.advance_width,
+                    nominal_width: item.nominal_width,
+                    spacing_before: item.spacing_before,
                     active: active == Some(item.index),
                     selected,
                 })
@@ -521,6 +749,26 @@ impl TextState {
             .iter()
             .find(|item| item.index == active)
             .map(|item| Point::new(item.x, item.y))
+    }
+
+    /// Prefer visible ink where two heavily kerned advance boxes overlap.
+    pub(crate) fn kern_hit(&self, at: Point) -> Option<usize> {
+        use masonry::kurbo::Shape;
+        let layout = self.buffer.layout(self.line_height);
+        for item in layout.items.iter().rev() {
+            let Some(name) = self.buffer.sort(item.index).and_then(|s| s.glyph_name()) else {
+                continue;
+            };
+            if self
+                .outline(name)
+                .is_some_and(|p| p.winding(Point::new(at.x - item.x, at.y - item.y)) != 0)
+            {
+                return Some(item.index);
+            }
+        }
+        self.buffer
+            .hit_test(at.x, at.y, self.line_height, self.ascender, self.descender)
+            .active_sort
     }
 
     /// A click: put the caret there, and report the sort under it.
@@ -561,7 +809,10 @@ impl TextState {
 
 /// One sort, ready to draw.
 pub(crate) struct PlacedSort {
-    pub path: BezPath,
+    pub nominal_width: f64,
+    pub spacing_before: f64,
+    pub index: usize,
+    pub outline: Arc<BezPath>,
     pub origin: Point,
     pub advance: f64,
     pub active: bool,
@@ -571,16 +822,116 @@ pub(crate) struct PlacedSort {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "integration-fonts")]
     use masonry::kurbo::Shape;
+
+    /// A font with two glyphs of width 500, opened without files.
+    fn two_glyph_model() -> FontModel {
+        use runebender::font::project::{Project, SourceInput};
+        let mut font = norad::Font::new();
+        for (name, character) in [("A", 'A'), ("B", 'B')] {
+            let mut glyph = norad::Glyph::new(name);
+            glyph.width = 500.0;
+            glyph.codepoints = norad::Codepoints::new([character]);
+            font.default_layer_mut().insert_glyph(glyph);
+        }
+        let project = Project::from_source(SourceInput::from_font(font, "Two.ufo".into())).unwrap();
+        FontModel::from_project(project)
+    }
+
+    /// Whether two inputs hold the same glyph data, whatever they share.
+    /// `==` treats outline sources built separately as different.
+    fn same_contents(a: &TextInputs, b: &TextInputs) -> bool {
+        let outlines = |inputs: &TextInputs| {
+            ["A", "B", "missing"].map(|name| inputs.outlines.get(name).map(|path| (*path).clone()))
+        };
+        a.inventory == b.inventory
+            && a.kerning == b.kerning
+            && outlines(a) == outlines(b)
+            && a.line_height == b.line_height
+            && a.active_glyph == b.active_glyph
+    }
+
+    #[test]
+    fn inputs_follow_a_width_edit_without_a_full_read() {
+        let mut font = two_glyph_model();
+        let layer = font
+            .project
+            .document_sources()
+            .next()
+            .unwrap()
+            .default_layer();
+        let before = TextInputs::new(&font);
+        let revision = font.project.document_revision();
+
+        font.project
+            .edit_document_layer("A", &layer, |draft| {
+                draft.set_width(640.0)?;
+                Ok(())
+            })
+            .unwrap();
+        // The edit is one the inputs can follow: no code point, anchor or component changed.
+        let changes = font.project.layer_changes_since(revision).unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].glyph, "A");
+        assert!(changes[0].metrics && !changes[0].codepoints && !changes[0].mark_inputs);
+
+        let followed = TextInputs::new(&font);
+        assert!(followed != before, "the new width is in the inputs");
+        assert!(
+            same_contents(&followed, &TextInputs::read(&font)),
+            "following equals reading in full"
+        );
+        // The kerning model and the feature text were not rebuilt.
+        assert!(Arc::ptr_eq(&followed.kerning, &before.kerning));
+
+        // Nothing changed since the current revision, and a revision that never existed, or
+        // one before the journal starts, cannot be followed.
+        let current = font.project.document_revision();
+        assert_eq!(font.project.layer_changes_since(current), Some(Vec::new()));
+        assert_eq!(font.project.layer_changes_since(current + 1), None);
+        assert_eq!(
+            font.project.layer_changes_since(revision.wrapping_sub(1)),
+            None
+        );
+    }
+
+    #[test]
+    fn inputs_are_read_in_full_after_a_code_point_edit() {
+        let mut font = two_glyph_model();
+        let layer = font
+            .project
+            .document_sources()
+            .next()
+            .unwrap()
+            .default_layer();
+        let before = TextInputs::new(&font);
+        let revision = font.project.document_revision();
+        font.project
+            .edit_document_layer("A", &layer, |draft| {
+                draft.set_codepoints(['Z']);
+                Ok(())
+            })
+            .unwrap();
+        let changes = font.project.layer_changes_since(revision).unwrap();
+        assert!(changes[0].codepoints);
+        let after = TextInputs::new(&font);
+        assert!(same_contents(&after, &TextInputs::read(&font)));
+        assert!(
+            !Arc::ptr_eq(&after.kerning, &before.kerning),
+            "a full read rebuilds it"
+        );
+    }
 
     #[test]
     fn shaping_options_reach_the_widget_buffer() {
         let disabled = std::collections::HashSet::from(["liga".to_string(), "kern".to_string()]);
         let inputs = TextInputs {
             context_id: (0, 0),
-            inventory: TextGlyphInventory::default(),
-            kerning: TextKerningModel::default(),
-            outlines: Arc::new(Vec::new()),
+            inventory: TextGlyphInventory::default().into(),
+            kerning: TextKerningModel::default().into(),
+            outlines: GlyphOutlines::default(),
+            live_outline: None,
             compiled: None,
             normalized: Vec::new(),
             line_height: 1000.0,
@@ -618,13 +969,17 @@ mod tests {
         font.default_layer_mut().insert_glyph(other);
         let project = runebender::font::project::Project::from_source(
             runebender::font::project::SourceInput::from_font(font, "text-test.ufo".into()),
-        );
+        )
+        .expect("valid source fixture");
         let source = project.source_id(0).unwrap();
         let mut inputs = TextInputs {
             context_id: (0, 0),
-            inventory: TextGlyphInventory::from_project(&project, source).unwrap(),
-            kerning: TextKerningModel::default(),
-            outlines: Arc::new(Vec::new()),
+            inventory: TextGlyphInventory::from_project(&project, source)
+                .unwrap()
+                .into(),
+            kerning: TextKerningModel::default().into(),
+            outlines: GlyphOutlines::default(),
+            live_outline: None,
             compiled: None,
             normalized: Vec::new(),
             line_height: 1000.0,
@@ -659,9 +1014,10 @@ mod tests {
     fn non_unicode_open_glyph_is_still_seeded() {
         let inputs = TextInputs {
             context_id: (0, 0),
-            inventory: TextGlyphInventory::default(),
-            kerning: TextKerningModel::default(),
-            outlines: Arc::new(Vec::new()),
+            inventory: TextGlyphInventory::default().into(),
+            kerning: TextKerningModel::default().into(),
+            outlines: GlyphOutlines::default(),
+            live_outline: None,
             compiled: None,
             normalized: Vec::new(),
             line_height: 1000.0,
@@ -685,19 +1041,43 @@ mod tests {
         assert_eq!(state.buffer.active_sort(), Some(0));
     }
 
+    #[cfg(feature = "integration-fonts")]
     #[test]
-    #[ignore = "loads the adjacent full Virtua Grotesk designspace"]
-    fn virtua_mixed_text_uses_real_arabic_forms_marks_and_bidi_layout() {
-        let source = std::env::var_os("RUNEBENDER_TEST_FONTS")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../virtua-grotesk/sources")
-            })
-            .join("VirtuaGrotesk.designspace");
+    fn nudging_reh_keeps_the_composed_word_in_place() {
+        use crate::application::workspace::Workspace;
+        let path = crate::integration_fonts::dir().join("VirtuaGrotesk.designspace");
+        let mut app = Workspace::open(&path).unwrap();
+        let name = "reh-ar.fina";
+        app.open_glyph(app.font.index_of(name).unwrap());
+        app.font
+            .project
+            .compiled_preview()
+            .expect("initial compiled word");
+        let inputs = TextInputs::for_editor(&app).with_text("فيرتوا غروتيسك");
+        assert!(inputs.compiled.is_some());
+        let mut text = TextState::new(&inputs);
+        let positions = |t: &TextState| t.placed().iter().map(|s| s.origin).collect::<Vec<_>>();
+        let before = positions(&text);
+        assert!(before.len() > 4);
+        let first = app.session.points()[0].point;
+        app.apply_op(|s| {
+            s.select_all();
+            s.nudge(8.0, 0.0)
+        });
+        assert_eq!(app.session.points()[0].point.x, first.x + 8.0);
+        let refreshed = TextInputs::for_editor(&app);
         assert!(
-            source.is_file(),
-            "clone Virtua Grotesk beside this repository or set RUNEBENDER_TEST_FONTS"
+            refreshed.compiled.is_some(),
+            "a nudge must retain compiled positioning"
         );
+        text.refresh(&refreshed);
+        assert_eq!(positions(&text), before);
+    }
+
+    #[cfg(feature = "integration-fonts")]
+    #[test]
+    fn virtua_mixed_text_uses_real_arabic_forms_marks_and_bidi_layout() {
+        let source = crate::integration_fonts::dir().join("VirtuaGrotesk.designspace");
         let mut font = FontModel::open(&source).expect("Virtua Grotesk opens");
         let sample = "R لا 123 بِ";
         let mut state = TextState::new(&TextInputs::new(&font).with_text(sample));
@@ -745,7 +1125,7 @@ mod tests {
             "the absorbed alef remains logical text but is not painted twice"
         );
         assert!(placed.iter().all(|sort| {
-            let bounds = sort.path.bounding_box();
+            let bounds = sort.outline.bounding_box();
             bounds.x0.is_finite()
                 && bounds.y0.is_finite()
                 && bounds.x1.is_finite()

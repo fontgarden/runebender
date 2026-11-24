@@ -21,10 +21,8 @@
 //! horizontal bar do not gain the same weight. Virtua Grotesk grows
 //! its verticals by 96 units and its bars by 72.
 
-#[cfg(test)]
-use norad::{Contour, Glyph};
-
 use crate::font::LayerView;
+use crate::outline::point_ops::snap_to_spacing;
 
 /// How far to push, per axis, in font units.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -50,17 +48,6 @@ pub struct Offset {
 /// The tangent comes from the neighbouring points rather than the
 /// curve, so an off-curve control moves with the shape around it
 /// instead of being treated as if it sat on the outline.
-#[cfg(test)]
-pub fn outward_normals(c: &Contour) -> Vec<(f64, f64)> {
-    outward_normals_for_points(
-        &c.points
-            .iter()
-            .map(|point| kurbo::Point::new(point.x, point.y))
-            .collect::<Vec<_>>(),
-    )
-}
-
-/// Compute outward normals for an ordered point sequence.
 pub fn outward_normals_for_points(points: &[kurbo::Point]) -> Vec<(f64, f64)> {
     let n = points.len();
     if n < 3 {
@@ -119,73 +106,6 @@ pub fn learn_layer_offset(pairs: &[(LayerView<'_>, LayerView<'_>)]) -> Option<Of
     Some(Offset { x, y })
 }
 
-/// The offset that best explains how a set of reference pairs moved.
-///
-/// For each point, the model says the move was `(nx * x, ny * y)`, so
-/// each point with a strong enough normal component votes for a value
-/// on that axis. The median of the votes wins, which keeps one badly
-/// drawn reference from setting the weight for a whole master.
-///
-/// `None` when no pair is compatible, or when nothing moved.
-#[cfg(test)]
-pub fn learn_offset(pairs: &[(&Glyph, &Glyph)]) -> Option<Offset> {
-    // Least squares per axis: the move at each point is modelled as
-    // `nx * x`, so the best x is sum(nx*dx) / sum(nx*nx).
-    //
-    // An earlier version divided at each point and took the median,
-    // which needed a threshold to avoid dividing by a normal that
-    // barely pointed along the axis. On a shape whose corners are all
-    // oblique, every point fell under it and nothing could be learned.
-    // This weights each point by how much it has to say instead.
-    let (mut sx, mut nx2, mut sy, mut ny2) = (0.0, 0.0, 0.0, 0.0);
-    for (light, heavy) in pairs {
-        if light.contours.len() != heavy.contours.len() {
-            continue;
-        }
-        for (lc, hc) in light.contours.iter().zip(heavy.contours.iter()) {
-            if lc.points.len() != hc.points.len() {
-                continue;
-            }
-            for ((lp, hp), (nx, ny)) in lc
-                .points
-                .iter()
-                .zip(hc.points.iter())
-                .zip(outward_normals(lc))
-            {
-                sx += nx * (hp.x - lp.x);
-                nx2 += nx * nx;
-                sy += ny * (hp.y - lp.y);
-                ny2 += ny * ny;
-            }
-        }
-    }
-    if nx2 < 1e-9 || ny2 < 1e-9 {
-        return None;
-    }
-    let (x, y) = (sx / nx2, sy / ny2);
-    if x.abs() < 1e-6 && y.abs() < 1e-6 {
-        return None;
-    }
-    Some(Offset { x, y })
-}
-
-/// Push a glyph's outline outward by `offset`.
-///
-/// Point count, order and types are untouched, so the result stays
-/// compatible with the glyph it came from.
-#[cfg(test)]
-pub fn embolden(glyph: &Glyph, offset: Offset) -> Glyph {
-    let mut out = glyph.clone();
-    for contour in out.contours.iter_mut() {
-        let normals = outward_normals(contour);
-        for (point, (nx, ny)) in contour.points.iter_mut().zip(normals) {
-            point.x += nx * offset.x;
-            point.y += ny * offset.y;
-        }
-    }
-    out
-}
-
 /// How much the advance grows from the lighter to the heavier master,
 /// as the mean over pairs whose structures match.
 ///
@@ -200,16 +120,6 @@ pub fn learn_layer_advance_delta(pairs: &[(LayerView<'_>, LayerView<'_>)]) -> Op
         return None;
     }
     Some(deltas.iter().sum::<f64>() / deltas.len() as f64)
-}
-
-/// Snap a value to the nearest multiple of `grid`; a grid of zero or
-/// less leaves it alone.
-pub fn snap_to_grid(value: f64, grid: f64) -> f64 {
-    if grid > 0.0 {
-        (value / grid).round() * grid
-    } else {
-        value
-    }
 }
 
 /// Where every point of a layer lands after pushing it outward, in
@@ -230,8 +140,8 @@ pub fn layer_point_moves(layer: LayerView<'_>, offset: Offset, grid: f64) -> Vec
                 .zip(normals)
                 .map(move |(point, (nx, ny))| {
                     kurbo::Point::new(
-                        point.x + snap_to_grid(nx * offset.x, grid),
-                        point.y + snap_to_grid(ny * offset.y, grid),
+                        point.x + snap_to_spacing(nx * offset.x, grid),
+                        point.y + snap_to_spacing(ny * offset.y, grid),
                     )
                 })
                 .collect::<Vec<_>>()
@@ -242,7 +152,9 @@ pub fn layer_point_moves(layer: LayerView<'_>, offset: Offset, grid: f64) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use norad::{ContourPoint, PointType};
+    use crate::font::project::{Project, SourceInput};
+    use crate::font::variable::{LayerId, SourceId};
+    use norad::{Contour, ContourPoint, Glyph, PointType};
 
     fn pt(x: f64, y: f64) -> ContourPoint {
         ContourPoint::new(x, y, PointType::Line, false, None, None)
@@ -253,16 +165,63 @@ mod tests {
         Contour::new(vec![pt(x0, y0), pt(x1, y0), pt(x1, y1), pt(x0, y1)], None)
     }
 
-    fn glyph_of(contours: Vec<Contour>) -> Glyph {
-        let mut g = Glyph::new("test");
-        g.width = 500.0;
-        g.contours = contours;
-        g
+    fn glyph_of(name: &str, contours: Vec<Contour>) -> Glyph {
+        let mut glyph = Glyph::new(name);
+        glyph.width = 500.0;
+        glyph.contours = contours;
+        glyph
+    }
+
+    fn project_of(glyphs: Vec<Glyph>) -> (Project, LayerId) {
+        let mut font = norad::Font::new();
+        for glyph in glyphs {
+            font.default_layer_mut().insert_glyph(glyph);
+        }
+        let project = Project::from_source(SourceInput::from_font(font, "Embolden.ufo".into()))
+            .expect("valid source fixture");
+        let layer = project
+            .document_source(SourceId(0))
+            .expect("default source")
+            .default_layer();
+        (project, layer)
+    }
+
+    /// The glyph with every point moved where `layer_point_moves` puts it.
+    fn embolden(glyph: &Glyph, offset: Offset) -> Glyph {
+        let (project, layer) = project_of(vec![glyph.clone()]);
+        let view = project
+            .document_layer(glyph.name().as_str(), &layer)
+            .expect("fixture layer");
+        let mut moves = layer_point_moves(view, offset, 0.0).into_iter();
+        // The canonical layer fixes the point order that the moves follow.
+        let mut out = crate::formats::ufo::glyph_from_layer(view);
+        for point in out
+            .contours
+            .iter_mut()
+            .flat_map(|contour| &mut contour.points)
+        {
+            let moved = moves.next().expect("one move per point");
+            point.x = moved.x;
+            point.y = moved.y;
+        }
+        assert!(moves.next().is_none());
+        out
+    }
+
+    /// Learn an offset from one light and heavy pair of glyphs.
+    fn learn_offset(light: &Glyph, heavy: &Glyph) -> Option<Offset> {
+        let heavy = glyph_of("heavy", heavy.contours.clone());
+        let (project, layer) = project_of(vec![light.clone(), heavy]);
+        let light = project
+            .document_layer(light.name().as_str(), &layer)
+            .unwrap();
+        let heavy = project.document_layer("heavy", &layer).unwrap();
+        learn_layer_offset(&[(light, heavy)])
     }
 
     #[test]
     fn an_outer_contour_grows() {
-        let g = glyph_of(vec![square(0.0, 0.0, 100.0, 100.0)]);
+        let g = glyph_of("test", vec![square(0.0, 0.0, 100.0, 100.0)]);
         let out = embolden(&g, Offset { x: 10.0, y: 10.0 });
         let xs: Vec<f64> = out.contours[0].points.iter().map(|p| p.x).collect();
         assert!(xs.iter().cloned().fold(f64::MAX, f64::min) < 0.0, "{xs:?}");
@@ -278,7 +237,7 @@ mod tests {
     fn a_counter_shrinks() {
         let mut inner = square(20.0, 20.0, 80.0, 80.0);
         inner.points.reverse();
-        let g = glyph_of(vec![square(0.0, 0.0, 100.0, 100.0), inner]);
+        let g = glyph_of("test", vec![square(0.0, 0.0, 100.0, 100.0), inner]);
         let out = embolden(&g, Offset { x: 10.0, y: 10.0 });
         let xs: Vec<f64> = out.contours[1].points.iter().map(|p| p.x).collect();
         let (lo, hi) = (
@@ -295,22 +254,20 @@ mod tests {
     /// still interpolates with what it came from.
     #[test]
     fn the_structure_is_untouched() {
-        let g = glyph_of(vec![square(0.0, 0.0, 100.0, 100.0)]);
-        let out = embolden(&g, Offset { x: 10.0, y: 4.0 });
-        assert_eq!(out.contours.len(), g.contours.len());
-        assert_eq!(out.contours[0].points.len(), g.contours[0].points.len());
-        let types: Vec<_> = out.contours[0].points.iter().map(|p| p.typ).collect();
-        let was: Vec<_> = g.contours[0].points.iter().map(|p| p.typ).collect();
-        assert_eq!(types, was);
+        let g = glyph_of("test", vec![square(0.0, 0.0, 100.0, 100.0)]);
+        let (project, layer) = project_of(vec![g.clone()]);
+        let view = project.document_layer("test", &layer).unwrap();
+        let moves = layer_point_moves(view, Offset { x: 10.0, y: 4.0 }, 0.0);
+        assert_eq!(moves.len(), g.contours[0].points.len());
     }
 
     /// The point of the module: a reference pair says how far to push,
     /// and applying that to the reference reproduces it.
     #[test]
     fn a_reference_pair_teaches_its_own_offset() {
-        let light = glyph_of(vec![square(0.0, 0.0, 100.0, 100.0)]);
+        let light = glyph_of("light", vec![square(0.0, 0.0, 100.0, 100.0)]);
         let heavy = embolden(&light, Offset { x: 12.0, y: 6.0 });
-        let learned = learn_offset(&[(&light, &heavy)]).expect("learnable");
+        let learned = learn_offset(&light, &heavy).expect("learnable");
         assert!((learned.x - 12.0).abs() < 1e-6, "{learned:?}");
         assert!((learned.y - 6.0).abs() < 1e-6, "{learned:?}");
     }
@@ -319,9 +276,9 @@ mod tests {
     /// would be wrong for one of them.
     #[test]
     fn the_two_axes_are_learned_apart() {
-        let light = glyph_of(vec![square(0.0, 0.0, 200.0, 100.0)]);
+        let light = glyph_of("light", vec![square(0.0, 0.0, 200.0, 100.0)]);
         let heavy = embolden(&light, Offset { x: 48.0, y: 12.0 });
-        let learned = learn_offset(&[(&light, &heavy)]).expect("learnable");
+        let learned = learn_offset(&light, &heavy).expect("learnable");
         assert!((learned.x - 48.0).abs() < 1e-6);
         assert!((learned.y - 12.0).abs() < 1e-6);
         assert_ne!(learned.x, learned.y);
@@ -329,15 +286,15 @@ mod tests {
 
     #[test]
     fn incompatible_pairs_are_skipped() {
-        let light = glyph_of(vec![square(0.0, 0.0, 100.0, 100.0)]);
+        let light = glyph_of("light", vec![square(0.0, 0.0, 100.0, 100.0)]);
         let mut odd = light.clone();
         odd.contours[0].points.push(pt(50.0, 50.0));
-        assert!(learn_offset(&[(&light, &odd)]).is_none());
+        assert!(learn_offset(&light, &odd).is_none());
     }
 
     #[test]
     fn a_pair_that_did_not_move_teaches_nothing() {
-        let light = glyph_of(vec![square(0.0, 0.0, 100.0, 100.0)]);
-        assert!(learn_offset(&[(&light, &light)]).is_none());
+        let light = glyph_of("light", vec![square(0.0, 0.0, 100.0, 100.0)]);
+        assert!(learn_offset(&light, &light).is_none());
     }
 }

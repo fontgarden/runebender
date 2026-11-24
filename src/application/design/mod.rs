@@ -36,6 +36,7 @@
 
 pub(crate) mod areas;
 pub(crate) mod controls;
+pub(crate) mod point_marker;
 pub(crate) mod recipes;
 pub(crate) mod states;
 pub(crate) mod stock;

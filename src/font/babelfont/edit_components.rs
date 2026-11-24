@@ -568,16 +568,6 @@ impl LayerEditDraft {
         Ok(())
     }
 
-    /// Replace typed HOI intermediate points without materializing a UFO glyph.
-    pub fn set_hoi_intermediates(&mut self, points: HoiIntermediates) -> bool {
-        let replacement = (!points.is_empty()).then_some(points);
-        if self.preserved.hoi_intermediates == replacement {
-            return false;
-        }
-        self.preserved.hoi_intermediates = replacement;
-        true
-    }
-
     pub(super) fn node_mut(&mut self, id: PointId) -> Option<&mut Node> {
         self.layer
             .shapes

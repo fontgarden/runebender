@@ -135,7 +135,8 @@ fn fixture() -> (Scratch, Project, LayerId, GlyphLayerAddress) {
     for glyph in [glyph, base, other] {
         font.default_layer_mut().insert_glyph(glyph);
     }
-    let project = Project::from_source(SourceInput::from_font(font, source_path));
+    let project = Project::from_source(SourceInput::from_font(font, source_path))
+        .expect("valid source fixture");
     let layer = project
         .document_source(SourceId(0))
         .unwrap()
@@ -450,7 +451,8 @@ fn handle_fixture() -> (Scratch, Project, LayerId, GlyphLayerAddress) {
     let mut font = Font::new();
     font.default_layer_mut().insert_glyph(glyph);
     font.default_layer_mut().insert_glyph(other);
-    let project = Project::from_source(SourceInput::from_font(font, source_path));
+    let project = Project::from_source(SourceInput::from_font(font, source_path))
+        .expect("valid source fixture");
     let layer = project
         .document_source(SourceId(0))
         .unwrap()
@@ -897,4 +899,31 @@ fn optimize_rejects_invalid_parameters_atomically() {
         0,
         "caught validation errors record no history"
     );
+}
+
+#[test]
+fn maintain_g2_keeps_the_dragged_handle_and_matches_endpoint_curvature() {
+    let (_scratch, project, layer, address) = handle_fixture();
+    let before = project.document_layer("handles", &layer).unwrap();
+    let points: Vec<_> = before.contours().next().unwrap().points().collect();
+    let fixed = points[1].id();
+    let corner = points[3].id();
+    let mut tx = project.begin_document_layer_transaction(&address).unwrap();
+    assert!(!tx.draft_mut().maintain_g2_at(corner).unwrap());
+    assert!(tx.draft_mut().maintain_g2_at(fixed).unwrap());
+    let after: Vec<_> = tx
+        .draft()
+        .view()
+        .contours()
+        .next()
+        .unwrap()
+        .points()
+        .map(|p| p.position())
+        .collect();
+    for i in 0..8 {
+        assert_eq!(after[i], points[i].position());
+    }
+    assert_eq!(after[8].x, 0.0);
+    assert!(after[8].y < 0.0);
+    assert!((70.0 / after[8].y.powi(2) - 80.0 / after[1].y.powi(2)).abs() < 1e-12);
 }

@@ -18,6 +18,7 @@ impl LayerEditDraft {
         end: PointId,
         parameter: f64,
     ) -> Result<PointId, DocumentEditError> {
+        let spacing = self.grid_spacing;
         ensure_finite(&[parameter])?;
         let parameter = parameter.clamp(0.0, 1.0);
         let locate = |id: PointId| {
@@ -69,8 +70,8 @@ impl LayerEditDraft {
         let endpoint_type = path.nodes[end_index].nodetype;
         let snap = |point: kurbo::Point| {
             kurbo::Point::new(
-                crate::outline::point_ops::snap_coord(point.x),
-                crate::outline::point_ops::snap_coord(point.y),
+                crate::outline::point_ops::snap_to_spacing(point.x, spacing),
+                crate::outline::point_ops::snap_to_spacing(point.y, spacing),
             )
         };
         enum Split {
@@ -245,6 +246,7 @@ impl LayerEditDraft {
         end: DocumentSegmentEndpoint,
         parameter: f64,
     ) -> Result<QuadraticSegmentInsertion, DocumentEditError> {
+        let spacing = self.grid_spacing;
         ensure_finite(&[parameter])?;
         let parameter = parameter.clamp(0.0, 1.0);
         let representative = |endpoint| match endpoint {
@@ -380,8 +382,8 @@ impl LayerEditDraft {
         let right = quad.subsegment(parameter..1.0);
         let snap = |point: kurbo::Point| {
             kurbo::Point::new(
-                crate::outline::point_ops::snap_coord(point.x),
-                crate::outline::point_ops::snap_coord(point.y),
+                crate::outline::point_ops::snap_to_spacing(point.x, spacing),
+                crate::outline::point_ops::snap_to_spacing(point.y, spacing),
             )
         };
         let left_control = snap(left.p1);
@@ -455,6 +457,7 @@ impl LayerEditDraft {
         start: PointId,
         end: PointId,
     ) -> Result<[PointId; 2], DocumentEditError> {
+        let spacing = self.grid_spacing;
         let (shape_index, start_index) = self
             .locate_point(start)
             .ok_or(DocumentEditError::MissingPoint(start))?;
@@ -497,8 +500,8 @@ impl LayerEditDraft {
         );
         let snapped = |point: kurbo::Point| {
             kurbo::Point::new(
-                crate::outline::point_ops::snap_coord(point.x),
-                crate::outline::point_ops::snap_coord(point.y),
+                crate::outline::point_ops::snap_to_spacing(point.x, spacing),
+                crate::outline::point_ops::snap_to_spacing(point.y, spacing),
             )
         };
         let first_position = snapped(from.lerp(control, 2.0 / 3.0));
@@ -581,6 +584,7 @@ impl LayerEditDraft {
         start: PointId,
         end: PointId,
     ) -> Result<[PointId; 2], DocumentEditError> {
+        let spacing = self.grid_spacing;
         let locate = |id: PointId| {
             self.layer
                 .shapes
@@ -617,8 +621,8 @@ impl LayerEditDraft {
         let end_position = kurbo::Point::new(path.nodes[end_index].x, path.nodes[end_index].y);
         let snapped = |point: kurbo::Point| {
             kurbo::Point::new(
-                crate::outline::point_ops::snap_coord(point.x),
-                crate::outline::point_ops::snap_coord(point.y),
+                crate::outline::point_ops::snap_to_spacing(point.x, spacing),
+                crate::outline::point_ops::snap_to_spacing(point.y, spacing),
             )
         };
         let first_position = snapped(start_position.lerp(end_position, 1.0 / 3.0));

@@ -24,14 +24,8 @@ impl GlyphId {
         self.0.to_string()
     }
 
-    fn next() -> Self {
+    pub(super) fn next() -> Self {
         Self(NEXT_GLYPH_ID.fetch_add(1, Ordering::Relaxed))
-    }
-}
-
-impl Default for GlyphId {
-    fn default() -> Self {
-        Self::next()
     }
 }
 
@@ -71,8 +65,7 @@ impl CanonicalSourceStructureSnapshot {
             return Err(format!("inconsistent canonical glyph {name:?}"));
         }
         if !present {
-            self.glyphs
-                .insert(name.to_owned(), VariableGlyph::default());
+            self.glyphs.insert(name.to_owned(), VariableGlyph::new());
             self.glyph_geometry.0.push(Glyph::new(name));
         }
         let default_layers = self
@@ -89,7 +82,7 @@ impl CanonicalSourceStructureSnapshot {
             let (layer, preserved) = crate::font::babelfont::glyph_transactions::empty_layer(
                 name, &id, true, width, codepoint,
             );
-            glyph.layers.insert(id.clone(), preserved);
+            glyph.layers.insert(id.clone(), Box::new(preserved));
             glyph.source_metadata.insert(
                 source,
                 crate::font::model::glyph_metadata::CanonicalSourceGlyphMetadata::default(),
@@ -127,7 +120,7 @@ impl CanonicalSourceStructureSnapshot {
             .ok_or_else(|| format!("missing glyph geometry for {source:?}"))?
             .clone();
         let mut glyph = VariableGlyph {
-            id: GlyphId::default(),
+            id: GlyphId::next(),
             layers: BTreeMap::default(),
             source_metadata: source_glyph.source_metadata,
         };
@@ -148,7 +141,7 @@ impl CanonicalSourceStructureSnapshot {
                 id,
                 name,
             );
-            glyph.layers.insert(id.clone(), preserved);
+            glyph.layers.insert(id.clone(), Box::new(preserved));
             geometry.layers.push(layer);
             addresses.push(GlyphLayerAddress {
                 glyph: name.to_owned(),
@@ -184,6 +177,12 @@ impl CanonicalSourceStructureSnapshot {
                 .remove_glyph_references(name)
                 .map_err(|error| error.to_string())?;
         }
+        for format in self.source_formats.values_mut() {
+            format.remove_glyph_references(name)?;
+        }
+        if let Some(designspace) = &mut self.designspace {
+            designspace.remove_glyph_references(name)?;
+        }
         Ok(addresses)
     }
 
@@ -204,6 +203,12 @@ impl CanonicalSourceStructureSnapshot {
                 .font_metadata
                 .rename_glyph_references(old, new)
                 .map_err(|error| error.to_string())?;
+        }
+        for format in self.source_formats.values_mut() {
+            format.rename_glyph_references(old, new)?;
+        }
+        if let Some(designspace) = &mut self.designspace {
+            designspace.rename_glyph_references(old, new)?;
         }
 
         for preserved in glyph.layers.values_mut() {

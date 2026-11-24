@@ -141,11 +141,6 @@ impl<'a> LayerView<'a> {
         self.preserved.smart_component_pole.as_ref()
     }
 
-    /// Typed HOI intermediate points attached to this source layer.
-    pub fn hoi_intermediates(self) -> Option<&'a HoiIntermediates> {
-        self.preserved.hoi_intermediates.as_ref()
-    }
-
     /// Unicode scalar values attached to this glyph layer.
     pub fn codepoints(self) -> impl Iterator<Item = char> + 'a {
         self.preserved.codepoints.iter().copied()

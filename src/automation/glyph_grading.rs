@@ -37,7 +37,7 @@ pub enum GlyphGrade {
     Green,
     /// Composite requiring diagnosis and repair, not blanket replacement.
     Blue,
-    /// Frozen approved composite reference.
+    /// Machine draft the designer has not reviewed: not a reference, not a replacement target.
     Purple,
     /// Composite requiring smaller edits, not blanket replacement.
     Pink,
@@ -61,7 +61,7 @@ impl GlyphGrade {
 
     /// Whether this glyph may serve as an approved frozen reference.
     pub fn is_reference(self) -> bool {
-        matches!(self, Self::Green | Self::Purple)
+        self == Self::Green
     }
 
     /// Whether automated complete-outline replacement is permitted.
@@ -387,7 +387,7 @@ mod tests {
             let grade = grade(project.document_layer(&glyph, &layer).unwrap());
             assert_eq!(grade, GlyphGrade::from_label(label));
             assert_eq!(grade.permits_replacement(), label == "red");
-            assert_eq!(grade.is_reference(), matches!(label, "green" | "purple"));
+            assert_eq!(grade.is_reference(), label == "green");
         }
         let references = vec![GradingReferenceRequest {
             guard: guard(&project, "test_green"),
@@ -486,7 +486,8 @@ mod tests {
         let project = Project::from_source(crate::font::project::SourceInput::from_font(
             font,
             std::env::temp_dir().join("legacy-green-policy.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()
@@ -596,23 +597,23 @@ mod tests {
             });
         }
         let protected = &fixture["references"]["protected"][0];
-        let purple_glyph = protected["glyph"].as_str().unwrap();
+        let protected_glyph = protected["glyph"].as_str().unwrap();
         project
-            .add_document_glyph(purple_glyph, 400.0, None)
+            .add_document_glyph(protected_glyph, 400.0, None)
             .unwrap();
-        mark(&mut project, purple_glyph, "purple");
+        mark(&mut project, protected_glyph, "green");
         let layer = project
             .document_source(SourceId(0))
             .unwrap()
             .default_layer();
         project
-            .edit_document_layer(purple_glyph, &layer, |draft| {
+            .edit_document_layer(protected_glyph, &layer, |draft| {
                 draft.add_shape_contour(kurbo::Rect::new(30.0, 0.0, 100.0, 110.0), false)?;
                 Ok(())
             })
             .unwrap();
         references.push(GradingReferenceRequest {
-            guard: guard(&project, purple_glyph),
+            guard: guard(&project, protected_glyph),
             rationale: protected["reason"].as_str().unwrap().into(),
         });
         let target = guard(&project, target_name);
@@ -621,7 +622,7 @@ mod tests {
         assert_eq!(context.target.grade, GlyphGrade::Red);
         assert_eq!(context.references.len(), 3);
         assert_eq!(context.references[0].layer.grade, GlyphGrade::Green);
-        assert_eq!(context.references[2].layer.grade, GlyphGrade::Purple);
+        assert_eq!(context.references[2].layer.grade, GlyphGrade::Green);
         assert!(
             context.references[0]
                 .layer
@@ -640,8 +641,13 @@ mod tests {
         references[0].guard.expected_revision = "stale".into();
         assert!(capture_replacement_context(&project, SourceId(0), &target, &references).is_err());
         let first_reference = references[0].guard.glyph.clone();
-        mark(&mut project, &first_reference, "orange");
-        references[0].guard = guard(&project, &first_reference);
-        assert!(capture_replacement_context(&project, SourceId(0), &target, &references).is_err());
+        // An unreviewed purple draft and a graded orange drawing are not references.
+        for label in ["purple", "orange"] {
+            mark(&mut project, &first_reference, label);
+            references[0].guard = guard(&project, &first_reference);
+            assert!(
+                capture_replacement_context(&project, SourceId(0), &target, &references).is_err()
+            );
+        }
     }
 }

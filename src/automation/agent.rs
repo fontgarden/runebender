@@ -269,102 +269,6 @@ pub fn system_prompt(tools: &[Tool]) -> String {
     out
 }
 
-/// Whether a question is about a glyph's geometry, so the loop can
-/// insist on a read before an answer. Word-based and generous on
-/// purpose: a false positive costs one tool call, a miss costs a
-/// guessed number.
-pub fn asks_geometry(question: &str) -> bool {
-    let q = question.to_lowercase();
-    [
-        "wide",
-        "width",
-        "advance",
-        "sidebearing",
-        "side bearing",
-        "lsb",
-        "rsb",
-        "spacing",
-        "points",
-        "contour",
-        "anchor",
-        "shape",
-        "outline",
-        "bounds",
-        "how tall",
-        "height of",
-    ]
-    .iter()
-    .any(|w| q.contains(w))
-}
-
-/// Whether a question is about a format or a term, so the loop can
-/// fetch documentation before the model answers.
-pub fn asks_docs(question: &str) -> bool {
-    let q = question.to_lowercase();
-    [
-        "spec",
-        "ufo",
-        "glif",
-        "designspace",
-        "fontc",
-        "opentype",
-        "attribute",
-        "what does",
-        "what is a",
-        "what is the",
-        "mean",
-        "documentation",
-    ]
-    .iter()
-    .any(|w| q.contains(w))
-}
-
-/// The one-line nudge the loop sends when the model answered a
-/// geometry question without reading the glyph.
-pub const READ_FIRST_NUDGE: &str = "You answered without reading the glyph. Call read_glyph on it now and answer \
-     only from the result.";
-
-/// Every `<tool_call>` block in a reply, in order. A block that is not
-/// valid JSON is skipped.
-pub fn parse_tool_calls(text: &str) -> Vec<ToolCall> {
-    let mut calls = Vec::new();
-    let mut rest = text;
-    while let Some(start) = rest.find("<tool_call>") {
-        let after = &rest[start + "<tool_call>".len()..];
-        let Some(end) = after.find("</tool_call>") else {
-            // An unterminated block: the model may have stopped early;
-            // try it as it stands.
-            if let Ok(c) = serde_json::from_str::<ToolCall>(after.trim()) {
-                calls.push(c);
-            }
-            break;
-        };
-        if let Ok(c) = serde_json::from_str::<ToolCall>(after[..end].trim()) {
-            calls.push(c);
-        }
-        rest = &after[end + "</tool_call>".len()..];
-    }
-    calls
-}
-
-/// The reply with its tool blocks removed, for showing.
-pub fn strip_tool_calls(text: &str) -> String {
-    let mut out = String::new();
-    let mut rest = text;
-    while let Some(start) = rest.find("<tool_call>") {
-        out.push_str(&rest[..start]);
-        match rest[start..].find("</tool_call>") {
-            Some(end) => rest = &rest[start + end + "</tool_call>".len()..],
-            None => {
-                rest = "";
-                break;
-            }
-        }
-    }
-    out.push_str(rest);
-    out.trim().to_string()
-}
-
 /// A glyph name list argument as the CLI takes it.
 pub fn glyph_list(args: &Value) -> Vec<String> {
     args.get("glyphs")
@@ -390,19 +294,6 @@ mod tests {
     }
 
     #[test]
-    fn tool_calls_parse_and_strip() {
-        let text =
-            "Let me look.\n<tool_call>\n{\"name\": \"font_info\", \"arguments\": {}}\n</tool_call>";
-        let calls = parse_tool_calls(text);
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].name, "font_info");
-        assert_eq!(strip_tool_calls(text), "Let me look.");
-        let open = "<tool_call>{\"name\":\"read_glyph\",\"arguments\":{\"glyph\":\"a\"}}";
-        assert_eq!(parse_tool_calls(open)[0].arguments["glyph"], "a");
-        assert!(parse_tool_calls("no call").is_empty());
-    }
-
-    #[test]
     fn the_prompt_names_every_tool() {
         let t = tools();
         let p = system_prompt(&t);
@@ -421,22 +312,5 @@ mod tests {
         assert!(p.contains("Example. Person: How wide is the n?"));
         // The example calls the tool the rule names.
         assert!(p.contains("\"name\": \"read_glyph\""));
-    }
-
-    #[test]
-    fn questions_are_sorted_by_what_they_need() {
-        assert!(asks_geometry(
-            "How wide is the H, and what are its sidebearings?"
-        ));
-        assert!(asks_geometry("how many points does the a have"));
-        assert!(!asks_geometry(
-            "What font is open and how many glyphs does it have?"
-        ));
-        assert!(asks_docs(
-            "What does the UFO spec say about the smooth attribute on a point?"
-        ));
-        assert!(!asks_docs(
-            "Propose a bolder H with the virtua-12m-bolden model"
-        ));
     }
 }

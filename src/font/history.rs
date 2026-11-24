@@ -57,59 +57,50 @@ struct CanonicalStep<S> {
     after: S,
 }
 
+/// Exact before-and-after history for one guarded scope.
+///
+/// It serves font-wide metadata and source-structural transactions whose snapshot already
+/// contains stable identities for everything in scope, and each glyph layer of
+/// [`CanonicalHistory`].
+/// Replay requires the current snapshot to match exactly and moves the stack only after the
+/// caller's atomic restore operation succeeds.
 #[derive(Clone, Debug, PartialEq)]
-struct LayerHistory<S> {
+pub struct UndoStack<S> {
     undo: VecDeque<CanonicalStep<S>>,
     redo: VecDeque<CanonicalStep<S>>,
 }
 
-impl<S> Default for LayerHistory<S> {
+impl<S> Default for UndoStack<S> {
     fn default() -> Self {
         Self {
-            undo: VecDeque::with_capacity(MAX_CANONICAL_HISTORY),
+            // No reservation: a font-wide command makes one stack for each layer it edits.
+            undo: VecDeque::new(),
             redo: VecDeque::new(),
         }
     }
 }
 
-/// Exact before-and-after history for one guarded document transaction scope.
-///
-/// This stack is suitable for font-wide metadata or source-structural transactions
-/// whose snapshot already contains stable identities for everything in scope.
-/// Replay requires the current snapshot to match exactly and moves the stack only
-/// after the caller's atomic restore operation succeeds.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TransactionHistory<S> {
-    stack: LayerHistory<S>,
-}
-
-impl<S> Default for TransactionHistory<S> {
-    fn default() -> Self {
-        Self {
-            stack: LayerHistory::default(),
-        }
-    }
-}
-
-impl<S: PartialEq> TransactionHistory<S> {
-    /// Record one completed transaction, clearing redo only for a real change.
+impl<S: PartialEq> UndoStack<S> {
+    /// Record one completed step, clearing redo only for a real change.
     pub fn record(&mut self, before: S, after: S) -> bool {
         if before == after {
             return false;
         }
-        self.stack.redo.clear();
-        self.stack.undo.push_back(CanonicalStep { before, after });
-        if self.stack.undo.len() > MAX_CANONICAL_HISTORY {
-            self.stack.undo.pop_front();
+        self.redo.clear();
+        self.undo.push_back(CanonicalStep { before, after });
+        if self.undo.len() > MAX_CANONICAL_HISTORY {
+            self.undo.pop_front();
         }
         true
     }
 
-    /// Extend the newest transaction while retaining its original before-state.
+    /// Extend the newest step with the next state in the same gesture.
     ///
-    /// Returning to the original state removes the no-op transaction.
+    /// `current` must equal the newest recorded after-state.
+    /// The original before-state is retained, so a drag remains one undo step.
+    /// Returning to the original state removes the no-op step.
     pub fn coalesce(&mut self, current: &S, after: S) -> bool {
-        let Some(step) = self.stack.undo.back_mut() else {
+        let Some(step) = self.undo.back_mut() else {
             return false;
         };
         if &step.after != current {
@@ -117,28 +108,32 @@ impl<S: PartialEq> TransactionHistory<S> {
         }
         step.after = after;
         if step.before == step.after {
-            self.stack.undo.pop_back();
+            self.undo.pop_back();
         }
         true
     }
 
-    /// Drop the newest undo transaction after its operation reports no usable change.
+    /// Drop the newest undo step after its operation reports no usable change.
     pub fn discard_last(&mut self) -> bool {
-        self.stack.undo.pop_back().is_some()
+        self.undo.pop_back().is_some()
     }
 
-    /// Replay one exact transaction through an atomic caller-owned restore boundary.
+    /// Replay one exact step through an atomic caller-owned restore boundary.
+    ///
+    /// `current` is compared before `apply` runs.
+    /// The closure receives the expected live state and the replacement, so the document
+    /// boundary can repeat the comparison in the same transaction that installs the replacement.
     pub fn replay<E>(
         &mut self,
         current: &S,
         direction: HistoryDirection,
         apply: impl FnOnce(&S, &S) -> Result<(), E>,
     ) -> Result<HistoryReplayOutcome, HistoryReplayError<E>> {
-        let step = match direction {
-            HistoryDirection::Undo => self.stack.undo.back(),
-            HistoryDirection::Redo => self.stack.redo.back(),
+        let (from, to) = match direction {
+            HistoryDirection::Undo => (&mut self.undo, &mut self.redo),
+            HistoryDirection::Redo => (&mut self.redo, &mut self.undo),
         };
-        let Some(step) = step else {
+        let Some(step) = from.back() else {
             return Ok(HistoryReplayOutcome::Empty);
         };
         let (expected, replacement) = match direction {
@@ -149,44 +144,35 @@ impl<S: PartialEq> TransactionHistory<S> {
             return Err(HistoryReplayError::Stale);
         }
         apply(expected, replacement).map_err(HistoryReplayError::Apply)?;
-        match direction {
-            HistoryDirection::Undo => {
-                let step = self
-                    .stack
-                    .undo
-                    .pop_back()
-                    .expect("the replayed undo transaction exists");
-                self.stack.redo.push_back(step);
-            }
-            HistoryDirection::Redo => {
-                let step = self
-                    .stack
-                    .redo
-                    .pop_back()
-                    .expect("the replayed redo transaction exists");
-                self.stack.undo.push_back(step);
-            }
-        }
+        let step = from.pop_back().expect("the replayed step exists");
+        to.push_back(step);
         Ok(HistoryReplayOutcome::Applied)
     }
 
-    /// Whether a transaction can replay in `direction`.
+    /// Whether a step can replay in `direction`.
     pub fn can_replay(&self, direction: HistoryDirection) -> bool {
         self.depth(direction) != 0
     }
 
-    /// Number of transactions available in `direction`.
+    /// Number of steps available in `direction`.
     pub fn depth(&self, direction: HistoryDirection) -> usize {
         match direction {
-            HistoryDirection::Undo => self.stack.undo.len(),
-            HistoryDirection::Redo => self.stack.redo.len(),
+            HistoryDirection::Undo => self.undo.len(),
+            HistoryDirection::Redo => self.redo.len(),
         }
     }
 
-    /// Forget every transaction, such as after replacing the open document.
+    /// Forget the redo steps, returning whether there were any.
+    fn clear_redo(&mut self) -> bool {
+        let changed = !self.redo.is_empty();
+        self.redo.clear();
+        changed
+    }
+
+    /// Forget every step, such as after replacing the open document.
     pub fn clear(&mut self) {
-        self.stack.undo.clear();
-        self.stack.redo.clear();
+        self.undo.clear();
+        self.redo.clear();
     }
 }
 
@@ -202,7 +188,7 @@ impl<S: PartialEq> TransactionHistory<S> {
 /// so stale and rejected operations leave both document and history unchanged.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CanonicalHistory<S> {
-    stacks: BTreeMap<GlyphLayerAddress, LayerHistory<S>>,
+    stacks: BTreeMap<GlyphLayerAddress, UndoStack<S>>,
 }
 
 impl<S> Default for CanonicalHistory<S> {
@@ -216,41 +202,22 @@ impl<S> Default for CanonicalHistory<S> {
 impl<S: PartialEq> CanonicalHistory<S> {
     /// Record one completed canonical edit.
     ///
-    /// A no-op records nothing and retains redo history. A real edit clears redo
-    /// only for this glyph layer.
+    /// A no-op records nothing and retains redo history.
+    /// A real edit clears redo only for this glyph layer.
     pub fn record(&mut self, address: GlyphLayerAddress, before: S, after: S) -> bool {
-        if before == after {
-            return false;
-        }
-        let stack = self.stacks.entry(address).or_default();
-        stack.redo.clear();
-        stack.undo.push_back(CanonicalStep { before, after });
-        if stack.undo.len() > MAX_CANONICAL_HISTORY {
-            stack.undo.pop_front();
-        }
-        true
+        before != after
+            && self
+                .stacks
+                .entry(address)
+                .or_default()
+                .record(before, after)
     }
 
-    /// Extend the latest step with the next state in the same gesture.
-    ///
-    /// `current` must equal the latest recorded after-state. The original before-state
-    /// is retained, so a drag remains one undo step. Returning to the original state
-    /// removes the no-op step.
+    /// Extend the latest step of one glyph layer; see [`UndoStack::coalesce`].
     pub fn coalesce(&mut self, address: &GlyphLayerAddress, current: &S, after: S) -> bool {
-        let Some(stack) = self.stacks.get_mut(address) else {
-            return false;
-        };
-        let Some(step) = stack.undo.back_mut() else {
-            return false;
-        };
-        if &step.after != current {
-            return false;
-        }
-        step.after = after;
-        if step.before == step.after {
-            stack.undo.pop_back();
-        }
-        true
+        self.stacks
+            .get_mut(address)
+            .is_some_and(|stack| stack.coalesce(current, after))
     }
 
     /// Drop the most recently recorded undo step for one glyph layer.
@@ -260,14 +227,10 @@ impl<S: PartialEq> CanonicalHistory<S> {
     pub fn discard_last(&mut self, address: &GlyphLayerAddress) -> bool {
         self.stacks
             .get_mut(address)
-            .is_some_and(|stack| stack.undo.pop_back().is_some())
+            .is_some_and(UndoStack::discard_last)
     }
 
-    /// Atomically replay one step through the document's canonical restore operation.
-    ///
-    /// `current` is compared before `apply` runs. The closure receives the expected
-    /// live state and replacement so the document boundary can repeat the comparison
-    /// in the same transaction that installs the replacement.
+    /// Atomically replay one step of one glyph layer; see [`UndoStack::replay`].
     pub fn replay<E>(
         &mut self,
         address: &GlyphLayerAddress,
@@ -275,41 +238,10 @@ impl<S: PartialEq> CanonicalHistory<S> {
         direction: HistoryDirection,
         apply: impl FnOnce(&S, &S) -> Result<(), E>,
     ) -> Result<HistoryReplayOutcome, HistoryReplayError<E>> {
-        let Some(stack) = self.stacks.get_mut(address) else {
-            return Ok(HistoryReplayOutcome::Empty);
-        };
-        let step = match direction {
-            HistoryDirection::Undo => stack.undo.back(),
-            HistoryDirection::Redo => stack.redo.back(),
-        };
-        let Some(step) = step else {
-            return Ok(HistoryReplayOutcome::Empty);
-        };
-        let (expected, replacement) = match direction {
-            HistoryDirection::Undo => (&step.after, &step.before),
-            HistoryDirection::Redo => (&step.before, &step.after),
-        };
-        if current != expected {
-            return Err(HistoryReplayError::Stale);
+        match self.stacks.get_mut(address) {
+            Some(stack) => stack.replay(current, direction, apply),
+            None => Ok(HistoryReplayOutcome::Empty),
         }
-        apply(expected, replacement).map_err(HistoryReplayError::Apply)?;
-        match direction {
-            HistoryDirection::Undo => {
-                let step = stack
-                    .undo
-                    .pop_back()
-                    .expect("the replayed undo step exists");
-                stack.redo.push_back(step);
-            }
-            HistoryDirection::Redo => {
-                let step = stack
-                    .redo
-                    .pop_back()
-                    .expect("the replayed redo step exists");
-                stack.undo.push_back(step);
-            }
-        }
-        Ok(HistoryReplayOutcome::Applied)
     }
 
     /// Whether a glyph layer has a step in `direction`.
@@ -319,42 +251,9 @@ impl<S: PartialEq> CanonicalHistory<S> {
 
     /// Number of steps available for one glyph layer in `direction`.
     pub fn depth(&self, address: &GlyphLayerAddress, direction: HistoryDirection) -> usize {
-        self.stacks.get(address).map_or(0, |stack| match direction {
-            HistoryDirection::Undo => stack.undo.len(),
-            HistoryDirection::Redo => stack.redo.len(),
-        })
-    }
-
-    /// Move every layer history when a glyph is renamed.
-    ///
-    /// Returns false without changing any stack if the new name already has history.
-    pub fn rename_glyph(&mut self, old: &str, new: &str) -> bool {
-        if old == new {
-            return false;
-        }
-        let old_addresses = self
-            .stacks
-            .keys()
-            .filter(|address| address.glyph == old)
-            .cloned()
-            .collect::<Vec<_>>();
-        if self.stacks.keys().any(|address| address.glyph == new) {
-            return false;
-        }
-        for old_address in old_addresses {
-            let stack = self
-                .stacks
-                .remove(&old_address)
-                .expect("the collected history address exists");
-            self.stacks.insert(
-                GlyphLayerAddress {
-                    glyph: new.to_owned(),
-                    layer: old_address.layer,
-                },
-                stack,
-            );
-        }
-        true
+        self.stacks
+            .get(address)
+            .map_or(0, |stack| stack.depth(direction))
     }
 
     /// Forget every layer history for one glyph after permanent removal.
@@ -374,7 +273,12 @@ impl<S: PartialEq> CanonicalHistory<S> {
 }
 
 impl<S: Clone + PartialEq> CanonicalHistory<S> {
-    fn rename_glyph_with(
+    /// Move every layer stack of `old` to `new` when a glyph is renamed.
+    ///
+    /// `rebind` rewrites each recorded state for its new address, or returns `None` to reject.
+    /// Returns false without changing any stack when the names are equal, the new name already
+    /// has history or `rebind` rejects a state.
+    pub fn rename_glyph_with(
         &mut self,
         old: &str,
         new: &str,
@@ -480,6 +384,16 @@ impl DocumentHistory {
         self.layers.discard_last(address)
     }
 
+    /// Invalidate an addressed redo branch when a new grouped edit supersedes it.
+    ///
+    /// Group replay deliberately does not call this: it must retain later per-layer redo entries.
+    pub(crate) fn clear_redo(&mut self, address: &GlyphLayerAddress) -> bool {
+        self.layers
+            .stacks
+            .get_mut(address)
+            .is_some_and(UndoStack::clear_redo)
+    }
+
     /// Undo or redo one canonical layer step through guarded Project restoration.
     pub fn replay(
         &mut self,
@@ -548,7 +462,7 @@ impl DocumentHistory {
 /// set atomically so replay cannot partially update a document.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SourceMetadataHistory {
-    transactions: TransactionHistory<CanonicalSourceMetadataSnapshot>,
+    transactions: UndoStack<CanonicalSourceMetadataSnapshot>,
 }
 
 impl SourceMetadataHistory {
@@ -690,7 +604,7 @@ mod tests {
 
     #[test]
     fn guarded_transaction_history_rejects_stale_and_failed_replay() {
-        let mut history = TransactionHistory::default();
+        let mut history = UndoStack::default();
         assert!(history.record(1, 2));
         assert_eq!(
             history.replay(&3, HistoryDirection::Undo, |_, _| Ok::<_, ()>(())),

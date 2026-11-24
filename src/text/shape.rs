@@ -112,13 +112,22 @@ impl ShapingFont {
         use skrifa::{MetadataProvider as _, raw::TableProvider as _};
         let font = skrifa::FontRef::new(&bytes).map_err(|error| error.to_string())?;
         let count = font.maxp().map_err(|error| error.to_string())?.num_glyphs();
-        let glyph_names = font.glyph_names();
-        let names = (0..count)
-            .map(|id| {
-                glyph_names
-                    .get(GlyphId::new(u32::from(id)))
-                    .map(|name| name.to_string())
-                    .ok_or_else(|| format!("compiled font has no name for glyph {id}"))
+        // Read the names in one pass. Asking for one name at a time scans the `post` table's
+        // strings from the start for each glyph, which costs glyphs squared.
+        let mut found: Vec<Option<String>> = vec![None; usize::from(count)];
+        for (id, name) in font.glyph_names().iter() {
+            if let Some(slot) = usize::try_from(id.to_u32())
+                .ok()
+                .and_then(|index| found.get_mut(index))
+            {
+                *slot = Some(name.to_string());
+            }
+        }
+        let names = found
+            .into_iter()
+            .enumerate()
+            .map(|(id, name)| {
+                name.ok_or_else(|| format!("compiled font has no name for glyph {id}"))
             })
             .collect::<Result<_, _>>()?;
         Ok(Self {
@@ -356,24 +365,71 @@ impl ShapingFont {
     }
 }
 
-/// Where a failed feature-file compile goes. Silent in the browser
-/// console rather than fatal: the file will not compile halfway through
-/// an edit, and typing has to keep working.
+/// The host function that receives text shaping failures.
+static SHAPING_FAILURE_REPORTER: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
+
+/// Install the host function that receives text shaping failures.
+///
+/// The library does not print; the native editor installs a reporter that writes to standard
+/// error.
+/// Only the first installation takes effect, and the return value says whether this one did.
+pub fn set_shaping_failure_reporter(reporter: fn(&str)) -> bool {
+    SHAPING_FAILURE_REPORTER.set(reporter).is_ok()
+}
+
+/// Pass a failed feature-file compile or outline read to the installed reporter.
+///
+/// The failure is not fatal: a feature file does not compile halfway through an edit, and typing
+/// has to keep working.
+/// The text buffer rebuilds its shaping font after each clone, so a message that repeats the
+/// previous one is not reported again.
+/// Without an installed reporter the failure is discarded.
 pub fn log_shaping_failure(message: &str) {
-    // Hosts that want browser-console output can wrap this; core
-    // stays free of platform crates.
-    let _ = message;
+    let Some(report) = SHAPING_FAILURE_REPORTER.get() else {
+        return;
+    };
+    static LAST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    let mut last = LAST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if record_new_failure(&mut last, message) {
+        report(message);
+    }
+}
+
+/// Store `message` as the last reported failure, and return whether it differs from the previous one.
+fn record_new_failure(last: &mut Option<String>, message: &str) -> bool {
+    if last.as_deref() == Some(message) {
+        return false;
+    }
+    *last = Some(message.to_owned());
+    true
 }
 
 #[cfg(test)]
+mod failure_report_tests {
+    use super::record_new_failure;
+
+    #[test]
+    fn a_repeated_failure_is_reported_once() {
+        let mut last = None;
+        assert!(record_new_failure(&mut last, "feature file: syntax error"));
+        assert!(!record_new_failure(&mut last, "feature file: syntax error"));
+        assert!(record_new_failure(&mut last, "feature file: unknown glyph"));
+        assert!(record_new_failure(&mut last, "feature file: syntax error"));
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "integration-fonts")]
 mod tests {
     use super::*;
 
-    /// Build a shaping source out of the bundled test UFO: its glyph
+    /// Build a shaping source out of the pinned integration UFO: its glyph
     /// order, advances, codepoints and features.fea, exactly as the
     /// editor would hand them over.
     fn virtua_grotesk() -> ShapingSource {
-        let ufo_dir = crate::testing::fonts::regular_ufo();
+        let ufo_dir = crate::testing::fonts::virtua_regular_ufo();
         let font = norad::Font::load(&ufo_dir).expect("test UFO loads");
         let features = std::fs::read_to_string(ufo_dir.join("features.fea"))
             .expect("test UFO has features.fea");

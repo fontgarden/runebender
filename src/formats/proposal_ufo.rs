@@ -116,7 +116,7 @@ pub fn save_proposal(source: &Path, batch: &EditBatch) -> Result<ProposalSummary
         let index_before = fs::read(&index_path).map_err(|error| error.to_string())?;
 
         let input = SourceInput::load(source)?;
-        let mut project = Project::from_source(input);
+        let mut project = Project::from_source(input).map_err(|error| error.to_string())?;
         let source_id = SourceId(0);
         let summary = edit_batch::propose_project(&mut project, source_id, batch)?;
         let proposal_layer = LayerId {

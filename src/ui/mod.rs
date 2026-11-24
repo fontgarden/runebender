@@ -12,4 +12,6 @@ pub mod editing;
 pub mod graph;
 pub mod icons;
 pub mod sidebar;
+pub mod syntax;
 pub mod theme;
+pub mod vim;

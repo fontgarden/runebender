@@ -7,6 +7,7 @@
 //! cells into one scene, not a widget per cell. It owns scroll offset and
 //! selection, and reports open/select events to the app.
 
+use std::cell::{Ref, RefCell};
 use std::sync::Arc;
 
 use masonry::accesskit::{Node, Role};
@@ -276,8 +277,8 @@ pub(crate) struct CellMetrics {
     pub padding_y: f64,
     /// Whether each row reserves a caption band below its thumbnail.
     pub captions_below: bool,
-    pub ascender: f64,
-    pub descender: f64,
+    /// Distance in font units from the preview center down to the shared baseline.
+    pub baseline_offset: Option<f64>,
     pub upm: f64,
     /// Detail view: a third line under the name with the category and advance.
     ///
@@ -303,7 +304,7 @@ pub(crate) fn cell_of(font: &FontModel, index: usize, palette: &Palette) -> Cell
         codepoint: g.codepoint,
         outline: g.outline.clone(),
         advance: g.advance,
-        mark: g.mark.as_deref().and_then(|m| palette.mark_tile(m)),
+        mark: g.mark.as_deref().and_then(|m| palette.mark(m)),
         caption_widths: caption_widths(&g.name, g.codepoint, g.advance),
         aspect: ink_aspect(&g.outline),
     }
@@ -344,6 +345,19 @@ pub(crate) enum GridEvent {
     Open(usize),
 }
 
+/// Geometry shared by painting, scrolling and hit testing until a layout input changes.
+///
+/// Retaining the cells makes pointer identity a safe cache key, including across replacement.
+struct GridLayout {
+    cells: Arc<Vec<Cell>>,
+    metrics: CellMetrics,
+    size: Size,
+    encoded: bool,
+    columns: usize,
+    fill: Option<(usize, usize)>,
+    rows: Arc<Vec<Vec<(usize, usize)>>>,
+}
+
 pub(crate) struct GridWidget {
     cells: Arc<Vec<Cell>>,
     metrics: CellMetrics,
@@ -360,101 +374,124 @@ pub(crate) struct GridWidget {
     size: Size,
     /// The pointer is over the grid, which is when the scroll thumb shows.
     hovered: bool,
+    layout: RefCell<Option<GridLayout>>,
 }
 
 impl GridWidget {
-    fn columns(&self) -> usize {
-        self.fill_layout()
-            .map_or_else(|| self.slider_columns(), |(columns, _)| columns)
-    }
-
-    /// Whether the tiles fit the space rather than the zoom size: a grid with
-    /// no encoded glyph, such as a neural source, holds a few pieces of
-    /// writing of very different widths.
-    fn fills_space(&self) -> bool {
-        self.metrics.captions_below && !self.cells.is_empty() && !self.encoded()
-    }
-
-    /// The column count and row count of a grid that fills the space: the
-    /// fewest columns, and so the largest tiles, whose rows all fit the
-    /// height. `None` when the grid does not fill or the cells do not fit at
-    /// the zoom size, which then scrolls as usual.
-    fn fill_layout(&self) -> Option<(usize, usize)> {
-        if !self.fills_space() {
-            return None;
+    fn layout_data(&self) -> Ref<'_, GridLayout> {
+        let mut cached = self.layout.borrow_mut();
+        if cached.as_ref().is_none_or(|layout| {
+            !Arc::ptr_eq(&layout.cells, &self.cells)
+                || layout.metrics != self.metrics
+                || layout.size != self.size
+        }) {
+            *cached = Some(self.compute_layout());
         }
-        let available = (self.size.height - 2.0 * self.metrics.padding_y).max(1.0);
-        (1..=self.slider_columns()).find_map(|columns| {
-            let rows = pack_spans_evenly(&self.spans_for(columns), columns).len();
-            let natural = self.natural_row_height(columns);
-            let height = rows as f64 * natural + GAP * rows.saturating_sub(1) as f64;
-            (height <= available).then_some((columns, rows))
+        drop(cached);
+        Ref::map(self.layout.borrow(), |cached| {
+            cached.as_ref().expect("the grid layout was just computed")
         })
     }
 
-    /// The edge of one column when the grid has `columns` of them.
-    fn edge_for(&self, columns: usize) -> f64 {
-        let columns = columns.max(1) as f64;
-        ((self.size.width - 2.0 * self.metrics.padding - GAP * (columns - 1.0)) / columns).max(1.0)
+    fn compute_layout(&self) -> GridLayout {
+        let encoded = self.cells.iter().any(|cell| cell.codepoint.is_some());
+        let fills = self.metrics.captions_below && !self.cells.is_empty() && !encoded;
+        let edge_for = |columns: usize| {
+            let columns = columns.max(1) as f64;
+            ((self.size.width - 2.0 * self.metrics.padding - GAP * (columns - 1.0)) / columns)
+                .max(1.0)
+        };
+        let labels = |edge| {
+            cell_label_metrics(
+                edge,
+                self.metrics.captions_below,
+                self.metrics.detail,
+                encoded,
+            )
+        };
+        let pack = |columns: usize| {
+            let edge = edge_for(columns);
+            let span_width = |span: usize| edge * span as f64 + GAP * span.saturating_sub(1) as f64;
+            let lines = labels(edge).1;
+            // Without a Unicode line, the detail line sits one line up.
+            let shown = if lines > 1 && !encoded {
+                lines + 1
+            } else {
+                lines
+            };
+            let spans: Vec<_> = self
+                .cells
+                .iter()
+                .enumerate()
+                .map(|(i, cell)| {
+                    let label_width = cell.caption_widths[..shown.min(3)]
+                        .iter()
+                        .copied()
+                        .fold(0.0, f64::max);
+                    let label_span = if lines == 0 {
+                        1
+                    } else {
+                        (1..=columns)
+                            .find(|&span| span_width(span) >= label_width + 2.0 * LABEL_TOP)
+                            .unwrap_or(columns)
+                    };
+                    let shape_span = if fills {
+                        usize::try_from(round_units(cell.aspect.round()))
+                            .unwrap_or(1)
+                            .clamp(1, columns)
+                    } else {
+                        column_span(&cell.name, cell.advance, self.metrics.upm)
+                    };
+                    (i, shape_span.max(label_span))
+                })
+                .collect();
+            if fills {
+                pack_spans_evenly(&spans, columns)
+            } else {
+                pack_spans(&spans, columns)
+            }
+        };
+        let slider_columns = self.slider_columns();
+        let mut columns = slider_columns;
+        let mut rows = None;
+        let mut fill = None;
+        if fills {
+            let available = (self.size.height - 2.0 * self.metrics.padding_y).max(1.0);
+            for candidate in 1..=slider_columns {
+                let packed = pack(candidate);
+                let edge = edge_for(candidate);
+                let natural = edge + labels(edge).2;
+                let height =
+                    packed.len() as f64 * natural + GAP * packed.len().saturating_sub(1) as f64;
+                if height <= available {
+                    columns = candidate;
+                    fill = Some((columns, packed.len()));
+                    rows = Some(packed);
+                    break;
+                }
+                if candidate == slider_columns {
+                    rows = Some(packed);
+                }
+            }
+        }
+        GridLayout {
+            cells: self.cells.clone(),
+            metrics: self.metrics,
+            size: self.size,
+            encoded,
+            columns,
+            fill,
+            rows: Arc::new(rows.unwrap_or_else(|| pack(columns))),
+        }
     }
 
-    /// A square thumbnail and its caption, at `columns` columns.
-    fn natural_row_height(&self, columns: usize) -> f64 {
-        let edge = self.edge_for(columns);
-        edge + cell_label_metrics(
-            edge,
-            self.metrics.captions_below,
-            self.metrics.detail,
-            self.encoded(),
-        )
-        .2
+    fn columns(&self) -> usize {
+        self.layout_data().columns
     }
 
-    /// Each cell's span at `columns` columns: wide enough for its caption,
-    /// and in a filled grid, about as many columns as its ink is wide.
-    fn spans_for(&self, columns: usize) -> Vec<(usize, usize)> {
-        let edge = self.edge_for(columns);
-        let span_width = |span: usize| edge * span as f64 + GAP * span.saturating_sub(1) as f64;
-        let lines = cell_label_metrics(
-            edge,
-            self.metrics.captions_below,
-            self.metrics.detail,
-            self.encoded(),
-        )
-        .1;
-        let fills = self.fills_space();
-        self.cells
-            .iter()
-            .enumerate()
-            .map(|(i, c)| {
-                // Without a Unicode line, the detail line sits one line up.
-                let shown = if lines > 1 && !self.encoded() {
-                    lines + 1
-                } else {
-                    lines
-                };
-                let label_width = c.caption_widths[..shown.min(3)]
-                    .iter()
-                    .copied()
-                    .fold(0.0, f64::max);
-                let label_span = if lines == 0 {
-                    1
-                } else {
-                    (1..=columns)
-                        .find(|&span| span_width(span) >= label_width + 2.0 * LABEL_TOP)
-                        .unwrap_or(columns)
-                };
-                let shape_span = if fills {
-                    // Rounded to whole columns; a thumbnail is about square per column.
-                    usize::try_from(round_units(c.aspect.round()))
-                        .unwrap_or(1)
-                        .clamp(1, columns)
-                } else {
-                    column_span(&c.name, c.advance, self.metrics.upm)
-                };
-                (i, shape_span.max(label_span))
-            })
-            .collect()
+    /// The fewest columns whose natural-height rows fit, for an unencoded overview.
+    fn fill_layout(&self) -> Option<(usize, usize)> {
+        self.layout_data().fill
     }
 
     fn slider_columns(&self) -> usize {
@@ -472,7 +509,7 @@ impl GridWidget {
 
     /// Whether any glyph in the grid has a code point to caption.
     fn encoded(&self) -> bool {
-        self.cells.iter().any(|cell| cell.codepoint.is_some())
+        self.layout_data().encoded
     }
 
     fn cell_width(&self, span: usize) -> f64 {
@@ -491,14 +528,8 @@ impl GridWidget {
     }
 
     /// Packed rows of (cell-index-in-self.cells, span).
-    fn packed(&self) -> Vec<Vec<(usize, usize)>> {
-        let columns = self.columns();
-        let spans = self.spans_for(columns);
-        if self.fills_space() {
-            pack_spans_evenly(&spans, columns)
-        } else {
-            pack_spans(&spans, columns)
-        }
+    fn packed(&self) -> Arc<Vec<Vec<(usize, usize)>>> {
+        self.layout_data().rows.clone()
     }
 
     fn row_pitch(&self) -> f64 {
@@ -565,6 +596,32 @@ impl GridWidget {
     fn visible_row_range(&self) -> std::ops::Range<usize> {
         let first = self.scroll_row();
         first..first.saturating_add(self.visible_rows())
+    }
+
+    fn preview_transform(
+        &self,
+        rect: Rect,
+        outline: &kurbo::BezPath,
+        advance: f64,
+        scale: f64,
+    ) -> Affine {
+        if let Some(offset) = self.metrics.baseline_offset {
+            let baseline = rect.center().y + scale * offset;
+            let center = if advance > 0.0 {
+                advance * 0.5
+            } else {
+                outline.bounding_box().center().x
+            };
+            return sort_transform(rect.center().x, center, baseline, scale);
+        }
+        // Mini-map tiles use the visible ink as the navigation icon.
+        let ink = outline.bounding_box().center();
+        sort_transform(
+            rect.center().x,
+            ink.x,
+            rect.center().y + ink.y * scale,
+            scale,
+        )
     }
 
     /// Snap each fitted row's edges together so painting and pointer bounds agree.
@@ -770,6 +827,7 @@ impl Widget for GridWidget {
         _props: &PropertiesRef<'_>,
         painter: &mut Painter<'_>,
     ) {
+        let _timer = crate::application::platform::frame_times::PaintTimer::start();
         let rows = self.packed();
         let total = rows.len();
         self.set_scroll_row(self.scroll_row(), total);
@@ -874,22 +932,24 @@ impl Widget for GridWidget {
                 let line = (label_size * 1.10).ceil();
 
                 let preview_rect = Rect::new(rect.x0, rect.y0, rect.x1, rect.y1 - block);
+                let upm = self.metrics.upm.max(1.0);
+                let scale = 0.60 * (self.cell_height() - block) / upm;
+                painter.push_fill_clip(preview_rect.inset(-1.0));
                 if !cell.outline.elements().is_empty() {
                     let preview =
-                        fit_transform(preview_rect, cell.outline.bounding_box(), self.metrics.upm);
-                    let outline = preview * (*cell.outline).clone();
+                        self.preview_transform(preview_rect, &cell.outline, cell.advance, scale);
                     // Glyphs and captions share the resolved tile ink: its
                     // mark hue for outlined tiles, contrasting ink for filled ones.
-                    painter.fill(&outline, ink).draw();
+                    painter.fill(&*cell.outline, ink).transform(preview).draw();
                 } else if let Some(reference) = empty_cell_reference(cell.codepoint) {
-                    let preview = fit_transform(preview_rect, reference.bounding_box(), 1000.0);
+                    let preview =
+                        self.preview_transform(preview_rect, &reference, 0.0, scale * upm / 1000.0);
                     painter
-                        .fill(
-                            &(preview * (*reference).clone()),
-                            self.palette.grid_reference_ink(ink),
-                        )
+                        .fill(&*reference, self.palette.grid_reference_ink(ink))
+                        .transform(preview)
                         .draw();
                 }
+                painter.pop_clip();
                 if label_lines == 0 {
                     continue;
                 }
@@ -1085,26 +1145,16 @@ impl Widget for GridWidget {
     }
 }
 
-/// GPUI thumbnail placement: retain em-relative sizes while centering ink.
-/// Expand the em window for tall marks rather than clipping their outlines.
-fn fit_transform(cell: Rect, ink: Rect, upm: f64) -> Affine {
-    const EM_FILL: f64 = 0.65;
-    const BASELINE_FROM_TOP: f64 = 0.8;
-    const THUMBNAIL_FILL: f64 = 0.92;
-    let em_height = upm.max(1.0) / EM_FILL;
-    let em_top = -BASELINE_FROM_TOP * em_height;
-    let top = em_top.min(-ink.y1);
-    let bottom = (em_top + em_height).max(-ink.y0);
-    // Ink taller than the em window, as on a neural canvas, would otherwise
-    // fill the tile from edge to caption; keep a margin above and below it.
-    const INK_HEIGHT_FILL: f64 = 0.75;
-    let scale = ((cell.width() / ink.width().max(1.0))
-        .min(cell.height() / (bottom - top).max(1.0))
-        * THUMBNAIL_FILL)
-        .min(cell.height() * INK_HEIGHT_FILL / ink.height().max(1.0));
-    let x = cell.x0 + (cell.width() - ink.width() * scale) / 2.0 - ink.x0 * scale;
-    let y = cell.y0 + (cell.height() - ink.height() * scale) / 2.0 + ink.y1 * scale;
-    Affine::new([scale, 0.0, 0.0, -scale, x, y])
+/// Place the sort on the row baseline, preserving font-unit positions.
+fn sort_transform(cell_center: f64, sort_center: f64, baseline: f64, scale: f64) -> Affine {
+    Affine::new([
+        scale,
+        0.0,
+        0.0,
+        -scale,
+        cell_center - sort_center * scale,
+        baseline,
+    ])
 }
 
 // ---------------------------------------------------------------------------
@@ -1159,6 +1209,7 @@ where
             pixel_scroll_remainder: 0.0,
             size: Size::ZERO,
             hovered: false,
+            layout: RefCell::default(),
         };
         (ctx.with_action_widget(|ctx| ctx.create_pod(widget)), ())
     }
@@ -1286,8 +1337,7 @@ mod thumbnail_tests {
                 padding: crate::application::design::RAIL_GRID_INSET,
                 padding_y: crate::application::design::RAIL_GRID_INSET,
                 captions_below: false,
-                ascender: 800.0,
-                descender: -200.0,
+                baseline_offset: None,
                 upm: 1000.0,
                 detail: false,
             },
@@ -1298,7 +1348,33 @@ mod thumbnail_tests {
             pixel_scroll_remainder: 0.0,
             size: Size::new(246.0, 538.0),
             hovered: false,
+            layout: RefCell::default(),
         }
+    }
+
+    #[test]
+    fn refreshed_cell_geometry_changes_hit_testing_without_changing_order() {
+        let mut grid = rail();
+        let at = Point::new(80.0, 29.0);
+        assert_eq!(grid.cell_index_at(at), Some(1));
+
+        let mut cells = grid.cells.as_ref().clone();
+        cells[0].advance = 3000.0;
+        grid.update_cells(Arc::new(cells));
+        assert_eq!(
+            grid.cell_index_at(at),
+            Some(0),
+            "the widened first tile owns the hit"
+        );
+
+        let mut cells = grid.cells.as_ref().clone();
+        cells[0].advance = 500.0;
+        grid.update_cells(Arc::new(cells));
+        assert_eq!(
+            grid.cell_index_at(at),
+            Some(1),
+            "narrowing restores the next tile"
+        );
     }
 
     /// An overview of unencoded canvases, as a neural source shows.
@@ -1334,7 +1410,7 @@ mod thumbnail_tests {
             (0, 3),
             "the wide ink takes three columns"
         );
-        for row in grid.packed() {
+        for row in grid.packed().iter() {
             assert_eq!(row.iter().map(|cell| cell.1).sum::<usize>(), columns);
         }
         let used = rows as f64 * grid.row_pitch() - GAP + 2.0 * grid.inset_y();
@@ -1732,21 +1808,29 @@ mod thumbnail_tests {
     }
 
     #[test]
-    fn thumbnail_ink_is_centered_and_tall_marks_stay_inside() {
-        let cell = Rect::new(10.0, 20.0, 110.0, 120.0);
-        for ink in [
-            Rect::new(80.0, 0.0, 680.0, 700.0),
-            Rect::new(-100.0, 900.0, 100.0, 2400.0),
-        ] {
-            let transform = fit_transform(cell, ink, 1000.0);
-            let drawn = transform.transform_rect_bbox(ink);
-            assert!((drawn.center() - cell.center()).hypot() < 1e-9);
-            assert!(cell.contains(drawn.origin()));
-            assert!(drawn.x1 <= cell.x1 && drawn.y1 <= cell.y1);
-        }
-        let period = fit_transform(cell, Rect::new(0.0, 0.0, 100.0, 100.0), 1000.0)
-            .transform_rect_bbox(Rect::new(0.0, 0.0, 100.0, 100.0));
-        assert!(period.height() < cell.height() * 0.1);
+    fn mini_map_centers_ink_and_overview_keeps_font_metrics() {
+        let mut grid = rail();
+        let mut outline = kurbo::BezPath::new();
+        outline.move_to((20.0, 600.0));
+        outline.line_to((60.0, 700.0));
+        let tile = Rect::new(0.0, 0.0, 40.0, 40.0);
+        let transform = grid.preview_transform(tile, &outline, 200.0, 0.05);
+        assert_eq!(transform * outline.bounding_box().center(), tile.center());
+        grid.metrics.baseline_offset = Some(200.0);
+        assert_eq!(
+            grid.preview_transform(tile, &outline, 200.0, 0.05),
+            sort_transform(20.0, 100.0, 30.0, 0.05)
+        );
+    }
+
+    #[test]
+    fn grid_sorts_share_a_baseline_and_scale() {
+        let quote = sort_transform(50.0, 120.0, 80.0, 0.1);
+        let comma = sort_transform(170.0, 200.0, 80.0, 0.1);
+        assert_eq!((quote * Point::new(120.0, 700.0)).y, 10.0);
+        assert_eq!((comma * Point::new(200.0, -120.0)).y, 92.0);
+        assert_eq!(quote * Point::new(120.0, 0.0), Point::new(50.0, 80.0));
+        assert_eq!(comma * Point::new(200.0, 0.0), Point::new(170.0, 80.0));
     }
 
     #[test]

@@ -14,7 +14,8 @@ use runebender::font::history::{
     HistoryDirection, HistoryReplayError, HistoryReplayOutcome, SourceMetadataHistory,
 };
 use runebender::font::model::glyph_metadata::{
-    CanonicalGlyphMetadata, GlyphMetadataError, OpenTypeGlyphCategory, parse_codepoints,
+    CanonicalLayerGlyphMetadata, CanonicalSourceGlyphMetadata, GlyphMetadataError,
+    OpenTypeGlyphCategory, parse_codepoints,
 };
 use runebender::font::persistence::memory::designspace_from_str;
 use runebender::font::project::{DocumentEditOutcome, Project, SourceInput};
@@ -355,18 +356,17 @@ fn group_rename_updates_pair_references_and_rejects_kind_changes() {
 #[test]
 fn glyph_metadata_preserves_exact_values_and_rejects_bad_unicode() {
     let codepoints = parse_codepoints("U+0041, 0x0391 0041").unwrap();
-    let mut metadata = CanonicalGlyphMetadata::new(
-        codepoints,
-        Some(String::new()),
+    let mut metadata = CanonicalLayerGlyphMetadata::new(codepoints, Some(String::new()));
+    let source = CanonicalSourceGlyphMetadata::new(
         false,
         Some(OpenTypeGlyphCategory::from_source("future-category")),
     );
 
     assert_eq!(metadata.codepoints(), ['A', '\u{391}']);
     assert_eq!(metadata.note(), Some(""));
-    assert!(!metadata.exported());
+    assert!(!source.exported());
     assert_eq!(
-        metadata.category().map(OpenTypeGlyphCategory::as_source),
+        source.category().map(OpenTypeGlyphCategory::as_source),
         Some("future-category")
     );
     assert_eq!(

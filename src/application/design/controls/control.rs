@@ -28,7 +28,7 @@ use masonry::kurbo::{Axis, Size, Stroke};
 use masonry::layout::{LayoutSize, LenReq, Length, SizeDef};
 use masonry::properties::{Background, BorderColor, BorderWidth, ContentColor, CornerRadius};
 use xilem::core::{MessageCtx, MessageResult, Mut, View, ViewId, ViewMarker, ViewPathTracker};
-use xilem::{Pod, ViewCtx, WidgetView};
+use xilem::{AnyWidgetView, Pod, ViewCtx, WidgetView};
 
 use crate::application::design::ControlStyle;
 
@@ -275,38 +275,38 @@ pub(crate) fn control<State, V, F>(
     style: ControlStyle,
     content: V,
     on_click: F,
-) -> ControlView<State, V, F>
+) -> ControlView<State>
 where
     State: 'static,
     V: WidgetView<State>,
     F: Fn(&mut State) + Send + Sync + 'static,
 {
+    // The content and the callback are boxed so every control is one view type.
+    // A view type per content and closure made a copy of this view's code for each button.
     ControlView {
         style,
-        content,
-        on_click,
+        content: content.boxed(),
+        on_click: Box::new(on_click),
         phantom: PhantomData,
     }
 }
 
 /// The view behind [`control`].
 #[must_use = "View values do nothing unless provided to Xilem."]
-pub(crate) struct ControlView<State, V, F> {
+pub(crate) struct ControlView<State> {
     style: ControlStyle,
-    content: V,
-    on_click: F,
+    content: Box<AnyWidgetView<State>>,
+    on_click: Box<dyn Fn(&mut State) + Send + Sync + 'static>,
     phantom: PhantomData<fn(State)>,
 }
 
-impl<State, V, F> ViewMarker for ControlView<State, V, F> {}
-impl<State, V, F> View<State, (), ViewCtx> for ControlView<State, V, F>
+impl<State> ViewMarker for ControlView<State> {}
+impl<State> View<State, (), ViewCtx> for ControlView<State>
 where
     State: 'static,
-    V: WidgetView<State>,
-    F: Fn(&mut State) + Send + Sync + 'static,
 {
     type Element = Pod<ControlWidget>;
-    type ViewState = V::ViewState;
+    type ViewState = <Box<AnyWidgetView<State>> as View<State, (), ViewCtx>>::ViewState;
 
     fn build(&self, ctx: &mut ViewCtx, state: &mut State) -> (Self::Element, Self::ViewState) {
         let (child, child_state) = ctx.with_id(CONTENT, |ctx| {

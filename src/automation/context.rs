@@ -16,7 +16,9 @@
 //!    first parent with a `.git` entry). They state that font's own rules.
 //!
 //! A context file is any `*.context.md` file; the part before
-//! `.context.md` is its name. This is the same arrangement as themes:
+//! `.context.md` is its name. A file named just `CONTEXT.md` (or
+//! `context.md`) is also read, with the name `context`: the plain name for a
+//! font repository's own rules. This is the same arrangement as themes:
 //! built-in files in `assets/`, the designer's own in the config folder.
 
 use std::path::{Path, PathBuf};
@@ -73,6 +75,9 @@ const DEFAULTS: &[(&str, &str)] = &[
 const MAX_FILE_BYTES: u64 = 256 * 1024;
 
 const SUFFIX: &str = ".context.md";
+/// The plain file name of a font's own context file. Its case is ignored,
+/// so that `CONTEXT.md` at a repository root is read.
+const PLAIN: &str = "context.md";
 
 /// Every context file that applies to `font` (a designspace, UFO, or
 /// folder; `None` for no font), defaults first and the font's own last.
@@ -125,6 +130,9 @@ pub fn personal_dirs() -> Vec<PathBuf> {
 /// repository, the font's folder and its parent only, so a loose font in
 /// a home folder never scans the whole home.
 pub fn font_dirs(font: &Path) -> Vec<PathBuf> {
+    // A bare relative name has an empty parent, which cannot be listed.
+    let absolute = std::path::absolute(font).unwrap_or_else(|_| font.to_path_buf());
+    let font = absolute.as_path();
     let start = if font.is_dir() && font.extension().is_none_or(|e| e != "ufo") {
         font.to_path_buf()
     } else {
@@ -158,14 +166,22 @@ fn read_dir(dir: &Path, layer: Layer) -> Vec<ContextFile> {
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.ends_with(SUFFIX) && name.len() > SUFFIX.len())
+                .is_some_and(|name| {
+                    name.eq_ignore_ascii_case(PLAIN)
+                        || (name.ends_with(SUFFIX) && name.len() > SUFFIX.len())
+                })
         })
         .collect();
     paths.sort();
     paths
         .into_iter()
         .filter_map(|path| {
-            let name = path.file_name()?.to_str()?.strip_suffix(SUFFIX)?.to_owned();
+            let file_name = path.file_name()?.to_str()?;
+            let name = if file_name.eq_ignore_ascii_case(PLAIN) {
+                "context".to_owned()
+            } else {
+                file_name.strip_suffix(SUFFIX)?.to_owned()
+            };
             let text = match std::fs::metadata(&path) {
                 Ok(meta) if meta.len() > MAX_FILE_BYTES => format!(
                     "(skipped: {} is {} bytes, over the {} byte limit for context files)",
@@ -173,7 +189,19 @@ fn read_dir(dir: &Path, layer: Layer) -> Vec<ContextFile> {
                     meta.len(),
                     MAX_FILE_BYTES
                 ),
-                _ => std::fs::read_to_string(&path).ok()?,
+                // A pipe or device reports no length, so only regular files are read,
+                // and never past the limit.
+                Ok(meta) if !meta.is_file() => return None,
+                _ => {
+                    use std::io::Read as _;
+                    let mut text = String::new();
+                    std::fs::File::open(&path)
+                        .ok()?
+                        .take(MAX_FILE_BYTES)
+                        .read_to_string(&mut text)
+                        .ok()?;
+                    text
+                }
             };
             Some(ContextFile {
                 layer,
@@ -273,6 +301,7 @@ mod tests {
         std::fs::create_dir_all(repo.join("sources")).unwrap();
         std::fs::write(repo.join("type-design.context.md"), "root rules").unwrap();
         std::fs::write(repo.join("sources/spacing.context.md"), "near rules").unwrap();
+        std::fs::write(repo.join("sources/context.md"), "plain rules").unwrap();
         // A parent above the repository is never read.
         std::fs::write(repo.parent().unwrap().join("stray.context.md"), "stray").ok();
         let font = repo.join("sources/Family.designspace");
@@ -285,7 +314,11 @@ mod tests {
             .collect();
         assert_eq!(
             font_files,
-            [("type-design", "root rules"), ("spacing", "near rules")]
+            [
+                ("type-design", "root rules"),
+                ("context", "plain rules"),
+                ("spacing", "near rules")
+            ]
         );
         let text = merged(&files, None);
         let default_at = text.find("## default context: type-design").unwrap();
@@ -295,6 +328,24 @@ mod tests {
             "the font's file comes after the default"
         );
         let _ = std::fs::remove_file(repo.parent().unwrap().join("stray.context.md"));
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn the_plain_file_name_is_read_in_upper_case() {
+        let repo = scratch("upper-case");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::create_dir_all(repo.join("sources")).unwrap();
+        std::fs::write(repo.join("CONTEXT.md"), "font rules").unwrap();
+        let font = repo.join("sources/Family.designspace");
+        std::fs::write(&font, "").unwrap();
+        let files = load_with(Some(&font), &[]);
+        let font_files: Vec<(&str, &str)> = files
+            .iter()
+            .filter(|file| file.layer == Layer::Font)
+            .map(|file| (file.name.as_str(), file.text.as_str()))
+            .collect();
+        assert_eq!(font_files, [("context", "font rules")]);
         let _ = std::fs::remove_dir_all(repo);
     }
 

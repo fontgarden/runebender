@@ -30,7 +30,6 @@ where
         min_lengths: (Length::ZERO, Length::ZERO),
         bar_thickness: 6.px(),
         min_bar_area: 6.px(),
-        solid_bar: false,
         draggable: true,
         child1,
         child2,
@@ -45,7 +44,6 @@ pub(crate) struct Split<ChildA, ChildB, State, Action = ()> {
     min_lengths: (Length, Length),
     bar_thickness: Length,
     min_bar_area: Length,
-    solid_bar: bool,
     draggable: bool,
     child1: ChildA,
     child2: ChildB,
@@ -89,11 +87,6 @@ impl<ChildA, ChildB, State, Action> Split<ChildA, ChildB, State, Action> {
         self.draggable = draggable;
         self
     }
-
-    pub(crate) fn solid_bar(mut self, solid: bool) -> Self {
-        self.solid_bar = solid;
-        self
-    }
 }
 
 // Use a distinctive number here, to be able to catch bugs.
@@ -130,8 +123,7 @@ where
                 .min_lengths(self.min_lengths.0, self.min_lengths.1)
                 .bar_thickness(self.bar_thickness)
                 .min_bar_area(self.min_bar_area)
-                .draggable(self.draggable)
-                .solid_bar(self.solid_bar),
+                .draggable(self.draggable),
         );
 
         (widget_pod, (child1_state, child2_state))
@@ -167,10 +159,6 @@ where
 
         if prev.draggable != self.draggable {
             widgets::Split::set_draggable(&mut element, self.draggable);
-        }
-
-        if prev.solid_bar != self.solid_bar {
-            widgets::Split::set_bar_solid(&mut element, self.solid_bar);
         }
 
         ctx.with_id(CHILD1_VIEW_ID, |ctx| {

@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! The bars around the canvas: the titlebar, the header tools, the status bar.
 
@@ -15,6 +15,7 @@ use crate::application::editor::tools::graph;
 use crate::application::view::label;
 use crate::application::view::panels::tabs::{tab_chip, tab_strip};
 use crate::application::widgets::drag_region::drag_region;
+use crate::application::widgets::keyed_canvas::keyed_canvas;
 use crate::application::widgets::text_label::{self, Anchor};
 use crate::application::widgets::tool_group::{ToolGroup, tool_group};
 use crate::application::workspace::{Mode, Tool, Workspace};
@@ -26,7 +27,7 @@ use xilem::WidgetView;
 use xilem::style::Style;
 use xilem::view::FlexExt as _;
 use xilem::view::flex_row;
-use xilem::view::{canvas, flex_col, portal, sized_box};
+use xilem::view::{flex_col, portal, sized_box};
 
 /// The title bar for editor tools and tabs.
 ///
@@ -35,21 +36,46 @@ use xilem::view::{canvas, flex_col, portal, sized_box};
 pub(crate) fn titlebar(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     let pal = &app.palette;
     let editing = matches!(app.mode, Mode::Editor(_));
+    let master = app
+        .font
+        .short_master_names()
+        .get(app.font.active())
+        .cloned()
+        .unwrap_or_default();
     sized_box(
         flex_row((
-            // Room for the traffic lights, which sit where AppKit puts
-            // them: winit has no way to move them, so the header pads
-            // for the default place. In full screen AppKit moves them out
-            // of the content area, so the document uses the normal inset.
-            (cfg!(target_os = "macos") && !app.fullscreen).then(|| {
-                sized_box(label("")).dims(Dimensions::new(Dim::Fixed(Length::px(66.0)), Dim::Auto))
+            flex_row((
+                // Room for the traffic lights, which sit where AppKit puts
+                // them: winit has no way to move them, so the header pads
+                // for the default place. In full screen AppKit moves them out
+                // of the content area, so the document uses the normal inset.
+                (cfg!(target_os = "macos") && !app.fullscreen).then(|| {
+                    sized_box(label(""))
+                        .dims(Dimensions::new(Dim::Fixed(Length::px(66.0)), Dim::Auto))
+                }),
+                recipes::save_indicator(pal, app.modified || app.untitled),
+                // The empty middle of the bar moves the window and zooms
+                // it on a double click, as the system title bar would.
+                drag_region().flex(1.0),
+            ))
+            .gap(Space::Md)
+            .flex(1.0),
+            (!editing).then(|| {
+                label(if app.on_active_master() {
+                    master.clone()
+                } else {
+                    format!("{master} · Preview")
+                })
+                .text_size(TextSize::Body.px())
+                .color(pal.tool_active_ink())
             }),
-            recipes::save_indicator(pal, app.modified || app.untitled),
-            // The empty middle of the bar moves the window and zooms
-            // it on a double click, as the system title bar would.
-            drag_region().flex(1.0),
-            editing.then(|| header_tools(app)),
-            tab_strip(app),
+            flex_row((
+                drag_region().flex(1.0),
+                editing.then(|| header_tools(app)),
+                tab_strip(app),
+            ))
+            .gap(Space::Md)
+            .flex(if editing { 5.0 } else { 1.0 }),
         ))
         .cross_axis_alignment(CrossAxisAlignment::Center)
         .gap(Space::Md)
@@ -101,15 +127,10 @@ pub(crate) fn header_tools(app: &Workspace) -> impl WidgetView<Workspace> + use<
     // the header as quiet as the adjacent outlined tabs while making the
     // selected tool the brightest mark on the bar.
     let editor_focus = app.editor_focus.clone();
-    let tile = move |icon: &'static str, tool: Tool| {
+    let tile = move |icon: &'static str, title: &'static str, tool: Tool| {
         let style = ControlStyle::new(pal, ControlKind::Tool)
             .on(pal, Ground::Header)
             .selected(pal, app.tool == tool);
-        let title = if tool == Tool::Interpolation {
-            "Edit Interpolation (I)"
-        } else {
-            icon
-        };
         let button = icon_button(style, icon, title, move |app: &mut Workspace| {
             app.review.pencil = false;
             app.select_tool(tool);
@@ -127,17 +148,21 @@ pub(crate) fn header_tools(app: &Workspace) -> impl WidgetView<Workspace> + use<
             tool_group(ToolGroup::Select, app.tool, app.palette.clone()),
             // The shared icon set calls this asset `preview`; its drawing is
             // the hand used by the viewport-pan tool.
-            tile("preview", Tool::Hand),
-            tile("pen", Tool::Pen),
-            tile("hyperpen", Tool::HyperPen),
-            tile("invert", Tool::Sketch),
+            tile("preview", "Hand", Tool::Hand),
+            tile("pen", "Pen", Tool::Pen),
+            tile("hyperpen", "Hyper Pen", Tool::HyperPen),
+            tile("invert", "Sketch", Tool::Sketch),
             tool_group(ToolGroup::Shapes, app.tool, app.palette.clone()),
-            tile("knife", Tool::Knife),
-            tile("measure", Tool::Measure),
-            tile("select-all-layers", Tool::Interpolation),
+            tile("knife", "Knife", Tool::Knife),
+            tile("measure", "Measure", Tool::Measure),
+            tile(
+                "select-all-layers",
+                "Edit Interpolation (I)",
+                Tool::Interpolation,
+            ),
             // No icon is drawn for it yet; two overlapping shapes are what a label is.
-            tile("intersect", Tool::Label),
-            tile("text", Tool::Text),
+            tile("intersect", "Label", Tool::Label),
+            tile("text", "Text", Tool::Text),
         ),
     )
 }
@@ -192,6 +217,12 @@ pub(crate) fn marks_bar(app: &Workspace) -> impl WidgetView<Workspace, Widget: S
 /// name below that. A transient `note`
 /// takes the readout's place while it has something to say.
 fn document_readout(app: &Workspace, note: String) -> impl WidgetView<Workspace> + use<> {
+    // With `RUNEBENDER_FRAME_TIMES` set, the frame times of the last second take the idle place.
+    let note = if note.is_empty() {
+        crate::application::platform::frame_times::readout().unwrap_or_default()
+    } else {
+        note
+    };
     let source = app.font.source();
     // The path as opened may be relative to wherever the app was started,
     // and may climb through `..`; show it from the root with those folded.
@@ -226,38 +257,41 @@ fn document_readout(app: &Workspace, note: String) -> impl WidgetView<Workspace>
     };
     sized_box(
         portal(
-            canvas(move |_: &mut Workspace, _, scene, size| {
-                let mut painter: masonry::imaging::Painter<'_> =
-                    masonry::imaging::Painter::new(scene);
-                let text_size = TextSize::Body.px();
-                let middle = kurbo::Point::new(size.width / 2.0, size.height / 2.0);
-                if !note.is_empty() {
+            keyed_canvas(
+                (note.clone(), path.clone(), name.clone(), ink),
+                move |_, scene, size| {
+                    let mut painter: masonry::imaging::Painter<'_> =
+                        masonry::imaging::Painter::new(scene);
+                    let text_size = TextSize::Body.px();
+                    let middle = kurbo::Point::new(size.width / 2.0, size.height / 2.0);
+                    if !note.is_empty() {
+                        text_label::draw_elided(
+                            &mut painter,
+                            middle,
+                            &note,
+                            text_size,
+                            ink,
+                            Anchor::Middle,
+                            size.width,
+                        );
+                        return;
+                    }
+                    let text = if text_label::width(&path, text_size) <= size.width {
+                        &path
+                    } else {
+                        &name
+                    };
                     text_label::draw_elided(
                         &mut painter,
                         middle,
-                        &note,
+                        text,
                         text_size,
                         ink,
                         Anchor::Middle,
                         size.width,
                     );
-                    return;
-                }
-                let text = if text_label::width(&path, text_size) <= size.width {
-                    &path
-                } else {
-                    &name
-                };
-                text_label::draw_elided(
-                    &mut painter,
-                    middle,
-                    text,
-                    text_size,
-                    ink,
-                    Anchor::Middle,
-                    size.width,
-                );
-            })
+                },
+            )
             .alt_text(description),
         )
         .constrain_horizontal(true)

@@ -250,6 +250,7 @@ mod native {
     use std::thread::JoinHandle;
     use std::time::Duration;
 
+    use runebender::workflows::digest::hex_digest;
     use runebender::workflows::process::{
         OutputStream, ProcessCancellation, ProcessLimits, ProcessOutcome, run,
     };
@@ -810,14 +811,6 @@ mod native {
         mutex.lock().unwrap_or_else(|error| error.into_inner())
     }
 
-    fn hex_digest(digest: impl AsRef<[u8]>) -> String {
-        digest
-            .as_ref()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
-    }
-
     #[cfg(test)]
     mod tests {
         use std::collections::BTreeMap;
@@ -1171,29 +1164,6 @@ mod native {
                 started.elapsed() < Duration::from_secs(1),
                 "deadline waited for a surviving descendant's standard handles"
             );
-        }
-
-        #[cfg(unix)]
-        #[test]
-        fn runtime_availability_rejects_oversized_version_output() {
-            use std::os::unix::fs::PermissionsExt;
-
-            let temporary = TemporaryDirectory::new().expect("temporary directory");
-            let executable = temporary.path.join("oversized-version");
-            write_script(
-                &executable,
-                b"#!/bin/sh\n/bin/dd if=/dev/zero bs=5000 count=1 2>/dev/null\n",
-            )
-            .expect("write executable");
-            let mut permissions = fs::metadata(&executable).expect("metadata").permissions();
-            permissions.set_mode(0o700);
-            fs::set_permissions(&executable, permissions).expect("make executable");
-
-            assert!(matches!(
-                ScriptRuntimeAvailability::check(executable),
-                ScriptRuntimeAvailability::Unavailable(message)
-                    if message.contains("exceeded 4096 bytes")
-            ));
         }
 
         #[cfg(unix)]

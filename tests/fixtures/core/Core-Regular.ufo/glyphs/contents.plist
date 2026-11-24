@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>.notdef</key>
+	<string>glyph20.glif</string>
+	<key>A</key>
+	<string>glyph00.glif</string>
+	<key>Agrave</key>
+	<string>glyph27.glif</string>
+	<key>B</key>
+	<string>glyph01.glif</string>
+	<key>H</key>
+	<string>glyph02.glif</string>
+	<key>O</key>
+	<string>glyph03.glif</string>
+	<key>R</key>
+	<string>glyph04.glif</string>
+	<key>T</key>
+	<string>glyph05.glif</string>
+	<key>V</key>
+	<string>glyph06.glif</string>
+	<key>a</key>
+	<string>glyph07.glif</string>
+	<key>b</key>
+	<string>glyph08.glif</string>
+	<key>d</key>
+	<string>glyph09.glif</string>
+	<key>e</key>
+	<string>glyph10.glif</string>
+	<key>f</key>
+	<string>glyph11.glif</string>
+	<key>g</key>
+	<string>glyph12.glif</string>
+	<key>gravecomb</key>
+	<string>glyph25.glif</string>
+	<key>h</key>
+	<string>glyph13.glif</string>
+	<key>i</key>
+	<string>glyph14.glif</string>
+	<key>n</key>
+	<string>glyph15.glif</string>
+	<key>o</key>
+	<string>glyph16.glif</string>
+	<key>one</key>
+	<string>glyph24.glif</string>
+	<key>period</key>
+	<string>glyph22.glif</string>
+	<key>r</key>
+	<string>glyph17.glif</string>
+	<key>ringcomb</key>
+	<string>glyph26.glif</string>
+	<key>s</key>
+	<string>glyph18.glif</string>
+	<key>space</key>
+	<string>glyph21.glif</string>
+	<key>u</key>
+	<string>glyph19.glif</string>
+	<key>zero</key>
+	<string>glyph23.glif</string>
+</dict>
+</plist>

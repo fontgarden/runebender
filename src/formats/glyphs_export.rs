@@ -7,7 +7,8 @@
 //! Each master maps to the working-copy UFO that [`super::glyphs_import`] named for it.
 //! A master layer is replaced only when its drawing differs from what the import made of it,
 //! so unedited layers keep Glyphs data the import does not read, such as hints and node user
-//! data. Glyphs new to the working copy are added and glyphs gone from every master removed.
+//! data. New glyphs are added and deliberately deleted imported glyphs are removed; glyphs
+//! skipped by the original import remain untouched, tracked separately from the working set.
 //! Unicode values, kerning groups and kerning follow the working copy when they changed.
 //! The rest of the file is kept as glyphslib reads it; a Glyphs 2 file is written as Glyphs 3.
 //!
@@ -42,7 +43,7 @@ use glyphslib::glyphs3::{
 };
 
 use super::foreign::{WorkingSource, same_drawing};
-use super::glyphs_import::{kern_name, layer_to_norad, master_ufo_name};
+use super::glyphs_import::{is_backup_layer, kern_name, layer_to_norad, master_ufo_name};
 
 /// Write `original` with the working copy's edits merged in, at `stage`.
 pub fn write_back(original: &Path, sources: &[WorkingSource], stage: &Path) -> Result<(), String> {
@@ -178,6 +179,14 @@ fn merge(font: &mut Glyphs3, sources: &[WorkingSource]) -> Result<Changes, Strin
                 .into(),
         );
     }
+    let imported = sources
+        .iter()
+        .map(|source| {
+            super::metadata::lib_keys::read_foreign_glyphs(&source.font).ok_or(
+                "the working copy has no imported glyph inventory; reopen the original source",
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let original = font.clone();
     let template = original
         .glyphs
@@ -195,7 +204,7 @@ fn merge(font: &mut Glyphs3, sources: &[WorkingSource]) -> Result<Changes, Strin
         let listed: Vec<&str> = working
             .font
             .lib
-            .get("public.glyphOrder")
+            .get(super::metadata::lib_keys::GLYPH_ORDER_KEY)
             .and_then(plist::Value::as_array)
             .into_iter()
             .flatten()
@@ -218,8 +227,12 @@ fn merge(font: &mut Glyphs3, sources: &[WorkingSource]) -> Result<Changes, Strin
     }
     let keep: HashSet<&str> = order.iter().map(String::as_str).collect();
     let count = font.glyphs.len();
-    font.glyphs
-        .retain(|glyph| keep.contains(glyph.name.as_str()));
+    font.glyphs.retain(|glyph| {
+        keep.contains(glyph.name.as_str())
+            || imported
+                .iter()
+                .all(|names| names.get(glyph.name.as_str()) == Some(&false))
+    });
     changes.glyph_set = font.glyphs.len() != count;
 
     let (first_groups, second_groups) = kerning_groups(&masters[0].1.font);
@@ -281,6 +294,7 @@ fn merge(font: &mut Glyphs3, sources: &[WorkingSource]) -> Result<Changes, Strin
                     glyph.layers.push(layer);
                 }
             }
+            sync_backup_layers(&original, before, glyph, master, working, template.as_ref());
         }
         if *glyph != snapshot || before.is_none() {
             changes.glyphs.insert(name.clone());
@@ -366,6 +380,87 @@ fn glyphs_side(side: &str) -> String {
     } else {
         side.to_owned()
     }
+}
+
+/// Make the glyph's backup layers of `master` match the working UFO's extra layers: a layer
+/// drawn differently is rebuilt, a new UFO layer is added under the master, and a backup layer
+/// the UFO no longer has is removed. The background and proposal layers are not backup layers.
+fn sync_backup_layers(
+    original: &Glyphs3,
+    before: Option<&Glyph>,
+    glyph: &mut Glyph,
+    master: &str,
+    working: &WorkingSource,
+    template: Option<&Layer>,
+) {
+    let name = glyph.name.clone();
+    let default_name = working.font.default_layer().name().to_string();
+    let mut kept: HashSet<String> = HashSet::new();
+    for ufo_layer in working.font.layers.iter() {
+        let layer_name = ufo_layer.name().to_string();
+        if layer_name == default_name
+            || layer_name == "public.background"
+            || layer_name.eq_ignore_ascii_case("background")
+            || layer_name.starts_with("com.runebender.proposal.")
+            || layer_name.starts_with('{')
+            || layer_name.starts_with('[')
+        {
+            continue;
+        }
+        let Some(edited) = ufo_layer.get_glyph(name.as_str()) else {
+            continue;
+        };
+        kept.insert(layer_name.clone());
+        let position = glyph.layers.iter().position(|layer| {
+            is_backup_layer(layer, master) && layer.name.as_deref() == Some(layer_name.as_str())
+        });
+        match position {
+            Some(at) => {
+                let unchanged = before
+                    .and_then(|before| layer_to_norad(original, before, &glyph.layers[at]).ok())
+                    .is_some_and(|imported| same_drawing(&imported, edited));
+                if !unchanged {
+                    apply(&mut glyph.layers[at], edited);
+                }
+            }
+            None => {
+                let Some(template) = template else {
+                    continue;
+                };
+                let mut layer = blank_layer(template, master);
+                layer.layer_id = backup_layer_id(master, &name, &layer_name);
+                layer.associated_master_id = Some(master.to_owned());
+                layer.name = Some(layer_name);
+                apply(&mut layer, edited);
+                glyph.layers.push(layer);
+            }
+        }
+    }
+    // A backup layer that was read on open and is gone from the UFO was deleted.
+    glyph.layers.retain(|layer| {
+        !is_backup_layer(layer, master)
+            || layer.name.as_ref().is_some_and(|name| kept.contains(name))
+            || before.is_none_or(|before| layer_to_norad(original, before, layer).is_err())
+    });
+}
+
+/// A stable identifier for a new backup layer, in the form Glyphs uses for layer ids.
+fn backup_layer_id(master: &str, glyph: &str, layer: &str) -> String {
+    use sha2::{Digest as _, Sha256};
+    let digest = Sha256::digest(format!("{master}\n{glyph}\n{layer}").as_bytes());
+    let hex: String = digest
+        .iter()
+        .take(16)
+        .map(|byte| format!("{byte:02X}"))
+        .collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
 }
 
 /// A copy of `template` with nothing drawn, as the master layer for `master`.
@@ -547,10 +642,14 @@ unitsPerEm = 1000;
 "#;
 
     fn convert(tag: &str) -> (Glyphs3, Vec<WorkingSource>) {
-        let GlyphsFont::Glyphs3(font) = GlyphsFont::load_str(SOURCE).unwrap() else {
+        convert_source(tag, SOURCE)
+    }
+
+    fn convert_source(tag: &str, text: &str) -> (Glyphs3, Vec<WorkingSource>) {
+        let GlyphsFont::Glyphs3(font) = GlyphsFont::load_str(text).unwrap() else {
             panic!("a Glyphs 3 source");
         };
-        let files = super::super::glyphs_import::glyphs_to_ufo_files(SOURCE).unwrap();
+        let files = super::super::glyphs_import::glyphs_to_ufo_files(text).unwrap();
         let root = std::env::temp_dir().join(format!("rb-glyphs-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         for file in &files.files {
@@ -571,6 +670,168 @@ unitsPerEm = 1000;
         let changes = merge(&mut font, &sources).unwrap();
         assert_eq!(font, original);
         assert!(changes.glyphs.is_empty() && !changes.glyph_set && !changes.kerning);
+    }
+
+    #[test]
+    fn backup_layers_open_as_ufo_layers_and_save_back_edited_added_and_deleted() {
+        let text = SOURCE.replace(
+            "layerId = m01;\nshapes = (",
+            r#"associatedMasterId = m01;
+layerId = "AAAA-1";
+name = "Nov 15, 26 at 16:00";
+shapes = (
+{
+closed = 1;
+nodes = (
+(200,0,l),
+(0,0,l),
+(100,200,l)
+);
+}
+);
+width = 620;
+},
+{
+associatedMasterId = m01;
+attr = { coordinates = (500); };
+layerId = "BBBB-2";
+name = "{500}";
+width = 510;
+},
+{
+layerId = m01;
+shapes = ("#,
+        );
+        let (mut font, mut sources) = convert_source("backup", &text);
+        let before = font.clone();
+
+        // The backup layer is a UFO layer of the same name; the brace layer is not read.
+        let ufo = &mut sources[0].font;
+        let backup = ufo
+            .layers
+            .get("Nov 15, 26 at 16:00")
+            .expect("the backup layer opens");
+        assert_eq!(backup.get_glyph("A").unwrap().width, 620.0);
+        assert!(ufo.layers.get("{500}").is_none());
+        assert_eq!(ufo.default_layer().get_glyph("A").unwrap().width, 500.0);
+        let changes = merge(&mut font, &sources).unwrap();
+        assert_eq!(font, before, "an unedited backup layer changes nothing");
+        assert!(changes.glyphs.is_empty());
+
+        // Edit the backup layer, and add a second one, as the Layers panel does.
+        let ufo = &mut sources[0].font;
+        let mut edited = ufo
+            .layers
+            .get("Nov 15, 26 at 16:00")
+            .unwrap()
+            .get_glyph("A")
+            .unwrap()
+            .clone();
+        edited.width = 640.0;
+        ufo.layers
+            .get_mut("Nov 15, 26 at 16:00")
+            .unwrap()
+            .insert_glyph(edited.clone());
+        edited.width = 700.0;
+        ufo.layers
+            .new_layer("Wide sketch")
+            .unwrap()
+            .insert_glyph(edited);
+        merge(&mut font, &sources).unwrap();
+        let glyph = font.glyphs.iter().find(|glyph| glyph.name == "A").unwrap();
+        let layer = |name: &str| {
+            glyph
+                .layers
+                .iter()
+                .find(|layer| layer.name.as_deref() == Some(name))
+        };
+        let backup = layer("Nov 15, 26 at 16:00").unwrap();
+        assert_eq!(backup.width, 640.0);
+        assert_eq!(
+            backup.layer_id, "AAAA-1",
+            "an edited layer keeps its identity"
+        );
+        let added = layer("Wide sketch").expect("a new UFO layer is added");
+        assert_eq!(added.width, 700.0);
+        assert_eq!(added.associated_master_id.as_deref(), Some("m01"));
+        assert_ne!(added.layer_id, "m01");
+        assert!(layer("{500}").is_some(), "the brace layer is left alone");
+        let master = glyph
+            .layers
+            .iter()
+            .find(|layer| layer.layer_id == "m01")
+            .unwrap();
+        assert_eq!(master.width, 500.0);
+
+        // Deleting the UFO layer deletes the backup layer, and only that.
+        sources[0].font.layers.remove("Nov 15, 26 at 16:00");
+        merge(&mut font, &sources).unwrap();
+        let glyph = font.glyphs.iter().find(|glyph| glyph.name == "A").unwrap();
+        let names: Vec<_> = glyph
+            .layers
+            .iter()
+            .filter_map(|l| l.name.as_deref())
+            .collect();
+        assert!(!names.contains(&"Nov 15, 26 at 16:00"), "{names:?}");
+        assert!(
+            names.contains(&"Wide sketch") && names.contains(&"{500}"),
+            "{names:?}"
+        );
+    }
+
+    #[test]
+    fn skipped_glyphs_survive_but_deliberate_deletions_do_not() {
+        let text = SOURCE.replace(
+            "glyphs = (",
+            r#"glyphs = (
+{
+glyphname = Alternate;
+layers = ({ layerId = alternate; associatedMasterId = m01; width = 321;
+hints = ({ type = Stem; }); });
+},
+{
+glyphname = Broken;
+layers = ({ layerId = m01; width = 123; shapes = ({ ref = Missing; }); });
+},
+{
+glyphname = Composite;
+layers = ({ layerId = m01; width = 400; shapes = ({ ref = B; }); });
+},"#,
+        );
+        let (mut font, mut sources) = convert_source("skipped", &text);
+        assert!(sources[0].font.get_glyph("Alternate").is_none());
+        assert!(sources[0].font.get_glyph("Broken").is_none());
+        assert!(sources[0].font.get_glyph("Composite").is_some());
+        let before = font.clone();
+        let changes = merge(&mut font, &sources).unwrap();
+        assert_eq!(font, before);
+        assert!(!changes.glyph_set);
+
+        let layer = sources[0].font.default_layer_mut();
+        layer.remove_glyph("B");
+        layer.insert_glyph(norad::Glyph::new("New"));
+        merge(&mut font, &sources).unwrap();
+        assert!(!font.glyphs.iter().any(|glyph| glyph.name == "B"));
+        assert!(font.glyphs.iter().any(|glyph| glyph.name == "New"));
+
+        // Deleting the base on the previous save made Composite unimportable now,
+        // but the original imported inventory still identifies its deletion.
+        let layer = sources[0].font.default_layer_mut();
+        layer.remove_glyph("Composite");
+        layer.remove_glyph("New");
+        merge(&mut font, &sources).unwrap();
+        let names: Vec<_> = font
+            .glyphs
+            .iter()
+            .map(|glyph| glyph.name.as_str())
+            .collect();
+        assert_eq!(names, ["Alternate", "Broken", "A"]);
+        for name in ["Alternate", "Broken"] {
+            assert_eq!(
+                font.glyphs.iter().find(|glyph| glyph.name == name),
+                before.glyphs.iter().find(|glyph| glyph.name == name)
+            );
+        }
     }
 
     #[test]

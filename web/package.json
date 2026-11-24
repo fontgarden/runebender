@@ -1,0 +1,9 @@
+{
+  "name": "runebender-browser-checks",
+  "private": true,
+  "description": "Pinned Playwright for the browser checks in this directory; see README.md.",
+  "license": "Apache-2.0 OR MIT",
+  "devDependencies": {
+    "playwright": "1.64.1"
+  }
+}

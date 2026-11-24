@@ -56,14 +56,24 @@ impl RawProxy for NoProxy {
 
 /// Apply layer lifecycle signals synchronously, as the window runner and test
 /// harness do. Other signals are irrelevant to a one-frame image.
-fn process_layer_signals(root: &mut RenderRoot, signals: &Rc<RefCell<Vec<RenderRootSignal>>>) {
+///
+/// Returns whether the widget tree asked for a new frame, which a window would render and
+/// present.
+fn process_layer_signals(
+    root: &mut RenderRoot,
+    signals: &Rc<RefCell<Vec<RenderRootSignal>>>,
+) -> bool {
+    let mut frame_requested = false;
     loop {
         let pending = std::mem::take(&mut *signals.borrow_mut());
         if pending.is_empty() {
-            return;
+            return frame_requested;
         }
         for signal in pending {
             match signal {
+                RenderRootSignal::RequestRedraw | RenderRootSignal::RequestAnimFrame => {
+                    frame_requested = true;
+                }
                 RenderRootSignal::NewLayer(_, widget, position) => {
                     root.add_layer(widget, position);
                 }
@@ -165,7 +175,9 @@ where
     }
 
     /// Run the app logic again and rebuild the widget tree from the new view.
-    pub(crate) fn rebuild(&mut self, logic: impl Fn(&mut State) -> V) {
+    ///
+    /// Returns whether the rebuild made the widget tree ask for a new frame.
+    pub(crate) fn rebuild(&mut self, logic: impl Fn(&mut State) -> V) -> bool {
         let again = logic(&mut self.app);
         let Self {
             ctx,
@@ -180,7 +192,7 @@ where
             again.rebuild(view, view_state, ctx, root_widget, app);
         });
         *view = again;
-        process_layer_signals(root, &self.signals);
+        process_layer_signals(root, &self.signals)
     }
 
     /// Deliver an animation frame `elapsed` after the previous one.

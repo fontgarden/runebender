@@ -226,13 +226,8 @@ fn finite(values: &[f64]) -> Result<(), String> {
 }
 
 pub(crate) fn validate_batch(batch: &EditBatch) -> Result<(), String> {
-    if batch.task.is_empty()
-        || !batch
-            .task
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || "-_".contains(character))
-    {
-        return Err("task must contain only ASCII letters, digits, hyphens, or underscores".into());
+    if !proposal::is_task_name(&batch.task) {
+        return Err(proposal::TASK_NAME_RULE.into());
     }
     if batch.reason.trim().is_empty() || batch.edits.is_empty() {
         return Err("reason and edits must not be empty".into());
@@ -1265,7 +1260,8 @@ mod tests {
         let external = Project::from_source(crate::font::project::SourceInput::from_font(
             external,
             PathBuf::from("external.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let external_source = external.source_id(0).unwrap();
 
         let before_invalid = project.document_revision();
@@ -1484,7 +1480,8 @@ mod tests {
         let mut project = Project::from_source(crate::font::project::SourceInput::from_font(
             font,
             PathBuf::from("IdentityProposal.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let source = project.source_id(0).unwrap();
         let layer = project.document_source(source).unwrap().default_layer();
         let address = GlyphLayerAddress {

@@ -452,6 +452,15 @@ pub(crate) fn compare_section(app: &Workspace) -> impl WidgetView<Workspace> + u
             )),
         );
     }
+    // A folded section shows no body. Do not compare every master with the active one
+    // for it: that reads each glyph of each master on every switch of master.
+    if app.collapsed.contains("Compare") {
+        return section(
+            app,
+            "Compare",
+            Either::A(readout(String::new(), pal.text_muted)),
+        );
+    }
     let active = app.font.active();
     let reference_info = app
         .font
@@ -586,9 +595,12 @@ pub(crate) fn related_section(app: &Workspace) -> impl WidgetView<Workspace> + u
     let name = app.session.glyph_name.clone();
     let stem = name.split('.').next().unwrap_or(&name).to_string();
     let mut groups: Vec<(&'static str, Vec<String>)> = Vec::new();
+    // A folded section shows nothing, so it does not look through the font.
+    let open = !app.collapsed.contains("Related");
     let active_layer = app.font.active_layer_address(&name);
     let components: Vec<String> = active_layer
         .as_ref()
+        .filter(|_| open)
         .and_then(|address| app.font.project.document_layer(&name, &address.layer))
         .map(|layer| {
             layer
@@ -604,14 +616,20 @@ pub(crate) fn related_section(app: &Workspace) -> impl WidgetView<Workspace> + u
         .font
         .glyphs
         .iter()
-        .map(|g| g.name.clone())
+        .filter(|_| open)
+        .map(|g| g.name.as_str())
         .filter(|other| *other != name && other.split('.').next() == Some(stem.as_str()))
         .take(24)
+        .map(str::to_owned)
         .collect();
     if !siblings.is_empty() {
         groups.push(("Siblings", siblings));
     }
-    let mut used_by = app.font.composites_using(&name);
+    let mut used_by = if open {
+        app.font.composites_using(&name)
+    } else {
+        Vec::new()
+    };
     used_by.truncate(24);
     if !used_by.is_empty() {
         groups.push(("Used by", used_by));

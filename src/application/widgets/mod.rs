@@ -1,9 +1,10 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! The controls the editor owns: icon tiles, text labels, the context
 //! menu, and the shortcut host.
 
+pub(crate) mod code_editor;
 pub(crate) mod context_menu;
 pub(crate) mod drag_region;
 pub(crate) mod even_row;
@@ -11,11 +12,11 @@ pub(crate) mod frame_stats;
 pub(crate) mod gesture_slider;
 pub(crate) mod ground;
 pub(crate) mod icon_paint;
+pub(crate) mod keyed_canvas;
 pub(crate) mod letter_chips;
 pub(crate) mod menu_shell;
 pub(crate) mod model_strip;
 pub(crate) mod panel_frame;
-pub(crate) mod quadrant_picker;
 pub(crate) mod rounded_clip;
 pub(crate) mod shortcuts;
 pub(crate) mod source_text_area;

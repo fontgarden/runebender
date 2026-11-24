@@ -20,6 +20,7 @@ use runebender::workflows::graph_session::{
     GraphDocumentState, GraphGuard, GraphInteractiveMutationRequest, GraphMutation, GraphRunHandle,
     GraphSession,
 };
+use runebender::workflows::receipt_ledger::{ReceiptLedger, ReceiptLedgerFull};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
@@ -31,18 +32,23 @@ use crate::application::workspace::Workspace;
 
 static NEXT_GRAPH_SESSION: AtomicU64 = AtomicU64::new(1);
 
+/// Retained transport retry responses for graph runs and delegated Apply calls.
+const MAX_RETAINED_GRAPH_REQUESTS: usize = 64;
+/// Retained retry receipts for image trace requests.
+const MAX_RETAINED_TRACE_REQUESTS: usize = 64;
+
 /// Per-document live graph, retained jobs and bounded transport retry responses.
 pub(crate) struct LiveGraphState {
     pub(crate) session: GraphSession,
     pub(crate) execution: LiveGraphExecution,
     pub(crate) proofs: NodeProofJobs,
     pub(crate) handles: BTreeSet<GraphRunHandle>,
-    pub(crate) requests: BTreeMap<(String, String), (Value, RetainedGraphResponse)>,
+    pub(crate) requests: ReceiptLedger<(String, String), (Value, RetainedGraphResponse)>,
     pub(crate) next_job: u64,
     pub(crate) file: Option<LiveGraphFileMetadata>,
     pub(crate) saved_revision: Option<u64>,
     pub(super) trace: Option<TraceSession>,
-    pub(super) trace_receipts: BTreeMap<(String, String), (String, u64)>,
+    pub(super) trace_receipts: ReceiptLedger<(String, String), (String, u64)>,
     pub(super) next_trace_id: u64,
 }
 
@@ -520,13 +526,24 @@ fn fresh_live_graph(
         execution: LiveGraphExecution::default(),
         proofs: NodeProofJobs::default(),
         handles: BTreeSet::new(),
-        requests: BTreeMap::new(),
+        requests: ReceiptLedger::new(MAX_RETAINED_GRAPH_REQUESTS),
         next_job: 0,
         saved_revision: file.as_ref().map(|_| 0),
         file,
         trace: None,
-        trace_receipts: BTreeMap::new(),
+        trace_receipts: ReceiptLedger::new(MAX_RETAINED_TRACE_REQUESTS),
         next_trace_id: 1,
+    })
+}
+
+/// Make room for one retry response, keeping the responses of queued and running runs.
+fn make_request_room(state: &mut LiveGraphState) -> Result<(), ReceiptLedgerFull> {
+    let session = &state.session;
+    state.requests.make_room(|_, (_, response)| match response {
+        RetainedGraphResponse::Run(response) => session
+            .inspect_run(response.run.receipt.handle)
+            .is_none_or(|inspection| !inspection.status.is_active()),
+        RetainedGraphResponse::Apply(_) => true,
     })
 }
 
@@ -675,8 +692,8 @@ impl Workspace {
                     replay.replayed = true;
                     return Ok(success(replay));
                 }
-                if state.requests.len() >= 64 {
-                    return Err("graph retry retention is full; open a new graph session".into());
+                if make_request_room(state).is_err() {
+                    return Err("every retained graph retry belongs to an active run".into());
                 }
                 let snapshot = state.session.snapshot();
                 if request.glyphs.is_empty()
@@ -688,29 +705,12 @@ impl Workspace {
                 {
                     return Err("enter at least one glyph for the Python recipe to change".into());
                 }
-                let parameters = if request.execution_version == 1 {
-                    snapshot
-                        .graph
-                        .nodes
-                        .iter()
-                        .find(|node| node.type_name == "live.python")
-                        .ok_or("graph has no Python recipe node")?
-                        .values
-                        .get("parameters")
-                        .cloned()
-                        .unwrap_or_else(|| json!({}))
-                } else {
-                    json!({})
-                };
-                let Value::Object(parameters) = parameters else {
-                    return Err("Python parameters must be an object".into());
-                };
                 let input = script_recipe::capture(
                     &self.font.project,
                     SourceId(request.source),
                     &request.glyphs,
                     format!("graph-{}-{}", self.document_id, state.next_job),
-                    parameters.into_iter().collect(),
+                    BTreeMap::new(),
                 )?;
                 let baseline = compiled_proof::capture(&self.font.project)?;
                 let queue = self
@@ -724,7 +724,6 @@ impl Workspace {
                         queue,
                         &self.font.project,
                         LiveGraphSubmitRequest {
-                            execution_version: request.execution_version,
                             guard: request.guard,
                             actor: request.actor,
                             operation_key: request.operation_key,
@@ -854,8 +853,8 @@ impl Workspace {
                     replay["root_changed"] = json!(false);
                     return Ok(replay);
                 }
-                if state.requests.len() >= 64 {
-                    return Err("graph retry retention is full".into());
+                if make_request_room(state).is_err() {
+                    return Err("every retained graph retry belongs to an active run".into());
                 }
                 let inspection = state
                     .session
@@ -876,14 +875,11 @@ impl Workspace {
                         request.authorization,
                     )
                     .map_err(|error| error.to_string())?;
-                let response = match edit.payload_digest {
-                    Some(digest) => self.apply_retained_agent_edit_bound(
-                        edit.request,
-                        edit.candidate,
-                        Some(digest),
-                    ),
-                    None => self.apply_retained_agent_edit(edit.request, edit.candidate),
-                };
+                let response = self.apply_retained_agent_edit_bound(
+                    edit.request,
+                    edit.candidate,
+                    edit.payload_digest,
+                );
                 self.live_graph
                     .as_mut()
                     .expect("Apply does not replace the graph")
@@ -988,6 +984,7 @@ mod tests {
     use super::*;
     use crate::application::font_model::FontModel;
     use runebender::automation::agent::ToolCall;
+    use runebender::automation::agent_edit::EditAuthorization;
     use runebender::font::project::Project;
     use runebender::workflows::graph_session::{
         GraphEdit, GraphGuard, GraphInteractiveMutationRequest, GraphMutation,
@@ -1047,12 +1044,12 @@ mod tests {
             before.graph
         );
 
-        app.dispatch(crate::application::widgets::shortcuts::AppAction::Undo);
+        app.dispatch(crate::application::app_action::AppAction::Undo);
         assert_eq!(
             app.live_graph_session().unwrap().snapshot().graph,
             before.graph
         );
-        app.dispatch(crate::application::widgets::shortcuts::AppAction::Redo);
+        app.dispatch(crate::application::app_action::AppAction::Redo);
         assert_ne!(
             app.live_graph_session().unwrap().snapshot().graph,
             before.graph
@@ -1102,22 +1099,6 @@ mod tests {
             "with Auto off the graph waits for Run"
         );
         app.graph.auto_run = true;
-        let graph = app.live_graph_session().unwrap().snapshot().graph;
-        assert!(
-            graph
-                .nodes
-                .iter()
-                .all(|node| node.type_name != "live.python")
-        );
-        assert_eq!(
-            graph
-                .nodes
-                .iter()
-                .filter(|node| node.type_name == "live.proof")
-                .count(),
-            graph_live::SPECIMEN_PAGES + 1,
-            "the built-in pages and the example script's proof"
-        );
         assert!(live_autorun_waiting(&app), "the first render does not wait");
         live_autorun_tick(&mut app);
         assert!(!app.graph.live_ui_handles.is_empty(), "{}", app.note);
@@ -1248,7 +1229,7 @@ mod tests {
         app.text_proof_selection.as_mut().unwrap().document_revision -= 1;
         app.ensure_live_graph().unwrap();
         let session = app.live_graph_session().unwrap();
-        let comparison = session.execution_plan(1).unwrap().comparison().unwrap();
+        let comparison = session.execution_plan().unwrap().comparison().unwrap();
         let graph = session.snapshot().graph;
         let recipes: Vec<_> = [comparison.unchanged_proof, comparison.changed_proof]
             .into_iter()
@@ -1630,7 +1611,11 @@ mod tests {
             .graph
             .nodes
             .iter()
-            .filter(|node| node.type_name == "live.proof")
+            // A specimen page sets one line per line of text, so only one-line proofs change.
+            .filter(|node| {
+                node.type_name == "live.proof"
+                    && node.values["recipe"]["rendering"]["lines"].is_null()
+            })
             .map(|node| {
                 let mut recipe = node.values["recipe"].clone();
                 recipe["text"] = json!("AA");
@@ -1924,7 +1909,10 @@ json.dump({"schema_version":1,"job_id":p["job_id"],"input_hash":p["input_hash"],
                         field: "code".into(),
                         value: json!(script),
                     })
-                } else if node.type_name == "live.proof" {
+                } else if node.type_name == "live.proof"
+                    && node.values["recipe"]["rendering"]["lines"].is_null()
+                {
+                    // A specimen page sets one line per line of text, so it keeps its text.
                     let mut recipe = node.values["recipe"].clone();
                     recipe["text"] = json!("AA");
                     Some(GraphEdit::SetValue {
@@ -2024,7 +2012,7 @@ json.dump({"schema_version":1,"job_id":p["job_id"],"input_hash":p["input_hash"],
                 None,
                 "graph-test",
                 "apply-one",
-                "user-approved",
+                EditAuthorization::UserApproved,
             )
             .unwrap();
         let preview = app

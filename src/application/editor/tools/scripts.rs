@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 #[cfg(unix)]
 use runebender::automation::agent::ToolCall;
 #[cfg(unix)]
-use runebender::automation::agent_edit::AgentEditRequest;
+use runebender::automation::agent_edit::{AgentEditRequest, EditAuthorization};
 use runebender::automation::script_recipe::{ScriptRecipeInput, ScriptRecipeResult};
 use serde_json::Value;
 #[cfg(unix)]
@@ -68,10 +68,6 @@ pub(crate) struct ScriptProposal {
     pub(crate) stderr: String,
     pub(crate) applied: bool,
 }
-
-/// A wake-up from the asynchronous script status pump.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ScriptProgress;
 
 /// Presentation state which remains local until the runtime library is wired.
 ///
@@ -556,7 +552,7 @@ impl Workspace {
             expected_document_epoch: epoch,
             actor: "scripts-panel".into(),
             operation_key: proposal.input.job_id.clone(),
-            authorization: "user-approved".into(),
+            authorization: EditAuthorization::UserApproved,
             source: proposal.input.source,
             history_name: format!(
                 "Apply {}",

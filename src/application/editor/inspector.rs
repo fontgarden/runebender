@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! The info panel's fields, and what typing in them does to the font.
 
@@ -107,11 +107,13 @@ impl Workspace {
             return;
         }
         self.metadata_undo.push(MetadataEdit::SourceMetadata {
+            revision: self.font.project.document_revision(),
             glyph,
             label: label.into(),
             undo_depth,
         });
         self.metadata_redo.clear();
+        self.overview_redo.clear();
     }
 
     /// What sits under the drawing: the background layer if it is turned
@@ -337,6 +339,7 @@ impl Workspace {
         let undo_depth = self.font.history_depth(name, HistoryDirection::Undo);
         if self.apply_unicode_snapshot(name, &after) {
             self.metadata_undo.push(MetadataEdit::Unicode {
+                revision: self.font.project.document_revision(),
                 source_ids: (0..self.font.master_count())
                     .map(|index| self.font.project.source_id(index).expect("source identity"))
                     .collect(),
@@ -346,6 +349,7 @@ impl Workspace {
                 undo_depth,
             });
             self.metadata_redo.clear();
+            self.overview_redo.clear();
             self.note = format!("Updated Unicode for {name}");
         }
     }
@@ -371,7 +375,7 @@ impl Workspace {
         if matches!(self.mode, Mode::Editor(_))
             && let Some(index) = self.selected
         {
-            self.mode = Mode::Editor(index);
+            self.enter_editor_mode(index);
         }
         self.unicode_buf = active
             .first()
@@ -396,11 +400,13 @@ impl Workspace {
         let undo_depth = self.font.history_depth(old, HistoryDirection::Undo);
         if self.rename_without_history(old, new) {
             self.metadata_undo.push(MetadataEdit::Rename {
+                revision: self.font.project.document_revision(),
                 before: old.into(),
                 after: new.into(),
                 undo_depth,
             });
             self.metadata_redo.clear();
+            self.overview_redo.clear();
         }
     }
 
@@ -424,7 +430,7 @@ impl Workspace {
         if let Some(i) = self.font.index_of(new) {
             self.selected = Some(i);
             if matches!(self.mode, Mode::Editor(_)) {
-                self.mode = Mode::Editor(i);
+                self.enter_editor_mode(i);
                 if let Some(sess) = Session::new_from_model(&self.font, new) {
                     self.session = Arc::new(sess);
                 }
@@ -435,23 +441,57 @@ impl Workspace {
         true
     }
 
+    /// Select by editing context before considering guards. An unrelated contextual agent group
+    /// is not a candidate; a stale group in this context remains the next action and blocks replay.
+    pub(crate) fn metadata_history_index(&self, redo: bool) -> Option<usize> {
+        let entries = if redo {
+            &self.metadata_redo
+        } else {
+            &self.metadata_undo
+        };
+        entries.iter().rposition(|edit| {
+            if matches!(edit, MetadataEdit::DocumentGroup { .. }) {
+                return self.document_group_in_context(edit);
+            }
+            if !matches!(self.mode, Mode::Editor(_)) {
+                return true;
+            }
+            let glyph = match edit {
+                MetadataEdit::Rename { before, after, .. } => {
+                    if redo {
+                        before
+                    } else {
+                        after
+                    }
+                }
+                MetadataEdit::Unicode { glyph, .. }
+                | MetadataEdit::SourceMetadata { glyph, .. }
+                | MetadataEdit::Interpolation { glyph, .. }
+                | MetadataEdit::LayerStructure { glyph, .. }
+                | MetadataEdit::DocumentLayer { glyph, .. } => glyph,
+                MetadataEdit::DocumentGroup { .. } => return false,
+            };
+            *glyph == self.session.glyph_name
+        })
+    }
+
     /// Undo or redo metadata when it is next in the active glyph's history.
     pub(crate) fn metadata_history_step(&mut self, redo: bool) -> bool {
-        let candidate = if redo {
-            self.metadata_redo.last()
-        } else {
-            self.metadata_undo.last()
-        }
-        .cloned();
-        let Some(edit) = candidate else {
+        let Some(index) = self.metadata_history_index(redo) else {
             return false;
         };
+        let edit = if redo {
+            self.metadata_redo[index].clone()
+        } else {
+            self.metadata_undo[index].clone()
+        };
         let (expected, undo_depth) = match &edit {
-            MetadataEdit::AgentGroup { .. } => return self.agent_metadata_step(&edit, redo),
+            MetadataEdit::DocumentGroup { .. } => return self.document_group_step(&edit, redo),
             MetadataEdit::Rename {
                 before,
                 after,
                 undo_depth,
+                ..
             } => (if redo { before } else { after }, *undo_depth),
             MetadataEdit::Unicode {
                 glyph, undo_depth, ..
@@ -459,8 +499,10 @@ impl Workspace {
             | MetadataEdit::SourceMetadata {
                 glyph, undo_depth, ..
             }
-            | MetadataEdit::Interpolation { glyph, undo_depth }
-            | MetadataEdit::SourceStructure {
+            | MetadataEdit::Interpolation {
+                glyph, undo_depth, ..
+            }
+            | MetadataEdit::LayerStructure {
                 glyph, undo_depth, ..
             } => (glyph, *undo_depth),
             MetadataEdit::DocumentLayer {
@@ -484,7 +526,7 @@ impl Workspace {
                 .map(|glyph| glyph.name.as_str()),
             Mode::Graph => None,
         };
-        if current_name != Some(expected.as_str()) {
+        if matches!(self.mode, Mode::Editor(_)) && current_name != Some(expected.as_str()) {
             return false;
         }
         if self.font.index_of(expected).is_none() {
@@ -497,7 +539,7 @@ impl Workspace {
             return false;
         }
         let note = match &edit {
-            MetadataEdit::AgentGroup { .. } => return false,
+            MetadataEdit::DocumentGroup { .. } => return false,
             MetadataEdit::Rename { before, after, .. } => {
                 let (old, new) = if redo {
                     (before, after)
@@ -527,6 +569,33 @@ impl Workspace {
                     "{} Unicode for {glyph}",
                     if redo { "Redid" } else { "Undid" }
                 )
+            }
+            MetadataEdit::LayerStructure { label, .. } => {
+                self.park();
+                match self.font.project.undo_sources(if redo {
+                    HistoryDirection::Redo
+                } else {
+                    HistoryDirection::Undo
+                }) {
+                    Ok(true) => {
+                        // A restored or removed layer changes which layers exist to show
+                        // and edit; a choice that no longer exists falls back to the master.
+                        let project = &self.font.project;
+                        self.visible_layers.retain(|address| {
+                            project
+                                .document_layer(&address.glyph, &address.layer)
+                                .is_some()
+                        });
+                        self.refresh_source_views();
+                        self.modified = true;
+                    }
+                    Ok(false) => return false,
+                    Err(error) => {
+                        self.note = error;
+                        return true;
+                    }
+                }
+                format!("{} {label}", if redo { "Redid" } else { "Undid" })
             }
             MetadataEdit::Interpolation { .. } => {
                 let direction = if redo {
@@ -602,85 +671,66 @@ impl Workspace {
                 if crate::application::editor::session::moves_anchors(label) {
                     self.realign_composites_using(&change);
                 }
-                if !self.reload_canonical_layer(address) {
-                    return false;
-                }
-                let selected = if redo {
-                    component_selection.1
-                } else {
-                    component_selection.0
-                };
-                let session = Arc::make_mut(&mut self.session);
-                session.selected_component = None;
-                if let Some(component) = selected {
-                    let _ = session.select_component_id(component);
-                }
-                if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-                    tab.session = self.session.clone();
-                }
-                self.selected_points = self.session.selection.len();
-                self.refresh_coord_bufs();
-                format!("{} {label}", if redo { "Redid" } else { "Undid" })
-            }
-            MetadataEdit::SourceStructure {
-                glyph,
-                label,
-                before,
-                after,
-                ..
-            } => {
-                let expected = if redo {
-                    before.as_ref()
-                } else {
-                    after.as_ref()
-                };
-                let replacement = if redo {
-                    after.as_ref()
-                } else {
-                    before.as_ref()
-                };
-                if self.font.project.document_snapshot() != *expected
-                    || self.font.project.undo_sources(redo) != Ok(true)
-                    || self.font.project.document_snapshot() != *replacement
+                if self.session.canonical_address() == Some(address)
+                    && self.reload_canonical_layer(address)
                 {
-                    return false;
+                    let selected = if redo {
+                        component_selection.1
+                    } else {
+                        component_selection.0
+                    };
+                    let session = Arc::make_mut(&mut self.session);
+                    session.selected_component = None;
+                    if let Some(component) = selected {
+                        let _ = session.select_component_id(component);
+                    }
+                    if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                        tab.session = self.session.clone();
+                    }
+                    self.refresh_coord_bufs();
                 }
-                self.font.rebuild_cache();
-                let Some(address) = self.font.active_layer_address(glyph) else {
-                    return false;
-                };
-                if !self.reload_canonical_layer(&address) {
-                    return false;
-                }
+                self.modified = true;
                 format!("{} {label}", if redo { "Redid" } else { "Undid" })
             }
         };
-        if redo {
-            self.metadata_redo.pop();
-            self.metadata_undo.push(edit);
+        let edit = if redo {
+            self.metadata_redo.remove(index)
         } else {
-            self.metadata_undo.pop();
-            self.metadata_redo.push(edit);
-        }
+            self.metadata_undo.remove(index)
+        };
+        let entries = if redo {
+            &mut self.metadata_undo
+        } else {
+            &mut self.metadata_redo
+        };
+        let position = entries.partition_point(|candidate| {
+            if redo {
+                candidate.revision() < edit.revision()
+            } else {
+                candidate.revision() > edit.revision()
+            }
+        });
+        entries.insert(position, edit);
         self.note = note;
         true
     }
 
     pub(crate) fn can_metadata_history_step(&self, redo: bool) -> bool {
-        let candidate = if redo {
-            self.metadata_redo.last()
-        } else {
-            self.metadata_undo.last()
-        };
-        let Some(edit) = candidate else {
+        let Some(index) = self.metadata_history_index(redo) else {
             return false;
         };
+        let edit = if redo {
+            &self.metadata_redo[index]
+        } else {
+            &self.metadata_undo[index]
+        };
         let (expected, undo_depth) = match edit {
-            MetadataEdit::AgentGroup { .. } => return self.can_agent_metadata_step(edit, redo),
+            MetadataEdit::DocumentGroup { .. } => return self.can_document_group_step(edit, redo),
             MetadataEdit::Rename {
                 before,
                 after,
                 undo_depth,
+                ..
             } => (if redo { before } else { after }, *undo_depth),
             MetadataEdit::Unicode {
                 glyph, undo_depth, ..
@@ -688,8 +738,10 @@ impl Workspace {
             | MetadataEdit::SourceMetadata {
                 glyph, undo_depth, ..
             }
-            | MetadataEdit::Interpolation { glyph, undo_depth }
-            | MetadataEdit::SourceStructure {
+            | MetadataEdit::Interpolation {
+                glyph, undo_depth, ..
+            }
+            | MetadataEdit::LayerStructure {
                 glyph, undo_depth, ..
             } => (glyph, *undo_depth),
             MetadataEdit::DocumentLayer {
@@ -748,22 +800,9 @@ impl Workspace {
             }
             _ => true,
         };
-        let source_structure_available = match edit {
-            MetadataEdit::SourceStructure { before, after, .. } => {
-                self.font.project.has_source_history(redo)
-                    && self.font.project.document_snapshot()
-                        == *(if redo {
-                            before.as_ref()
-                        } else {
-                            after.as_ref()
-                        })
-            }
-            _ => true,
-        };
         source_metadata_available
             && document_layer_available
-            && source_structure_available
-            && current_name == Some(expected.as_str())
+            && (!matches!(self.mode, Mode::Editor(_)) || current_name == Some(expected.as_str()))
             && self.font.index_of(expected).is_some()
             && self.font.history_depth(expected, HistoryDirection::Undo) == undo_depth
     }
@@ -829,9 +868,12 @@ impl Workspace {
                         .source_id(self.font.active())
                         .expect("active source identity"),
                     glyphs: vec![glyph],
+                    revision: self.font.project.document_revision(),
                 });
                 self.overview_redo.clear();
+                self.metadata_redo.clear();
                 self.modified = true;
+                self.refresh_glyph_entry(i);
             }
         }
     }
@@ -888,8 +930,10 @@ impl Workspace {
             self.overview_undo.push(OverviewEditBatch {
                 source,
                 glyphs: changed,
+                revision: self.font.project.document_revision(),
             });
             self.overview_redo.clear();
+            self.metadata_redo.clear();
             self.font.rebuild_cache();
             self.cells = Arc::new(cells_of(&self.font, &self.palette));
             self.modified = true;
@@ -1254,6 +1298,93 @@ mod size_tests {
                 .expect("the system clock is after the Unix epoch")
                 .as_nanos(),
         ))
+    }
+
+    fn overview_history_workspace() -> Workspace {
+        use runebender::font::project::{Project, SourceInput};
+
+        let mut font = norad::Font::new();
+        for (name, codepoint) in [("A", 'A'), ("B", 'B')] {
+            let mut glyph = norad::Glyph::new(name);
+            glyph.width = 500.0;
+            glyph.codepoints.insert(codepoint);
+            font.default_layer_mut().insert_glyph(glyph);
+        }
+        let project =
+            Project::from_source(SourceInput::from_font(font, "overview-history.ufo".into()))
+                .unwrap();
+        let mut app = Workspace::from_model(FontModel::from_project(project)).unwrap();
+        app.selected = app.font.index_of("A");
+        app
+    }
+
+    #[test]
+    fn overview_advance_and_unicode_follow_commit_order_in_both_directions() {
+        use crate::application::app_action::AppAction;
+
+        for unicode_first in [false, true] {
+            for graph in [false, true] {
+                let mut app = overview_history_workspace();
+                let before = app.font.project.document_snapshot();
+                if unicode_first {
+                    app.overview_set_unicode("0043".into());
+                } else {
+                    app.overview_set_advance("600".into());
+                }
+                let middle = app.font.project.document_snapshot();
+                if unicode_first {
+                    app.overview_set_advance("600".into());
+                } else {
+                    app.overview_set_unicode("0043".into());
+                }
+                let after = app.font.project.document_snapshot();
+                for _ in 0..2 {
+                    for (action, expected) in [
+                        (AppAction::Undo, &middle),
+                        (AppAction::Undo, &before),
+                        (AppAction::Redo, &middle),
+                        (AppAction::Redo, &after),
+                    ] {
+                        // Document chronology must not depend on the highlighted cell or surface.
+                        app.selected = app.font.index_of("B");
+                        app.mode = if graph { Mode::Graph } else { Mode::Overview };
+                        assert!(app.can_overview_history_step(action == AppAction::Redo));
+                        app.dispatch(action);
+                        assert_eq!(&app.font.project.document_snapshot(), expected);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn new_overview_and_metadata_edits_invalidate_each_others_redo() {
+        use crate::application::app_action::AppAction;
+
+        for metadata_redo in [false, true] {
+            let mut app = overview_history_workspace();
+            if metadata_redo {
+                app.overview_set_advance("600".into());
+                app.overview_set_unicode("0043".into());
+            } else {
+                app.overview_set_unicode("0043".into());
+                app.overview_set_advance("600".into());
+            }
+            app.dispatch(AppAction::Undo);
+            assert_eq!(!app.metadata_redo.is_empty(), metadata_redo);
+            assert_eq!(!app.overview_redo.is_empty(), !metadata_redo);
+            if metadata_redo {
+                app.overview_set_advance("650".into());
+            } else {
+                app.overview_set_unicode("0044".into());
+            }
+            assert!(app.overview_redo.is_empty());
+            assert!(app.metadata_redo.is_empty());
+            let before_redo = app.font.project.document_snapshot();
+            assert!(!app.can_overview_history_step(true));
+            app.dispatch(AppAction::Redo);
+            assert_eq!(app.font.project.document_snapshot(), before_redo);
+        }
     }
 
     #[test]

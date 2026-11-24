@@ -83,8 +83,13 @@ pub(crate) fn with_live<V: xilem::WidgetView<Workspace>>(
                     app.live_graph_pump();
                     app.sync_live_graph_presentation();
                 }
-                let request = app.live.as_ref().and_then(|server| server.try_recv());
-                if let Some(request) = request {
+                // Drain the mailbox, up to its capacity per wake so a stream of new calls
+                // cannot hold the interface thread; the pending signal stays set for the rest.
+                for _ in 0..runebender::automation::live_socket::MAX_PENDING_REQUESTS {
+                    let Some(request) = app.live.as_ref().and_then(|server| server.try_recv())
+                    else {
+                        break;
+                    };
                     request.respond(|call| app.call_live(call));
                 }
                 app.live_graph_pending
@@ -128,6 +133,36 @@ impl Workspace {
             {
                 return json!({"ok":false,"error":"editor_context takes no arguments", "error_code":"invalid_arguments"});
             }
+            return self.live_context();
+        }
+        if call.name == "editor_set_source" {
+            let args = &call.arguments;
+            let Some(id) = args["source"]
+                .as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+            else {
+                return json!({"ok":false,"error_code":"invalid_arguments"});
+            };
+            if args.as_object().map(|o| o.len()) != Some(2)
+                || !args["expected_context_revision"].is_string()
+            {
+                return json!({"ok":false,"error_code":"invalid_arguments"});
+            }
+            if self.live_context()["context_revision"] != args["expected_context_revision"] {
+                return json!({"ok":false,"error_code":"stale_context"});
+            }
+            if self.session.gesture_in_progress() || self.features_edited {
+                return json!({"ok":false,"error":"Finish the current edit before switching sources","error_code":"busy"});
+            }
+            let Some(index) = self
+                .font
+                .project
+                .document_sources()
+                .position(|s| s.id().0 == id)
+            else {
+                return json!({"ok":false,"error_code":"source_not_found"});
+            };
+            self.set_master(index);
             return self.live_context();
         }
         if call.name == "editor_open_glyph" {

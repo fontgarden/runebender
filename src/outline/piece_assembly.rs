@@ -11,7 +11,9 @@
 use kurbo::{Affine, BezPath, Rect, Shape as _, Vec2};
 use nufo::NeuralSample;
 
-use crate::outline::label_pieces::OVERLAP;
+/// How far the polygon of a seed region, written by an older editor, reaches past each cut
+/// into its neighbors, in font units.
+const OVERLAP: f64 = 24.0;
 
 /// Space left between words, in font units.
 pub const WORD_GAP: f64 = 160.0;
@@ -35,7 +37,7 @@ pub struct Piece {
     pub first: u32,
     /// The index of the last owner in the sample's text, in characters.
     pub last: u32,
-    /// The region came from a seed, so its polygon reaches [`OVERLAP`] into its neighbors.
+    /// The region came from a seed, so its polygon reaches `OVERLAP` into its neighbors.
     pub grown: bool,
 }
 
@@ -182,8 +184,9 @@ fn best_piece<'a>(
     pieces
         .iter()
         .filter(|piece| {
+            // A piece without letters would match everywhere and never advance.
             let run = &characters[at..characters.len().min(at + piece.letters.len())];
-            run == piece.letters.as_slice()
+            !piece.letters.is_empty() && run == piece.letters.as_slice()
         })
         .max_by_key(|piece| {
             let end = at + piece.letters.len();

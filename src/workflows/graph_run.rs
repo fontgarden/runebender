@@ -98,22 +98,6 @@ pub enum RunValue {
 }
 
 impl RunValue {
-    /// What kind of port carries this.
-    pub fn kind(&self) -> Kind {
-        match self {
-            Self::Source { .. } => Kind::Source,
-            Self::Model { .. } => Kind::Model,
-            Self::Adapter { .. } => Kind::Adapter,
-            Self::Glyphs { .. } => Kind::Glyphs,
-            Self::Number { .. } => Kind::Number,
-            Self::Flag { .. } => Kind::Flag,
-            Self::Text { .. } => Kind::Text,
-            Self::Layer { .. } => Kind::Layer,
-            Self::Rows { .. } => Kind::Rows,
-            Self::Path { .. } => Kind::Path,
-        }
-    }
-
     /// The text of a text value.
     fn text(&self) -> Option<&str> {
         match self {
@@ -2508,7 +2492,8 @@ mod tests {
         let project = Project::from_source(SourceInput::from_font(
             norad::Font::new(),
             PathBuf::from("Regular.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         assert_eq!(
             single_source_id(&project, Path::new("Regular.ufo")).unwrap(),
             SourceId(0)
@@ -2548,14 +2533,16 @@ mod tests {
             .unwrap()
             .insert_glyph(comparison_glyph("n", 50.0));
         let source =
-            Project::from_source(SourceInput::from_font(source, PathBuf::from("Regular.ufo")));
+            Project::from_source(SourceInput::from_font(source, PathBuf::from("Regular.ufo")))
+                .expect("valid source fixture");
 
         let mut target = norad::Font::new();
         target
             .default_layer_mut()
             .insert_glyph(comparison_glyph("n", 100.0));
         let target =
-            Project::from_source(SourceInput::from_font(target, PathBuf::from("Bold.ufo")));
+            Project::from_source(SourceInput::from_font(target, PathBuf::from("Bold.ufo")))
+                .expect("valid source fixture");
 
         let rows = compare_project_layer(
             &source,
@@ -2607,12 +2594,19 @@ mod tests {
             .new_layer("preview")
             .unwrap()
             .insert_glyph(proposed);
-        let expected =
-            crate::formats::svg::proof_sheet(&font, Some("preview"), &["A".into()], 8).unwrap();
         let project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("CanonicalProof.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
+        let expected = crate::formats::svg::proof_sheet_project(
+            &project,
+            SourceId(0),
+            Some("preview"),
+            &["A".into()],
+            8,
+        )
+        .unwrap();
         let selected = LayerId {
             source: SourceId(0),
             name: "preview".into(),

@@ -16,10 +16,6 @@ pub(crate) struct ExportJob {
     pub(crate) finished: Arc<Mutex<Option<Result<String, String>>>>,
 }
 
-/// Message sent when the worker has finished.
-#[derive(Debug)]
-pub(crate) struct ExportProgress;
-
 #[cfg(not(target_arch = "wasm32"))]
 fn run(
     source: PathBuf,

@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::workflows::digest::hex_digest;
+
 use super::agent_edit::{AgentEditOperation, AgentLayerEdits, AgentLayerGuard};
 use crate::font::{CanonicalLayerSnapshot, edit_batch, project, variable};
 use crate::outline::drawing::DrawingPointType;
@@ -710,14 +712,6 @@ fn guard_key(guard: &AgentLayerGuard) -> (&str, &str, &str, &str) {
         &guard.layer,
         &guard.expected_revision,
     )
-}
-
-fn hex_digest(digest: impl AsRef<[u8]>) -> String {
-    digest
-        .as_ref()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 #[cfg(test)]

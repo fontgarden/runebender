@@ -4,18 +4,27 @@
 //! Captured fonts and presentation-only controls for selectable reading proofs.
 //! Compilation owns immutable engine inputs. Neither sample edits nor proof axes mutate the font.
 
+use crate::application::launch_options::CompileMode;
 use crate::application::platform::reference_fonts::References;
 use crate::application::workspace::Workspace;
 use runebender::font::compiler::{CompiledFont, proof};
+use runebender::text::proof_samples::{self, ProofSample};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// The text of the reading proof.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Sample {
+    /// The character of the glyph alone.
     Glyph,
+    /// The first proof sample of the script of the glyph.
     #[default]
-    Spacing,
+    First,
+    /// The proof sample with this key, or the first one when it is not for this glyph.
+    Named(String),
+    /// Every encoded character of the font.
     Alphabet,
+    /// The text that the designer types.
     Custom,
 }
 
@@ -24,7 +33,16 @@ type CompileResult = Result<Arc<CompiledFont>, String>;
 #[derive(Clone, Debug)]
 pub(crate) struct CompileJob(Arc<Mutex<Option<CompileResult>>>);
 impl CompileJob {
+    /// Compile in the compile mode of this process.
     pub(crate) fn new(input: Result<proof::CompileProofInput, String>) -> Self {
+        Self::with_mode(input, CompileMode::current())
+    }
+
+    /// Compile on the calling thread or on a worker thread.
+    pub(crate) fn with_mode(
+        input: Result<proof::CompileProofInput, String>,
+        mode: CompileMode,
+    ) -> Self {
         let job = Self(Arc::new(Mutex::new(None)));
         let result = job.0.clone();
         let work = move || {
@@ -34,10 +52,11 @@ impl CompileJob {
                     .map(|snapshot| snapshot.compiled_font()),
             );
         };
-        if cfg!(test) || std::env::var_os("RUNEBENDER_SCREENSHOT").is_some() {
-            work();
-        } else {
-            std::thread::spawn(work);
+        match mode {
+            CompileMode::Blocking => work(),
+            CompileMode::Background => {
+                std::thread::spawn(work);
+            }
         }
         job
     }
@@ -66,7 +85,7 @@ pub(crate) struct ReadingState {
 impl Default for ReadingState {
     fn default() -> Self {
         Self {
-            sample: Sample::Spacing,
+            sample: Sample::First,
             sample_menu_open: false,
             custom: String::new(),
             size: 32.0,
@@ -122,17 +141,52 @@ impl ReadingFont {
 }
 
 impl Workspace {
-    pub(crate) fn review_sample_text(&self) -> String {
+    /// The character of the open glyph: its own, or that of its base glyph for an unencoded
+    /// form such as `beh-ar.init`, which shaping then produces in context.
+    pub(crate) fn proof_character(&self) -> Option<char> {
         let glyph = self
             .font
             .glyphs
             .iter()
-            .find(|g| g.name == self.session.glyph_name)
-            .and_then(|g| g.codepoint);
-        match self.review.reading.sample {
-            Sample::Glyph => glyph.map(String::from).unwrap_or_default(),
-            Sample::Spacing => glyph
-                .map(|c| format!("{c}{c}{c} n{c}n o{c}o H{c}H O{c}O"))
+            .find(|g| g.name == self.session.glyph_name)?;
+        glyph.codepoint.or_else(|| {
+            let base = glyph.name.split('.').next()?;
+            self.font
+                .glyphs
+                .iter()
+                .find(|candidate| candidate.name == base)
+                .and_then(|candidate| candidate.codepoint)
+        })
+    }
+    /// The proof samples for the script of the open glyph, in the order of the sample file.
+    pub(crate) fn glyph_proof_samples(&self) -> Vec<&ProofSample> {
+        proof_samples::matching(&self.proof_samples.samples, self.proof_character()).collect()
+    }
+    /// The sample with `key` when it is for the open glyph, else the first sample for it.
+    pub(crate) fn glyph_proof_sample(&self, key: Option<&str>) -> Option<&ProofSample> {
+        let samples = self.glyph_proof_samples();
+        key.and_then(|key| samples.iter().find(|sample| sample.key == key))
+            .or_else(|| samples.first())
+            .copied()
+    }
+    /// The text of a proof sample for the open glyph.
+    pub(crate) fn proof_sample_text(&self, sample: &ProofSample) -> String {
+        sample.text_for(self.proof_character()).unwrap_or_default()
+    }
+    /// The proof sample of the reading proof, when it shows one.
+    pub(crate) fn review_proof_sample(&self) -> Option<&ProofSample> {
+        match &self.review.reading.sample {
+            Sample::First => self.glyph_proof_sample(None),
+            Sample::Named(key) => self.glyph_proof_sample(Some(key)),
+            Sample::Glyph | Sample::Alphabet | Sample::Custom => None,
+        }
+    }
+    pub(crate) fn review_sample_text(&self) -> String {
+        match &self.review.reading.sample {
+            Sample::Glyph => self.proof_character().map(String::from).unwrap_or_default(),
+            Sample::First | Sample::Named(_) => self
+                .review_proof_sample()
+                .map(|sample| self.proof_sample_text(sample))
                 .unwrap_or_default(),
             Sample::Alphabet => self
                 .font
@@ -174,13 +228,19 @@ impl Workspace {
             .collect::<Vec<_>>()
             .join(", ")
     }
-    pub(crate) fn refresh_review_references(&mut self) {
-        if self.proof_view && !self.untitled {
+    /// Read the reference fonts and the proof samples of the project again when they changed.
+    /// The reference fonts are read only for the proof view.
+    pub(crate) fn refresh_proof_files(&mut self) {
+        if self.untitled {
+            return;
+        }
+        if self.proof_view {
             self.review
                 .reading
                 .references
                 .refresh(self.font.document_source());
         }
+        self.proof_samples.refresh(self.font.document_source());
     }
     pub(crate) fn review_reference_weight(&self) -> f32 {
         let reading = matches!(
@@ -299,6 +359,45 @@ pub(crate) fn missing_coverage(bytes: &[u8], text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_background_compile_reports_from_a_worker_thread() {
+        let job = CompileJob::with_mode(Err("no proof input".into()), CompileMode::Background);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let result = loop {
+            if let Some(result) = job.result() {
+                break result;
+            }
+            assert!(std::time::Instant::now() < deadline, "the worker reports");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(result.err().as_deref(), Some("no proof input"));
+        assert!(!job.pending());
+    }
+
+    #[test]
+    fn a_blocking_compile_reports_before_it_returns() {
+        let job = CompileJob::with_mode(Err("no proof input".into()), CompileMode::Blocking);
+        assert!(!job.pending());
+    }
+
+    #[test]
+    fn the_reading_proof_opens_on_the_first_sample_of_the_script_of_the_glyph() {
+        let mut app = Workspace::untitled().expect("blank font");
+        let index = app.font.index_of("A").expect("blank font has A");
+        app.open_glyph(index);
+        assert_eq!(app.review_sample_text(), "AAA nAn oAo HAH OAO");
+        // A Hebrew sample is not for a Latin glyph: the first Latin sample shows instead.
+        app.select_review_sample(Sample::Named("hebrew-words".into()));
+        assert_eq!(
+            app.review_proof_sample().map(|s| s.key.as_str()),
+            Some("latin-glyph-spacing")
+        );
+        app.select_review_sample(Sample::Named("latin-words".into()));
+        assert_eq!(app.review_sample_text(), "Hamburgefontsiv");
+        app.select_review_sample(Sample::Glyph);
+        assert_eq!(app.review_sample_text(), "A");
+    }
 
     #[test]
     fn coverage_reports_missing_characters_without_duplicates() {

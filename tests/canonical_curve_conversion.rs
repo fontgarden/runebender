@@ -67,6 +67,7 @@ fn contour(points: Vec<ContourPoint>, label: &str) -> Contour {
 
 fn project_from_font(font: Font, path: &Path) -> Project {
     Project::from_source(SourceInput::from_font(font, path.to_owned()))
+        .expect("valid source fixture")
 }
 
 fn default_layer(project: &Project) -> LayerId {

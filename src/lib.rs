@@ -10,7 +10,7 @@
 //! metadata extensions, grouping them with one or more source records and their designspace data.
 //! Text preview builds a temporary, outline-free OpenType font for shaping.
 //!
-//! - [`analysis`] computes measurements, curvature, categories, and search results.
+//! - [`analysis`] computes measurements, curvature, and categories.
 //!   It borrows the in-memory source model and does not change it.
 //! - [`font`] owns canonical glyph layers, source records and designspace metadata.
 //!   It also handles interpolation, edit history, and proposed changes.
@@ -22,16 +22,19 @@
 //!   algorithms.
 //! - [`text`] builds layout from the source's glyphs, metrics, anchors, and OpenType feature code.
 //!   It also owns the editable text buffer used by the Text tool.
-//! - [`ui`] contains selection, undo, viewport, theme, sidebar, and node-layout data.
+//! - [`ui`] contains viewport, theme, sidebar, and node-layout data.
 //!   Front-ends share these types without making the library depend on their GUI toolkits.
 
 // LINEBENDER LINT SET - lib.rs - v4
 // See https://linebender.org/wiki/canonical-lints/
+// These lints shouldn't apply to examples or tests.
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
+// These lints shouldn't apply to examples.
 #![warn(clippy::print_stdout, clippy::print_stderr)]
+// Targeting e.g. 32-bit means structs containing usize can give false positives for 64-bit.
 #![cfg_attr(target_pointer_width = "64", warn(clippy::trivially_copy_pass_by_ref))]
-#![cfg_attr(docsrs, feature(doc_cfg))]
 // END LINEBENDER LINT SET
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 // Cargo enables package features for both targets. These anonymous imports stop the library's
 // dependency lint from flagging dependencies used only by the application executable.
@@ -39,9 +42,9 @@
 use sparkle_updater as _;
 #[cfg(feature = "application")]
 use {
-    base64 as _, clap as _, copypasta as _, cpal as _, image as _, imaging_vello_cpu as _,
-    masonry as _, masonry_winit as _, neuraltype_core as _, notify as _, regex as _, rfd as _,
-    tokio as _, winit as _, xilem as _,
+    base64 as _, clap as _, copypasta as _, cpal as _, imaging_vello_cpu as _, masonry as _,
+    masonry_winit as _, neuraltype_core as _, notify as _, regex as _, rfd as _, tokio as _,
+    winit as _, xilem as _,
 };
 #[cfg(all(feature = "application", target_os = "macos"))]
 use {muda as _, objc2 as _, objc2_app_kit as _};

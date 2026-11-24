@@ -26,6 +26,9 @@ fn request(listener: &TcpListener) -> (TcpStream, Value) {
             Err(error) => panic!("fixture accept: {error}"),
         }
     };
+    // BSD sockets can inherit the listener's O_NONBLOCK flag. The fixture reads
+    // complete HTTP frames using the bounded blocking timeout below.
+    stream.set_nonblocking(false).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();

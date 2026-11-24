@@ -186,17 +186,6 @@ impl SourceTextArea {
         }
     }
 
-    /// Change the rendered text size while retaining the editor's text and selection.
-    pub(crate) fn set_text_size(this: &mut WidgetMut<'_, Self>, text_size: f32) {
-        if (this.widget.text_size - text_size).abs() > f32::EPSILON {
-            let inner = std::mem::replace(&mut this.widget.inner, Self::text_area("", text_size));
-            this.widget.inner = inner.with_style(StyleProperty::FontSize(text_size));
-            this.widget.text_size = text_size;
-            this.ctx.request_layout();
-            this.ctx.request_render();
-        }
-    }
-
     fn contents(&self) -> String {
         self.inner.text().into_iter().collect()
     }
@@ -442,7 +431,8 @@ fn text_history_action(key: &Key, modifiers: Modifiers) -> Option<TextHistoryAct
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::widgets::shortcuts::{AppAction, ShortcutHost};
+    use crate::application::app_action::AppAction;
+    use crate::application::widgets::shortcuts::ShortcutHost;
     use masonry::core::keyboard::{Code, KeyboardEvent};
     use masonry::properties::Dimensions;
     use masonry::theme::default_property_set;

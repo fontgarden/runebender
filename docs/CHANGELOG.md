@@ -5,8 +5,76 @@ See [the release runbook](RELEASING.md#changelog-practice) for how these entries
 
 ## Unreleased
 
-No application changes have landed since `0.1.0-alpha.1` at this documentation checkpoint.
 The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work belong in [the next-alpha checklist](RELEASING.md#next-alpha-010-alpha2), not in the list of shipped changes.
+
+### Added
+
+- Review queue on the proof page: `1` to `4` grade the open glyph red, orange, yellow or green and open the next purple draft of the active master; `[` and `]` step through the drafts without a grade. The status line gives the number of drafts left. The same commands are in the Glyph menu.
+- A font's own context file can be named `CONTEXT.md`: the plain name `context.md` is read in any case.
+- Thickness overlay in the Curves section: the local thickness field of the ink (Hildebrand and Rüegsegger), filled as a smooth gradient on the warm end of the theme's mark ramp around the glyph's median thickness.
+  `RUNEBENDER_VIEW=thickness` turns it on in a headless capture.
+
+- Proof samples from the project: the proof view reads the `sample` tables of `sources/proof-samples.toml`, the file of the Font.Garden web proof, and offers the samples for the script of the glyph.
+  The default samples cover Latin, Hebrew, and Arabic, each with a spacing sample of the glyph in its own script.
+- A Proof section in the editor panel shows the open glyph in a sample of its script, shaped from the live outline as you edit.
+
+### Changed
+
+- Purple marks a machine draft that the designer has not reviewed, as in the Font.Garden source repositories.
+  The Weight debt block marks installed drafts purple instead of orange, only green glyphs are frozen references, and `flag_glyph` refuses a purple draft.
+- The macOS renderer uses a [revision-pinned `block` compatibility fix](https://github.com/vaimeai/rust-block/commit/b88ec0fad1ed2a675bef651e8e23d49b649ba0be) instead of the crates.io 0.1.6 source.
+  The private Objective-C class marker is now inhabited, fixing Rust's `uninhabited_static` future-compatibility warning without changing the block API or upgrading Metal/wgpu.
+  Production-source review against the published crate found only that marker change and documentation-link formatting; remove the patch when the renderer drops `block` or a compatible upstream release fixes the declaration.
+- Glyph grids reuse packed rows and encoding/layout decisions until their cells, metrics or viewport change.
+  Painting, scrolling and hit testing share the same cached geometry.
+- Initial text compositions insert mapped characters as a batch and shape the completed buffer instead of reshaping every prefix.
+  Empty and unmapped input preserve selections, and ordinary single-character editing remains incremental.
+- Grid thumbnails and filled piece/neural previews borrow outlines and apply painter transforms rather than copying transformed paths on every repaint.
+  Stroke widths and point-marker sizing are unchanged; Label mode skips construction of hidden point and handle geometry.
+- Successful, unchanged font shaping no longer invokes the Arabic fallback.
+  Repeated shaping preserves compiled ligatures, positioning and absorbed-sort identities instead of overwriting them.
+- Feature generation, live measurements, and compiler category inference use fewer temporary allocations without changing their results.
+- Background Copy, Swap, Clear and their Undo/Redo use layer-local staging and the shared grouped history instead of whole-document snapshots.
+  History retains only touched or consulted layers and any newly created layer container.
+  Replay preserves unrelated glyph edits and rejects changed layers, glyph identities, layer ordering or reused containers before publication.
+  The Rust background-command APIs return an optional history group and invalidation scope; replay uses `replay_document_edit_history_group`, not source-structure history.
+- Component dependency invalidation traverses stored glyphs directly instead of repeatedly searching the glyph list, while retaining canonical layer order.
+- Guarded edit checks compare borrowed layer data rather than cloning snapshots; identity and exact metadata conflicts still reject.
+- Text compositions share cached outlines and apply placement transforms at paint time.
+  Retained proof and specimen paths are drawn without extra transformed copies on every repaint.
+- Overview Undo and Redo follow chronological order across geometry and metadata edits, and new edits clear both redo branches.
+  Update Metrics and Bake Masks publish all affected glyphs and masters as one guarded, undoable command.
+- Disk-graph progress and completion stay with the graph snapshot that started the run.
+  Replacing, reopening, or editing that graph cancels obsolete publication without claiming to undo disk effects.
+- AI drawing results and acceptance are guarded by document, glyph, source, layer, and revision.
+  Switching targets or editing the document discards stale previews instead of offering them to another glyph; training is unaffected.
+- Removing a glyph preserves the active surviving tab and updates its editor index after the glyph list shifts.
+  Closing every tab for the deleted glyph selects the next surviving tab or clears the deleted session, without leaving stale state in the overview or graph.
+- Glyph rename and removal update every source's glyph order and production-name mapping, Designspace substitutions, and supported HOI trajectory references in the same guarded transaction.
+  Renaming retains production-name values, rule identities, and unrelated metadata; removal retains empty rules and their conditions.
+  Saves persist the changed Designspace as well as its UFO sources.
+  Malformed reference metadata, unsupported HOI payloads, and conflicting destination entries reject the edit without changing the document.
+- Decomposing components and replacing proposal geometry discard smart values belonging to removed components before projection or saving.
+  Proposal installation retains foreground values for surviving component identities, including reordered components.
+  Undo restores the original components and values together; source axes, pole selections, and unrelated glyph metadata remain intact.
+- Save As detaches Glyphs and Fontra write-back only after successfully publishing the new UFO/Designspace document.
+  Later saves cannot overwrite the original foreign input.
+- Glyphs and Fontra saves preserve glyphs skipped during import while retaining intentional deletions.
+  Fontra component locations and extension data follow component identity through edits and reordering.
+  Older foreign working copies without import provenance must reopen the original source before write-back.
+  Preserve pending edits with Save As before reopening an older working copy.
+- Default graph specimens render built-in pages without implicitly compiling a Rust example.
+  Script examples remain available through the explicit add action; existing saved graphs are unchanged.
+- MCP installation reports use typed internal fields while retaining their JSON format.
+  Headless compilation now lives beside the other font commands, preserving variable-project support and overwrite protection.
+- Canonical project import returns typed metadata errors instead of panicking on malformed UFO input.
+  Source display names and locations are read-only views maintained by source operations.
+  Snapping policy belongs to each edit context rather than process-global font-engine state.
+- Geometry regressions exercise canonical document transactions, and ordinary unit tests use repository-owned synthetic fonts.
+  Pinned full-font coverage remains available through `--features integration-fonts` and is required in CI.
+- CI separates production, auxiliary, and headless checks, audits both Cargo workspaces and browser packages weekly, and checks TOML formatting and spelling.
+  Normal browser builds validate dependency pins without rewriting tracked manifests; pin updates are explicit.
+- Added a [contributor guide](CONTRIBUTING.md), [worker contract](WORKER-CONTRACT.md), and [reproducible engine benchmarks](BENCHMARKS.md).
 
 ## 0.1.0-alpha.1 — 2026-10-28
 

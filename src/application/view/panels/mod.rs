@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! The panels either side of the canvas, one file per region.
 
@@ -10,6 +10,7 @@ pub(crate) mod editor_info;
 pub(crate) mod graph;
 pub(crate) mod info;
 pub(crate) mod interpolation;
+pub(crate) mod live_proof;
 pub(crate) mod local_ai;
 pub(crate) mod preview;
 pub(crate) mod scripts;

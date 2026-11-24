@@ -199,7 +199,8 @@ mod tests {
         let mut project = Project::from_source(SourceInput::from_font(
             font,
             PathBuf::from("CanonicalInspect.ufo"),
-        ));
+        ))
+        .expect("valid source fixture");
         let actual = read_project_glyph(&project, SourceId(0), "A", None);
         assert_eq!(actual["ok"], true, "{actual:#}");
         assert_eq!(actual["glyph"], "A");

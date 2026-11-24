@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! The empty part of the title bar: a press on it moves the window, a
 //! double click zooms it, the way the system title bar behaves. This

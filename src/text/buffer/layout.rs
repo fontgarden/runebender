@@ -34,6 +34,19 @@ impl TextBuffer {
             .count()
     }
 
+    /// Each line as the half-open range of sort indices it holds, without its line break.
+    ///
+    /// There is always at least one line, and the last line ends at the end of the buffer.
+    pub(super) fn line_ranges(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        let mut next = Some(0);
+        std::iter::from_fn(move || {
+            let start = next?;
+            let end = self.next_line_end(start);
+            next = (end < self.sorts.len()).then_some(end + 1);
+            Some((start, end))
+        })
+    }
+
     /// Number of lines, which is one more than the number of line breaks.
     pub fn line_count(&self) -> usize {
         1 + self
@@ -53,14 +66,11 @@ impl TextBuffer {
         let mut items = Vec::with_capacity(self.sorts.len());
         let mut cursor_x = 0.0;
         let mut cursor_y = 0.0;
-        let mut line_start = 0;
-        let mut line_number = 0;
         // RTL lines share one right edge so a paragraph stays aligned,
         // the way xilem lines them up; LTR lines start at the origin.
         let rtl_line_start_x = self.rtl_line_start_x();
 
-        while line_start <= self.sorts.len() {
-            let line_end = self.next_line_end(line_start);
+        for (line_number, (line_start, line_end)) in self.line_ranges().enumerate() {
             let direction = self.resolved_line_direction(line_number);
             let y = -line_height * line_number as f64;
 
@@ -88,6 +98,7 @@ impl TextBuffer {
 
             for run in runs.iter() {
                 let mut previous: Option<&str> = None;
+                let mut previous_edge = None;
                 for &index in run.visual_order() {
                     // A character folded into a ligature has no glyph of
                     // its own: no item, no width, no kerning pair.
@@ -106,9 +117,28 @@ impl TextBuffer {
                     x += kern_between(self, previous, glyph_name, run.rtl);
                     // A mark is drawn where shaping put it, off the pen;
                     // the pen itself moves by the advance only.
+                    if let Some((boundary, delta)) = self.drag_gap
+                        && boundary == index
+                    {
+                        x += delta;
+                    }
                     let (dx, dy) = self.shaped_offset(index);
+                    let nominal_width = glyph_name
+                        .and_then(|name| self.glyph_inventory.widths.get(name))
+                        .copied()
+                        .unwrap_or(advance_width);
+                    // Marks can have GPOS offsets independent of pair spacing.
+                    let spacing_before = if nominal_width > 0.0 && dy == 0.0 {
+                        previous_edge.map_or(0.0, |edge: f64| x + dx - edge)
+                    } else {
+                        0.0
+                    };
+                    previous_edge =
+                        (nominal_width > 0.0 && dy == 0.0).then_some(x + dx + nominal_width);
                     items.push(TextLayoutItem {
                         index,
+                        nominal_width,
+                        spacing_before,
                         x: x + dx,
                         y: y + dy,
                         advance_width,
@@ -157,20 +187,14 @@ impl TextBuffer {
                 cursor_y = y;
             }
 
-            if line_end >= self.sorts.len() {
-                break;
-            }
-
             // Skip the line-break sort.
-            if self.cursor == line_end + 1 {
+            if line_end < self.sorts.len() && self.cursor == line_end + 1 {
                 cursor_x = match self.resolved_line_direction(line_number + 1) {
                     TextDirection::LeftToRight => 0.0,
                     TextDirection::RightToLeft => rtl_line_start_x,
                 };
                 cursor_y = -line_height * (line_number + 1) as f64;
             }
-            line_start = line_end + 1;
-            line_number += 1;
         }
 
         TextLayout {
@@ -220,6 +244,8 @@ impl TextBuffer {
                         index,
                         x,
                         y: 0.0,
+                        nominal_width: advance_width,
+                        spacing_before: kern,
                         advance_width,
                     });
                     x += advance_width;
@@ -235,20 +261,12 @@ impl TextBuffer {
     /// (start, end, rtl). The preview strip lays out one at a time.
     pub(super) fn preview_groups(&self) -> Vec<(usize, usize, bool)> {
         let mut groups: Vec<(usize, usize, bool)> = Vec::new();
-        let mut line_start = 0;
-        let mut line_number = 0;
-        while line_start <= self.sorts.len() {
-            let line_end = self.next_line_end(line_start);
+        for (line_number, (line_start, line_end)) in self.line_ranges().enumerate() {
             let rtl = self.resolved_line_direction(line_number) == TextDirection::RightToLeft;
             match groups.last_mut() {
                 Some(group) if group.2 == rtl => group.1 = line_end,
                 _ => groups.push((line_start, line_end, rtl)),
             }
-            if line_end >= self.sorts.len() {
-                break;
-            }
-            line_start = line_end + 1;
-            line_number += 1;
         }
         groups
     }
@@ -291,39 +309,18 @@ impl TextBuffer {
             };
         }
 
-        let line_height = line_height.max(1.0);
-        let target_line = self.line_number_for_y(y, line_height, ascender, descender);
-        let (line_start, line_end) = self.line_range_for_number(target_line);
-        let nearest_cursor = self.nearest_cursor_for_line(x, line_start, line_end, layout);
-
-        for item in layout
-            .items
-            .iter()
-            .filter(|item| (line_start..line_end).contains(&item.index))
-        {
-            // Match xilem's `kurbo::Rect::contains` sort hit-test:
-            // min edges inclusive, max edges exclusive.
-            let within_x = x >= item.x && x < item.x + item.advance_width;
-            let within_y = y >= item.y + descender && y < item.y + ascender;
-            if within_x && within_y {
-                return TextHit {
-                    cursor: item.index + 1,
-                    active_sort: Some(item.index),
-                };
-            }
+        if let Some(item) = self.hit_sort_item_at(x, y, line_height, ascender, descender, layout) {
+            return TextHit {
+                cursor: item.index + 1,
+                active_sort: Some(item.index),
+            };
         }
-
+        let target_line = self.line_number_for_y(y, line_height.max(1.0), ascender, descender);
+        let (line_start, line_end) = self.line_range_for_number(target_line);
         TextHit {
-            cursor: nearest_cursor,
+            cursor: self.nearest_cursor_for_line(x, line_start, line_end, layout),
             active_sort: None,
         }
-    }
-
-    pub(super) fn line_number_for_index(&self, index: usize) -> usize {
-        self.sorts[..index.min(self.sorts.len())]
-            .iter()
-            .filter(|sort| matches!(sort.kind, TextSortKind::LineBreak))
-            .count()
     }
 
     pub(super) fn next_line_end(&self, start: usize) -> usize {
@@ -334,18 +331,12 @@ impl TextBuffer {
             .unwrap_or(self.sorts.len())
     }
 
+    /// The sort range of one line, or of the last line when `line_number` is past the end.
     pub(super) fn line_range_for_number(&self, line_number: usize) -> (usize, usize) {
-        let mut start = 0;
-        let mut current_line = 0;
-        while start <= self.sorts.len() {
-            let end = self.next_line_end(start);
-            if current_line == line_number || end >= self.sorts.len() {
-                return (start, end);
-            }
-            start = end + 1;
-            current_line += 1;
-        }
-        (self.sorts.len(), self.sorts.len())
+        self.line_ranges()
+            .take(line_number.saturating_add(1))
+            .last()
+            .unwrap_or((self.sorts.len(), self.sorts.len()))
     }
 
     pub(super) fn line_number_for_y(
@@ -355,11 +346,9 @@ impl TextBuffer {
         ascender: f64,
         descender: f64,
     ) -> usize {
-        let mut start = 0;
-        let mut line_number = 0;
         let mut nearest_line = 0;
         let mut nearest_distance = f64::INFINITY;
-        while start <= self.sorts.len() {
+        for line_number in 0..self.line_count() {
             let baseline = -line_height * line_number as f64;
             let top = baseline + ascender;
             let bottom = baseline + descender;
@@ -371,13 +360,6 @@ impl TextBuffer {
                 nearest_distance = distance;
                 nearest_line = line_number;
             }
-
-            let end = self.next_line_end(start);
-            if end >= self.sorts.len() {
-                break;
-            }
-            start = end + 1;
-            line_number += 1;
         }
         nearest_line
     }
@@ -403,6 +385,7 @@ impl TextBuffer {
             .iter()
             .filter(|item| (line_start..line_end).contains(&item.index))
         {
+            // Min edges inclusive, max edges exclusive, as `kurbo::Rect::contains` tests them.
             let within_x = x >= item.x && x < item.x + item.advance_width;
             let within_y = y >= item.y + descender && y < item.y + ascender;
             if within_x && within_y {
@@ -472,18 +455,20 @@ impl TextBuffer {
     /// summed the whole buffer instead, which is too wide once lines
     /// stack.
     pub(super) fn rtl_line_start_x(&self) -> f64 {
-        let mut widest: f64 = 0.0;
-        let mut line_start = 0;
-        while line_start <= self.sorts.len() {
-            let line_end = self.next_line_end(line_start);
-            let width: f64 = (line_start..line_end).map(|i| self.sort_advance(i)).sum();
-            widest = widest.max(width);
-            if line_end >= self.sorts.len() {
-                break;
-            }
-            line_start = line_end + 1;
-        }
-        widest
+        self.line_ranges()
+            .map(|(start, end)| {
+                (start..end)
+                    .filter(|&i| !self.sorts[i].absorbed)
+                    .map(|i| {
+                        // Anchor RTL lines using nominal widths. Shaped advances include
+                        // kerning, which would move the right edge after a font rebuild.
+                        self.sort_glyph_name(i)
+                            .and_then(|name| self.glyph_inventory.widths.get(name).copied())
+                            .unwrap_or_else(|| self.sort_advance(i))
+                    })
+                    .sum::<f64>()
+            })
+            .fold(0.0, f64::max)
     }
 
     pub(super) fn sort_advance(&self, index: usize) -> f64 {

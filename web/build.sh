@@ -2,6 +2,8 @@
 # Build the real Xilem widget tree for the browser; desktop dependencies stay untouched.
 set -eu
 cd "$(dirname "$0")/.."
+# Validate tracked pins; only the ignored web/target adapter is generated.
+# Pin updates are explicit: python3 web/prepare.py --update-pins
 python3 web/prepare.py
 # Vello CPU selects its SIMD pipeline at compile time on WebAssembly.
 CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="-C target-feature=+simd128" cargo build --manifest-path web/Cargo.toml --locked --target wasm32-unknown-unknown --release

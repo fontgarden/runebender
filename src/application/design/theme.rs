@@ -157,7 +157,6 @@ pub(crate) struct Palette {
     pub field_outline: Color,
     roles: HashMap<String, Color>,
     marks: HashMap<String, Color>,
-    mark_tiles: HashMap<String, Color>,
     mark_order: Vec<String>,
     /// Whether glyph marks color the tile face rather than its outline and ink.
     pub marks_filled: bool,
@@ -264,11 +263,6 @@ impl Palette {
                 .collect(),
             marks: t
                 .marks
-                .iter()
-                .map(|(k, v)| (k.clone(), color(*v)))
-                .collect(),
-            mark_tiles: t
-                .mark_tiles
                 .iter()
                 .map(|(k, v)| (k.clone(), color(*v)))
                 .collect(),
@@ -579,6 +573,36 @@ impl Palette {
     }
 
     /// Proof type can have its own ink without recoloring outlines in the editing canvas.
+    /// Outlines of other layers and masters drawn behind the layer being edited:
+    /// `layerOutline`, else the reference color.
+    pub(crate) fn layer_outline(&self) -> Color {
+        self.roles
+            .get("layerOutline")
+            .copied()
+            .unwrap_or_else(|| self.role("reference"))
+    }
+
+    /// Colors of the code editor in script nodes: the theme's `code*` roles.
+    /// A theme without them gets its own text and mark colors on its field surface.
+    pub(crate) fn code(&self) -> CodeColors {
+        let role = |name: &str, fallback: Color| self.roles.get(name).copied().unwrap_or(fallback);
+        let mark = |label: &str| self.mark(label).unwrap_or(self.text);
+        CodeColors {
+            background: role("codeBackground", self.field),
+            text: role("codeText", self.text),
+            keyword: role("codeKeyword", mark("red")),
+            function: role("codeFunction", mark("orange")),
+            type_name: role("codeType", mark("blue")),
+            string: role("codeString", mark("green")),
+            number: role("codeNumber", mark("orange")),
+            comment: role("codeComment", self.text_muted),
+            constant: role("codeConstant", mark("purple")),
+            operator: role("codeOperator", self.text),
+            line_number: role("codeLineNumber", self.text_muted),
+            selection: role("codeSelection", self.selected_bg()),
+        }
+    }
+
     /// Correction strokes drawn over a proof: `proofPencil`, else the theme's red mark.
     pub(crate) fn proof_pencil_ink(&self) -> Color {
         self.roles
@@ -643,6 +667,34 @@ impl Palette {
         color.with_alpha(color.components[3] * Self::EDIT_FILL_ALPHA)
     }
 
+    /// A thickness rung, on the warm half of the mark ramp: yellow where the
+    /// stroke is thin, orange at the glyph's median thickness, red where it is
+    /// thick. Opaque, unlike the comb teeth: the rungs sit on the dark ink
+    /// fill, where a see-through warm color only reads as brown.
+    pub(crate) fn thickness_fill(&self, t: f64) -> Color {
+        self.thickness_gradient(t)
+    }
+
+    /// Color the measured ink for both the canvas and headless proofs.
+    pub(crate) fn thickness_rgba(
+        &self,
+        field: &runebender::analysis::thickness::ThicknessField,
+    ) -> Vec<u8> {
+        let mut rgba = vec![0_u8; field.width * field.height * 4];
+        for (k, pixel) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let coverage = field.coverage[k];
+            if coverage <= 0.0 {
+                continue;
+            }
+            let color = self
+                .thickness_fill(field.ramp(f64::from(field.thickness[k])))
+                .multiply_alpha(coverage)
+                .to_rgba8();
+            pixel.copy_from_slice(&[color.r, color.g, color.b, color.a]);
+        }
+        rgba
+    }
+
     /// The keyline between curvature comb teeth, as see-through as the teeth.
     pub(crate) fn comb_keyline(&self) -> Color {
         let color = self.point_outline.unwrap_or(self.text);
@@ -691,19 +743,29 @@ impl Palette {
         }
     }
 
+    /// The warm end of the mark ramp for normalized stroke thickness.
+    pub(crate) fn thickness_gradient(&self, t: f64) -> Color {
+        self.mark_ramp(&["yellow", "orange", "red"], t)
+    }
+
     /// GPUI's shared mark-color ramp for normalized curvature magnitude.
     pub(crate) fn comb_gradient(&self, t: f64) -> Color {
-        let stops = ["green", "blue", "purple", "pink", "orange"];
-        let u = t.clamp(0.0, 1.0) * 4.0;
-        let (i, f) = if u < 1.0 {
-            (0, u)
-        } else if u < 2.0 {
-            (1, u - 1.0)
-        } else if u < 3.0 {
-            (2, u - 2.0)
-        } else {
-            (3, u - 3.0)
-        };
+        self.mark_ramp(&["green", "blue", "purple", "pink", "orange"], t)
+    }
+
+    /// A color at `t` in 0..=1 along a piecewise-linear ramp through named
+    /// marks, so every analysis overlay draws from the same palette.
+    fn mark_ramp(&self, stops: &[&str], t: f64) -> Color {
+        debug_assert!(stops.len() >= 2, "a mark ramp needs two stops");
+        let spans = (stops.len() - 1) as f64;
+        let u = t.clamp(0.0, 1.0) * spans;
+        // Walk the spans instead of casting: `u` is at most `spans`, so the
+        // last span catches `t == 1`.
+        let mut i = 0;
+        while i + 1 < stops.len() - 1 && u >= (i + 1) as f64 {
+            i += 1;
+        }
+        let f = u - i as f64;
         let a = self.mark(stops[i]).unwrap_or(self.text).components;
         let b = self.mark(stops[i + 1]).unwrap_or(self.text).components;
         let f = crate::application::view::render::px32(f);
@@ -718,11 +780,23 @@ impl Palette {
     pub(crate) fn mark(&self, label: &str) -> Option<Color> {
         self.marks.get(label).copied()
     }
+}
 
-    /// A mark as a glyph tile or metrics card face, at the theme's `markTileStep`.
-    pub(crate) fn mark_tile(&self, label: &str) -> Option<Color> {
-        self.mark_tiles.get(label).copied()
-    }
+/// The code editor's colors, by what they paint.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct CodeColors {
+    pub background: Color,
+    pub text: Color,
+    pub keyword: Color,
+    pub function: Color,
+    pub type_name: Color,
+    pub string: Color,
+    pub number: Color,
+    pub comment: Color,
+    pub constant: Color,
+    pub operator: Color,
+    pub line_number: Color,
+    pub selection: Color,
 }
 
 #[cfg(test)]

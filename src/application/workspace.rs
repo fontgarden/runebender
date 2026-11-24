@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! The editor's state: the `Workspace` struct and the types it is made of.
 
@@ -11,7 +11,6 @@ use crate::application::platform::{dialogs, export, script_jobs};
 use crate::application::view::canvas;
 use crate::application::view::canvas::grid::Cell;
 use crate::application::view::panels::tabs::Rail;
-use crate::application::widgets::shortcuts;
 use runebender::GlyphCategory;
 use std::sync::Arc;
 
@@ -32,6 +31,42 @@ pub(crate) enum Sel {
     /// A row under a language group: the group and its filter index.
     LanguageFilter(usize, usize),
     Filter(usize),
+}
+
+/// One interpolated preview outline and the inputs that made it.
+pub(crate) struct InterpPreview {
+    pub(crate) glyph: String,
+    pub(crate) axis_values: Vec<u64>,
+    pub(crate) revision: u64,
+    pub(crate) outline: Option<Arc<kurbo::BezPath>>,
+}
+
+/// Every input of `Workspace::filtered_cells`.
+#[derive(Clone)]
+pub(crate) struct FilteredKey {
+    /// The unfiltered cells; held so that the pointer cannot be reused by a later list.
+    pub(crate) cells: Arc<Vec<Cell>>,
+    pub(crate) revision: u64,
+    pub(crate) filter: String,
+    pub(crate) sel: Sel,
+    pub(crate) sort: Sort,
+    pub(crate) regex: bool,
+    pub(crate) mode: u8,
+    pub(crate) case: bool,
+}
+
+impl FilteredKey {
+    /// Equal inputs, with the cell list compared by identity and not by content.
+    pub(crate) fn cells_are(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.cells, &other.cells)
+            && self.revision == other.revision
+            && self.filter == other.filter
+            && self.sel == other.sel
+            && self.sort == other.sort
+            && self.regex == other.regex
+            && self.mode == other.mode
+            && self.case == other.case
+    }
 }
 
 /// One bounded, session-only UI command receipt for live diagnostics.
@@ -81,27 +116,51 @@ pub(crate) enum Tool {
 pub(crate) struct OverviewEditBatch {
     pub(crate) source: runebender::font::variable::SourceId,
     pub(crate) glyphs: Vec<String>,
+    /// Commit order shared with metadata actions, independent of glyph or source selection.
+    pub(crate) revision: u64,
 }
 
-/// A cross-master metadata edit and the active glyph-history depth immediately
-/// before it. The depth keeps metadata Undo ordered with outline edits.
+/// Where an ordinary Undo may reach a canonical multi-layer history group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DocumentGroupScope {
+    /// Agent edits follow the glyph and source which they changed.
+    Contextual,
+    /// Whole-font commands remain reachable from any active glyph or source.
+    Document,
+}
+
+/// Metadata and grouped commands ordered by original commit revision alongside overview actions.
+/// Per-glyph depths also keep metadata ordered with the editor's layer history.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum MetadataEdit {
+    /// A layer of `glyph` was added or deleted in the Layers panel. The project's source
+    /// history holds the exact structure; `undo_depth` is the edited layer's history depth
+    /// when it happened, so Undo reaches this entry in order.
+    LayerStructure {
+        revision: u64,
+        glyph: String,
+        label: String,
+        undo_depth: usize,
+    },
     Interpolation {
+        revision: u64,
         glyph: String,
         undo_depth: usize,
     },
-    AgentGroup {
+    DocumentGroup {
+        revision: u64,
         group: runebender::font::project::EditHistoryGroupId,
         addresses: Vec<runebender::font::variable::GlyphLayerAddress>,
-        overview_undo_depth: usize,
+        scope: DocumentGroupScope,
     },
     Rename {
+        revision: u64,
         before: String,
         after: String,
         undo_depth: usize,
     },
     Unicode {
+        revision: u64,
         source_ids: Vec<runebender::font::variable::SourceId>,
         glyph: String,
         before: Vec<Vec<char>>,
@@ -109,11 +168,13 @@ pub(crate) enum MetadataEdit {
         undo_depth: usize,
     },
     SourceMetadata {
+        revision: u64,
         glyph: String,
         label: String,
         undo_depth: usize,
     },
     DocumentLayer {
+        revision: u64,
         glyph: String,
         address: runebender::font::variable::GlyphLayerAddress,
         label: String,
@@ -124,13 +185,21 @@ pub(crate) enum MetadataEdit {
             Option<runebender::font::ComponentId>,
         ),
     },
-    SourceStructure {
-        glyph: String,
-        label: String,
-        before: Box<runebender::font::variable::DocumentSnapshot>,
-        after: Box<runebender::font::variable::DocumentSnapshot>,
-        undo_depth: usize,
-    },
+}
+
+impl MetadataEdit {
+    /// Original commit order; replay retains it when moving between history piles.
+    pub(crate) fn revision(&self) -> u64 {
+        match self {
+            Self::Interpolation { revision, .. }
+            | Self::LayerStructure { revision, .. }
+            | Self::DocumentGroup { revision, .. }
+            | Self::Rename { revision, .. }
+            | Self::Unicode { revision, .. }
+            | Self::SourceMetadata { revision, .. }
+            | Self::DocumentLayer { revision, .. } => *revision,
+        }
+    }
 }
 
 pub(crate) struct Workspace {
@@ -155,6 +224,12 @@ pub(crate) struct Workspace {
     pub(crate) font: FontModel,
     pub(crate) palette: Arc<Palette>,
     pub(crate) cells: Arc<Vec<Cell>>,
+    /// The last interpolated preview outline with its inputs: glyph, axis values, revision.
+    /// The canvas compares the outline by pointer, so the same inputs must give the same `Arc`.
+    pub(crate) interp_preview_cache: std::cell::RefCell<Option<InterpPreview>>,
+    /// The last result of `filtered_cells` with the inputs that made it.
+    /// The grid compares its cells by pointer, so the same inputs must give the same `Arc`.
+    pub(crate) filtered: std::cell::RefCell<Option<(FilteredKey, Arc<Vec<Cell>>)>>,
     pub(crate) mode: Mode,
     pub(crate) selected: Option<usize>,
     pub(crate) multi_selected: Arc<std::collections::HashSet<usize>>,
@@ -163,7 +238,7 @@ pub(crate) struct Workspace {
     /// one user action so a multi-selection mark change undoes once.
     pub(crate) overview_undo: Vec<OverviewEditBatch>,
     pub(crate) overview_redo: Vec<OverviewEditBatch>,
-    /// Cross-master metadata changes, ordered with the active glyph's engine history.
+    /// Metadata and grouped commands, ordered with overview and per-glyph engine history.
     pub(crate) metadata_undo: Vec<MetadataEdit>,
     pub(crate) metadata_redo: Vec<MetadataEdit>,
     pub(crate) filter: String,
@@ -182,7 +257,6 @@ pub(crate) struct Workspace {
     /// Optional shaping script and language selected in the preview controls.
     pub(crate) text_script: Option<String>,
     pub(crate) text_language: Option<String>,
-    pub(crate) source_name_buf: String,
     pub(crate) layer_name_buf: String,
     /// Whether the left column is folded away.
     pub(crate) left_collapsed: bool,
@@ -209,7 +283,6 @@ pub(crate) struct Workspace {
     /// name, so a rename or a master switch does not lose it.
     pub(crate) tabs: Vec<Tab>,
     pub(crate) active_tab: usize,
-    pub(crate) selected_points: usize,
     pub(crate) interpolation: crate::application::editor::tools::interpolation::InterpolationState,
     pub(crate) tool: Tool,
     /// The persistent tool restored when a temporary Space-held pan ends.
@@ -306,6 +379,8 @@ pub(crate) struct Workspace {
     pub(crate) extrude_buf: String,
     pub(crate) roughen_buf: String,
     pub(crate) roughen_seed: u64,
+    /// Temporary visual boundary and snapped displacement during a text-tool kern drag.
+    pub(crate) proof_drag_gap: Option<(usize, f64)>,
     /// Text rendered in the proof strip; empty shows the current glyph.
     pub(crate) preview_text: String,
     /// Gaussian blur radius for the proof strip in logical pixels.
@@ -319,6 +394,15 @@ pub(crate) struct Workspace {
     pub(crate) proof_view: bool,
     /// Pinned drawing and explicit comparison preferences for the proof view.
     pub(crate) review: crate::application::editor::tools::review::ReviewState,
+    /// The proof samples of the project of the font: the defaults and its sample file.
+    pub(crate) proof_samples: crate::application::platform::proof_samples::ProofSamples,
+    /// The key of the sample of the Proof section; `None` is the first sample of the glyph.
+    pub(crate) panel_sample: Option<String>,
+    /// The em size of the Proof section's sample, in pixels.
+    pub(crate) panel_proof_size: f64,
+    /// The document whose proof files a background task watches, and whether the proof view,
+    /// which also reads reference fonts, is open. Updated on each interface rebuild.
+    pub(crate) proof_watch: Arc<std::sync::Mutex<(std::path::PathBuf, bool)>>,
     /// What the proof strip shows for a neural source: the outline, or the labeled pieces.
     pub(crate) preview_view: crate::application::pieces::PreviewView,
     /// The labeled pieces of every sample, for the piece view.
@@ -332,6 +416,10 @@ pub(crate) struct Workspace {
     /// Masters drawn as ghost outlines under the active one. The Layers
     /// section toggles these, one per thumbnail click.
     pub(crate) reference_layers: std::collections::HashSet<usize>,
+    /// Glyph layers drawn as outlines behind the layer being edited: the eyes of the
+    /// Layers panel.
+    pub(crate) visible_layers:
+        std::collections::BTreeSet<runebender::font::variable::GlyphLayerAddress>,
     /// Whether every non-active master is shown as a reference outline.
     pub(crate) show_all_masters: bool,
     /// Current built-in proof string selected from the View menu.
@@ -378,6 +466,11 @@ pub(crate) struct Workspace {
 }
 
 impl Workspace {
+    /// How many points the open glyph has selected.
+    pub(crate) fn selected_points(&self) -> usize {
+        self.session.selection.len()
+    }
+
     /// Retain a small receipt after a shared UI action, without interpreting success from a click.
     pub(crate) fn record_ui_action(
         &mut self,
@@ -447,7 +540,7 @@ impl AppState {
                 notice: None,
                 running: true,
             };
-            app.dispatch(shortcuts::AppAction::NewFont);
+            app.dispatch(crate::application::app_action::AppAction::NewFont);
             return app;
         };
         let mut app = Self {
@@ -541,7 +634,7 @@ impl AppState {
     /// Dispatch an application command, routing document commands to the live
     /// workspace while keeping application-level theme state available on the
     /// welcome screen.
-    pub(crate) fn dispatch(&mut self, action: shortcuts::AppAction) {
+    pub(crate) fn dispatch(&mut self, action: crate::application::app_action::AppAction) {
         #[cfg(target_arch = "wasm32")]
         {
             let modified = self
@@ -555,24 +648,26 @@ impl AppState {
                 return;
             }
         }
-        if action == shortcuts::AppAction::Quit {
+        if action == crate::application::app_action::AppAction::Quit {
             self.request_quit();
             return;
         }
-        if action == shortcuts::AppAction::ToggleTranslucency {
+        if action == crate::application::app_action::AppAction::ToggleTranslucency {
             // The native window follows the palette on the next view rebuild; the theme's
             // own setting applies again after a restart.
             crate::application::design::theme::set_translucency_override(Some(
                 !self.palette.blur_background,
             ));
-            self.dispatch(shortcuts::AppAction::Theme(self.theme_id));
+            self.dispatch(crate::application::app_action::AppAction::Theme(
+                self.theme_id,
+            ));
             return;
         }
-        if let shortcuts::AppAction::Theme(id) = action {
+        if let crate::application::app_action::AppAction::Theme(id) = action {
             self.theme_id = id;
             self.palette = Arc::new(Palette::load(id));
         }
-        if action == shortcuts::AppAction::OpenFont {
+        if action == crate::application::app_action::AppAction::OpenFont {
             let directory = self
                 .workspace
                 .as_ref()
@@ -588,7 +683,8 @@ impl AppState {
             }
             return;
         }
-        if action == shortcuts::AppAction::NewFont && self.workspace.is_none() {
+        if action == crate::application::app_action::AppAction::NewFont && self.workspace.is_none()
+        {
             match Workspace::untitled() {
                 Ok(mut workspace) => {
                     if workspace.theme_id != self.theme_id {
@@ -603,7 +699,7 @@ impl AppState {
             }
             return;
         }
-        if action == shortcuts::AppAction::NewFont
+        if action == crate::application::app_action::AppAction::NewFont
             && !self.confirm_replacement("creating a new font")
         {
             return;
@@ -774,8 +870,8 @@ mod tests {
     #[test]
     fn welcome_new_font_opens_the_canonical_project() {
         let mut app = AppState::open(None);
-        app.dispatch(shortcuts::AppAction::Theme("dark"));
-        app.dispatch(shortcuts::AppAction::NewFont);
+        app.dispatch(crate::application::app_action::AppAction::Theme("dark"));
+        app.dispatch(crate::application::app_action::AppAction::NewFont);
         let workspace = app.workspace.as_ref().expect("the new project opens");
         assert_eq!(workspace.theme_id, "dark");
         let source = workspace.font.project.source_id(0).unwrap();
@@ -815,7 +911,7 @@ mod tests {
             .save(&path)
             .expect("the empty UFO fixture saves");
         let mut app = AppState::open(None);
-        app.dispatch(shortcuts::AppAction::Theme("dark"));
+        app.dispatch(crate::application::app_action::AppAction::Theme("dark"));
 
         assert!(app.open_path(&path));
         assert_eq!(app.theme_id, "dark");

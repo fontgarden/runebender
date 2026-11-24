@@ -122,7 +122,7 @@ impl Workspace {
     /// Open review with an initial Before, or return to editing without losing that snapshot.
     pub(crate) fn toggle_proof_view(&mut self) {
         self.proof_view = !self.proof_view;
-        self.refresh_review_references();
+        self.refresh_proof_files();
         if self.proof_view
             && self
                 .review
@@ -274,6 +274,74 @@ impl Workspace {
             // pinned Before or dismiss the proposal the designer was inspecting.
             self.ai.preview_task = Some(task);
         }
+    }
+}
+
+/// The mark of a draft that the designer has not graded.
+const DRAFT_MARK: &str = "purple";
+
+impl Workspace {
+    /// The glyphs of the active master with the draft mark, in glyph order.
+    fn draft_indices(&self) -> Vec<usize> {
+        self.font
+            .glyphs
+            .iter()
+            .enumerate()
+            .filter(|(_, glyph)| glyph.mark.as_deref() == Some(DRAFT_MARK))
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// How many drafts wait in the active master, for the status line.
+    fn draft_note(&self) -> String {
+        let master = self.font.master_name(self.font.active());
+        match self.draft_indices().len() {
+            0 => format!("No drafts left in {master}"),
+            1 => format!("1 draft left in {master}"),
+            count => format!("{count} drafts left in {master}"),
+        }
+    }
+
+    /// Open the next or the previous draft of the review queue, from the open glyph.
+    /// The queue wraps around. The open glyph stays when no other draft exists.
+    pub(crate) fn step_draft(&mut self, forward: bool) {
+        let drafts = self.draft_indices();
+        let current = self.font.index_of(&self.session.glyph_name);
+        let next = match (current, forward) {
+            (Some(current), true) => drafts
+                .iter()
+                .find(|index| **index > current)
+                .or_else(|| drafts.first()),
+            (Some(current), false) => drafts
+                .iter()
+                .rev()
+                .find(|index| **index < current)
+                .or_else(|| drafts.last()),
+            (None, _) => drafts.first(),
+        }
+        .copied()
+        .filter(|index| Some(*index) != current);
+        if let Some(index) = next {
+            let proof = self.proof_view;
+            self.open_glyph(index);
+            if proof && !self.proof_view {
+                self.toggle_proof_view();
+            } else if proof {
+                // The comparison belongs to the glyph that is now open.
+                self.review.baseline = self.capture_review_before();
+            }
+        }
+        self.note = self.draft_note();
+    }
+
+    /// Give the open glyph a grade in the active master, then open the next draft.
+    pub(crate) fn grade_draft(&mut self, label: &str) {
+        let current = self.font.index_of(&self.session.glyph_name);
+        self.set_mark(Some(label.into()));
+        if let Some(index) = current {
+            self.refresh_glyph_entry(index);
+        }
+        self.step_draft(true);
     }
 }
 
@@ -444,5 +512,51 @@ mod tests {
         );
         assert_eq!(app.review_comparison().before.unwrap().advance, original_a);
         assert_eq!(app.ai.proposals[0].glyphs, vec!["B"]);
+    }
+
+    /// Mark the named glyphs as drafts in the active master.
+    fn drafts(app: &mut Workspace, names: &[&str]) {
+        for name in names {
+            let index = app.font.index_of(name).unwrap();
+            app.open_glyph(index);
+            app.set_mark(Some(DRAFT_MARK.into()));
+            app.refresh_glyph_entry(index);
+        }
+    }
+
+    #[test]
+    fn a_grade_marks_the_open_draft_and_opens_the_next_one() {
+        let mut app = workspace();
+        drafts(&mut app, &["A", "C", "E"]);
+        app.open_glyph(app.font.index_of("A").unwrap());
+        app.toggle_proof_view();
+        app.grade_draft("yellow");
+        let graded = app.font.index_of("A").unwrap();
+        assert_eq!(app.font.glyphs[graded].mark.as_deref(), Some("yellow"));
+        assert_eq!(app.session.glyph_name, "C");
+        assert!(app.proof_view, "the proof page stays open");
+        assert_eq!(app.review_comparison().glyph, "C");
+        assert!(app.note.starts_with("2 drafts left"), "{}", app.note);
+    }
+
+    #[test]
+    fn the_queue_steps_both_ways_and_ends() {
+        let mut app = workspace();
+        drafts(&mut app, &["A", "C"]);
+        app.open_glyph(app.font.index_of("A").unwrap());
+        app.step_draft(true);
+        assert_eq!(app.session.glyph_name, "C");
+        app.step_draft(true);
+        assert_eq!(app.session.glyph_name, "A", "the queue wraps");
+        app.step_draft(false);
+        assert_eq!(app.session.glyph_name, "C");
+        app.grade_draft("green");
+        assert_eq!(app.session.glyph_name, "A");
+        app.grade_draft("red");
+        assert_eq!(
+            app.session.glyph_name, "A",
+            "the last graded glyph stays open"
+        );
+        assert!(app.note.starts_with("No drafts left"), "{}", app.note);
     }
 }

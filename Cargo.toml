@@ -15,9 +15,35 @@ name = "runebender"
 path = "src/main.rs"
 required-features = ["application"]
 
+[[example]]
+name = "macos_vibrancy"
+required-features = ["application"]
+
+[[test]]
+name = "cli"
+required-features = ["application"]
+
+[[test]]
+name = "live_agent"
+required-features = ["application"]
+
+[[test]]
+name = "live_fixture"
+required-features = ["application"]
+
+[[bench]]
+name = "font_engine"
+harness = false
+
+[[bench]]
+name = "large_font"
+harness = false
+
 [features]
 default = ["application"]
 macos-updater = ["application", "dep:sparkle-updater"]
+# Optional real-font integration tests; ordinary tests use repository-owned fixtures.
+integration-fonts = []
 application = [
     "dep:base64",
     "dep:neuraltype-core",
@@ -80,6 +106,9 @@ unicode-bidi = { version = "0.3.18", default-features = false, features = ["hard
 fea-rs = "=1.0.0"
 harfrust = "0.5"
 write-fonts = "0.52"
+# TODO: open a pull request on linebender/spline that updates it to the current kurbo.
+# kurbo 0.9.5 is here only because spline, which the hyperbezier code uses, depends on it.
+# Remove this line and the conversions in src/outline/path/hyper.rs when that lands.
 kurbo_09 = { package = "kurbo", version = "0.9.5" }
 spline = { git = "https://github.com/linebender/spline", rev = "83f46cbfebb1f5d6042059c867719c0010073d42" }
 copypasta = { version = "0.10.2", optional = true }
@@ -88,7 +117,7 @@ cpal = { version = "0.18.2", optional = true }
 winit = { version = "0.30", optional = true }
 notify = { version = "8", optional = true }
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"], optional = true }
-tokio = { version = "1", features = ["rt", "time"], optional = true }
+tokio = { version = "1", features = ["rt", "sync", "time"], optional = true }
 imaging_vello_cpu = { version = "0.0.1", optional = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
@@ -103,16 +132,86 @@ objc2-app-kit = { version = "0.3.2", optional = true, default-features = false, 
 masonry_testing = { git = "https://github.com/eliheuer/xilem", rev = "0b0b5e754ed7e024b92e246bc65d4ad8accbf0bf" }
 syn = { version = "2.0.119", features = ["full", "visit"] }
 
-[profile.release]
-lto = "thin"
-codegen-units = 1
+[patch.crates-io]
+# Metal/wgpu still require block 0.1.6. This reviewed fork replaces its uninhabited
+# extern-static type with an inhabited repr(C) marker (rust-lang/rust#74840).
+# Remove when the renderer drops block or a compatible upstream release fixes it.
+block = { git = "https://github.com/vaimeai/rust-block", rev = "b88ec0fad1ed2a675bef651e8e23d49b649ba0be" }
 
-# Optimized local builds without release's whole-program optimization cost.
-[profile.fast]
+[profile.release]
+lto = "fat"
+codegen-units = 1
+# Symbol names are about 9 MB of the binary and are not used when the editor runs.
+strip = true
+# Compile for size; the crates below stay at full speed.
+# Measured on the edit canvas: dragging a point is unchanged, drawing a frame is 2% slower,
+# and the binary is about 4.5 MB smaller.
+opt-level = "s"
+
+# Rasterizing, text shaping, font reading, curve math, image decoding and the widget core
+# run every frame or on large inputs, so they keep full optimization.
+[profile.release.package.kurbo]
+opt-level = 3
+[profile.release.package.vello_cpu]
+opt-level = 3
+[profile.release.package.vello_common]
+opt-level = 3
+[profile.release.package.vello]
+opt-level = 3
+[profile.release.package.vello_encoding]
+opt-level = 3
+[profile.release.package.peniko]
+opt-level = 3
+[profile.release.package.color]
+opt-level = 3
+[profile.release.package.parley]
+opt-level = 3
+[profile.release.package.harfrust]
+opt-level = 3
+[profile.release.package.skrifa]
+opt-level = 3
+[profile.release.package.read-fonts]
+opt-level = 3
+[profile.release.package.fontique]
+opt-level = 3
+[profile.release.package.linesweeper]
+opt-level = 3
+[profile.release.package.img2bez]
+opt-level = 3
+[profile.release.package.image]
+opt-level = 3
+[profile.release.package.png]
+opt-level = 3
+[profile.release.package.zune-jpeg]
+opt-level = 3
+[profile.release.package.fearless_simd]
+opt-level = 3
+[profile.release.package.imaging]
+opt-level = 3
+[profile.release.package.imaging_vello]
+opt-level = 3
+[profile.release.package.imaging_vello_cpu]
+opt-level = 3
+[profile.release.package.masonry_core]
+opt-level = 3
+[profile.release.package.masonry]
+opt-level = 3
+
+# Development builds: dependencies are optimized once and cached, and the workspace's own
+# crates use a light optimization level so the editor is responsive and rebuilds stay short.
+# Local profile for `make run-release`: every crate at full speed.
+# It inherits fat LTO and one codegen unit from the release profile, and builds into
+# `target/performance`, so it does not replace the artifacts of a normal release build.
+# Distributed binaries use the release profile.
+[profile.performance]
 inherits = "release"
-lto = "off"
-codegen-units = 16
-incremental = true
+opt-level = 3
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
 
 [workspace]
 members = ["crates/nufo"]
@@ -120,6 +219,8 @@ members = ["crates/nufo"]
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
+# LINEBENDER LINT SET - Cargo.toml - v8
+# See https://linebender.org/wiki/canonical-lints/
 keyword_idents_2024 = "forbid"
 non_ascii_idents = "forbid"
 non_local_definitions = "forbid"
@@ -164,3 +265,4 @@ cargo_common_metadata = "warn"
 negative_feature_names = "warn"
 redundant_feature_names = "warn"
 wildcard_dependencies = "warn"
+# END LINEBENDER LINT SET

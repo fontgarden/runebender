@@ -364,13 +364,6 @@ impl ScriptExample {
             ScriptLanguage::Drawbot => self.drawbot,
         }
     }
-
-    /// The example whose code, in either language, is exactly `code`.
-    pub fn matching(code: &str) -> Option<Self> {
-        EXAMPLES
-            .into_iter()
-            .find(|example| example.designbot == code || example.drawbot == code)
-    }
 }
 
 /// The examples the add menu offers; the first is a new node's starter.

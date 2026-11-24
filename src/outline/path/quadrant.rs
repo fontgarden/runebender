@@ -36,21 +36,6 @@ pub enum Quadrant {
 }
 
 impl Quadrant {
-    /// Point within a screen-space rect (y increases downward).
-    pub fn point_in_rect(&self, rect: Rect) -> Point {
-        match self {
-            Self::TopLeft => Point::new(rect.min_x(), rect.min_y()),
-            Self::Top => Point::new(rect.center().x, rect.min_y()),
-            Self::TopRight => Point::new(rect.max_x(), rect.min_y()),
-            Self::Left => Point::new(rect.min_x(), rect.center().y),
-            Self::Center => rect.center(),
-            Self::Right => Point::new(rect.max_x(), rect.center().y),
-            Self::BottomLeft => Point::new(rect.min_x(), rect.max_y()),
-            Self::Bottom => Point::new(rect.center().x, rect.max_y()),
-            Self::BottomRight => Point::new(rect.max_x(), rect.max_y()),
-        }
-    }
-
     /// Point within a design-space rect (y increases upward).
     pub fn point_in_dspace_rect(&self, rect: Rect) -> Point {
         match self {

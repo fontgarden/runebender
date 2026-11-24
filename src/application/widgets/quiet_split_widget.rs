@@ -31,7 +31,6 @@ where
     min_lengths: (Length, Length),
     bar_thickness: Length,
     min_bar_area: Length,
-    solid: bool,
     draggable: bool,
     click_offset: f64,
     child1: WidgetPod<ChildA>,
@@ -48,7 +47,6 @@ impl<ChildA: Widget + ?Sized, ChildB: Widget + ?Sized> Split<ChildA, ChildB> {
             min_lengths: (Length::ZERO, Length::ZERO),
             bar_thickness: 6.px(),
             min_bar_area: 6.px(),
-            solid: false,
             draggable: true,
             click_offset: 0.0,
             child1: child1.to_pod(),
@@ -86,11 +84,6 @@ impl<ChildA: Widget + ?Sized, ChildB: Widget + ?Sized> Split<ChildA, ChildB> {
 
     pub(crate) fn draggable(mut self, draggable: bool) -> Self {
         self.draggable = draggable;
-        self
-    }
-
-    pub(crate) fn solid_bar(mut self, solid: bool) -> Self {
-        self.solid = solid;
         self
     }
 }
@@ -237,12 +230,6 @@ where
         this.widget.draggable = draggable;
         // Bar mutability impacts appearance, but not accessibility node
         // TODO - This might change in a future implementation
-        this.ctx.request_paint_only();
-    }
-
-    pub(crate) fn set_bar_solid(this: &mut WidgetMut<'_, Self>, solid: bool) {
-        this.widget.solid = solid;
-        // Bar solidity impacts appearance, but not accessibility node
         this.ctx.request_paint_only();
     }
 }

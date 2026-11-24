@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! The left edge: the tab strip, the editor's rail, and the sidebar of
 //! categories, languages, and filters.
@@ -13,9 +13,7 @@ use crate::application::design::{
     ControlKind, ControlSize, ControlStyle, Ground, Region, Space, Stroke, TextSize,
     column as xcolumn, row as xrow,
 };
-use crate::application::design::{
-    RAIL_TAB_ACTIVE_HEIGHT, RAIL_TAB_HEIGHT, RAIL_TAB_INACTIVE_HEIGHT,
-};
+use crate::application::design::{RAIL_TAB_BUTTON_HEIGHT, RAIL_TAB_HEIGHT};
 use crate::application::view::canvas::grid::{GridEvent, grid};
 use crate::application::view::panels::chat::chat_panel;
 use crate::application::view::panels::local_ai::local_ai_panel;
@@ -26,6 +24,7 @@ use crate::application::view::{label, text_input};
 use crate::application::widgets::even_row::even_row;
 use crate::application::widgets::icon_paint;
 use crate::application::widgets::input_typography;
+use crate::application::widgets::keyed_canvas::keyed_canvas;
 use crate::application::widgets::scroll_viewport::portal;
 use crate::application::workspace::{Mode, Sel, Workspace};
 use masonry::layout::{Dim, Length};
@@ -36,7 +35,7 @@ use std::sync::Arc;
 use xilem::WidgetView;
 use xilem::style::Style;
 use xilem::view::FlexExt as _;
-use xilem::view::{FlexSpacer, canvas, flex_col, sized_box};
+use xilem::view::{flex_col, sized_box};
 
 /// The editor rail's implemented navigation panels.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -128,9 +127,7 @@ fn shapes_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
                 format!("Contour {} · {} nodes", ci + 1, point_count),
                 active,
                 move |app: &mut Workspace| {
-                    let session = Arc::make_mut(&mut app.session);
-                    let points = session.select_contour(ci);
-                    app.selected_points = points;
+                    Arc::make_mut(&mut app.session).select_contour(ci);
                     app.refresh_coord_bufs();
                 },
             )
@@ -149,7 +146,6 @@ fn shapes_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
                 app.session.component_selected(index),
                 move |app: &mut Workspace| {
                     Arc::make_mut(&mut app.session).select_component(index);
-                    app.selected_points = 0;
                     app.refresh_coord_bufs();
                 },
             )
@@ -218,11 +214,11 @@ fn shapes_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     .boxed()
 }
 
-/// One navigation strip for the font, node, and glyph workspaces.
+/// One navigation strip for the font, node, and glyph workspaces: a row of equal icon
+/// buttons, where the open one takes the panel's face and the others stay dimmer.
 fn rail_tabs(app: &Workspace, editing: bool) -> impl WidgetView<Workspace> + use<> {
     use crate::application::design::{RAIL_TAB_ICON, RAIL_TAB_ICON_FULL_FRAME, RAIL_TAB_INSET};
     let pal = &app.palette;
-    let radius = design::rail_tab_radius(pal.corner_radius);
     let is_active = |which: Rail| {
         app.rail == which || (!editing && app.rail == Rail::Shapes && which == Rail::Glyphs)
     };
@@ -231,7 +227,7 @@ fn rail_tabs(app: &Workspace, editing: bool) -> impl WidgetView<Workspace> + use
     let specs: Vec<(&'static str, Rail, f64)> = [
         Some(("hyperpen", Rail::Glyphs, RAIL_TAB_ICON)),
         editing.then_some(("shapes", Rail::Shapes, RAIL_TAB_ICON_FULL_FRAME)),
-        (!app.font.axes.is_empty()).then_some(("measure", Rail::Axes, RAIL_TAB_ICON_FULL_FRAME)),
+        (!app.font.axes.is_empty()).then_some(("glyph-grid", Rail::Axes, RAIL_TAB_ICON)),
         Some(("invert", Rail::LocalAi, RAIL_TAB_ICON)),
         Some(("text", Rail::Chat, RAIL_TAB_ICON_FULL_FRAME)),
         Some(("save", Rail::Scripts, RAIL_TAB_ICON_FULL_FRAME)),
@@ -239,74 +235,44 @@ fn rail_tabs(app: &Workspace, editing: bool) -> impl WidgetView<Workspace> + use
     .into_iter()
     .flatten()
     .collect();
-    let count = specs.len();
-    let active_slot = specs.iter().position(|&(_, which, _)| is_active(which));
     let tab = |(icon, which, size): (&'static str, Rail, f64)| {
-        let active = is_active(which);
         sized_box(
             icon_button(
-                ControlStyle::new(pal, ControlKind::Tab).selected(pal, active),
+                ControlStyle::new(pal, ControlKind::Tab).selected(pal, is_active(which)),
                 icon,
-                icon,
+                rail_name(which, editing),
                 move |app: &mut Workspace| app.rail = which,
             )
             .icon_size(size)
-            .rail_tab(design::RAIL_TAB_ICON_RISE, radius),
+            .rail_tab(),
         )
         .dims(Dimensions::new(
             Dim::Stretch,
-            Dim::Fixed(Length::px(if active {
-                RAIL_TAB_ACTIVE_HEIGHT
-            } else {
-                RAIL_TAB_INACTIVE_HEIGHT
-            })),
+            Dim::Fixed(Length::px(RAIL_TAB_BUTTON_HEIGHT)),
         ))
     };
     sized_box(xilem::view::zstack((
-        sized_box(canvas({
+        sized_box({
             let background = pal.tab_rail.with_alpha(pal.side_panel_alpha());
             let outline = pal.outline;
-            move |_: &mut Workspace, _, scene, size| {
-                use crate::application::design::controls::icon_button;
-                use crate::application::widgets::even_row::slot_widths;
+            keyed_canvas((background, outline), move |_, scene, size| {
                 use masonry::imaging::Painter;
-                use masonry::kurbo::{Rect, Shape as _};
+                use masonry::kurbo::Rect;
                 let mut painter = Painter::new(scene);
                 let stroke = Stroke::Hairline.px();
-                let keyline =
-                    |x0: f64, x1: f64| Rect::new(x0, size.height - stroke, x1, size.height);
-                let mut ground = Rect::new(0.0, 0.0, size.width, size.height).to_path(0.1);
-                // The same whole-pixel slots the tab row uses locate the active tab, whose
-                // shape the rail leaves open; its keyline stops at the tab's flares.
-                let opening = active_slot.map(|index| {
-                    let widths = slot_widths(size.width, count, RAIL_TAB_INSET, RAIL_TAB_INSET);
-                    let x = RAIL_TAB_INSET
-                        + widths[..index].iter().sum::<f64>()
-                        + RAIL_TAB_INSET * index as f64;
-                    let tab = Rect::new(
-                        x,
-                        RAIL_TAB_INSET,
-                        x + widths[index],
-                        RAIL_TAB_INSET + RAIL_TAB_ACTIVE_HEIGHT,
-                    );
-                    icon_button::rail_tab_face(tab, radius).1
-                });
                 // The floating panel frame owns the side outlines; a strip here
                 // would double the panel edge beside the rail.
-                if let Some(hole) = &opening {
-                    ground.extend(hole.reverse_subpaths().elements().iter().copied());
-                }
-                painter.fill(&ground, background).draw();
-                match opening {
-                    Some(hole) => {
-                        let span = hole.bounding_box();
-                        painter.fill(keyline(0.0, span.x0), outline).draw();
-                        painter.fill(keyline(span.x1, size.width), outline).draw();
-                    }
-                    None => painter.fill(keyline(0.0, size.width), outline).draw(),
-                }
-            }
-        }))
+                painter
+                    .fill(Rect::new(0.0, 0.0, size.width, size.height), background)
+                    .draw();
+                painter
+                    .fill(
+                        Rect::new(0.0, size.height - stroke, size.width, size.height),
+                        outline,
+                    )
+                    .draw();
+            })
+        })
         .dims(Dimensions::new(Dim::Stretch, Dim::Stretch)),
         // Whole-pixel tab widths keep every gap and inset at exactly the rail inset.
         even_row(
@@ -379,9 +345,8 @@ fn editor_glyph_rail(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     .gap(Space::None)
 }
 
-/// What a rail panel is called, so the panels have names to talk about
-/// in tests and docs. The name is not drawn; the tab icon is the label.
-#[cfg(test)]
+/// What a rail panel is called: the accessible name of its tab, and its name in tests and docs.
+/// The name is not drawn; the tab icon is the visible label.
 pub(crate) fn rail_name(rail: Rail, editing: bool) -> &'static str {
     match rail {
         Rail::Glyphs if editing => "Glyph grid",
@@ -405,15 +370,22 @@ where
         .gap(Space::None)
 }
 
+fn axes_rail(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
+    portal(recipes::panel_stack((
+        axes_section(app, "Axes").map(|body| recipes::panel_group(&app.palette, body)),
+        crate::application::view::panels::sections::masters_section(app)
+            .map(|body| recipes::panel_group(&app.palette, body)),
+    )))
+    .trailing_rule_clearance(design::PANEL_SECTION_INSET.px())
+    .constrain_horizontal(true)
+}
+
 pub(crate) fn editor_nav(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     // Each pane owns its inset: the grid fills the rail, Axes uses the section
     // recipe, and standalone tool panes retain their own Region::Panel inset.
     let content = match app.rail {
         Rail::Glyphs => editor_glyph_rail(app).boxed(),
-        Rail::Axes => recipes::panel_stack((
-            axes_section(app).map(|body| recipes::panel_group(&app.palette, body)),
-        ))
-        .boxed(),
+        Rail::Axes => axes_rail(app).boxed(),
         Rail::LocalAi => local_ai_panel(app).boxed(),
         Rail::Shapes => shapes_panel(app).boxed(),
         Rail::Chat => chat_panel(app).boxed(),
@@ -474,7 +446,8 @@ where
 {
     let style = ControlStyle::new(pal, ControlKind::Toggle)
         .on(pal, Ground::Header)
-        .selected(pal, active);
+        .selected(pal, active)
+        .with_radius(design::HEADER_TAB_HEIGHT * 0.5);
     sized_box(
         button(
             style,
@@ -503,7 +476,9 @@ fn header_icon_chip<F>(
 where
     F: Fn(&mut Workspace) + Send + Sync + 'static,
 {
-    let style = ControlStyle::new(pal, ControlKind::Secondary).on(pal, Ground::Header);
+    let style = ControlStyle::new(pal, ControlKind::Secondary)
+        .on(pal, Ground::Header)
+        .with_radius(design::HEADER_TAB_HEIGHT * 0.5);
     sized_box(
         button(
             style,
@@ -596,15 +571,12 @@ pub(crate) fn sidebar_group<V>(
 where
     V: WidgetView<Workspace> + 'static,
 {
-    recipes::panel_section(app, title, title, xcolumn(Region::List, rows))
+    recipes::list_section(app, title, title, rows)
 }
 
 pub(crate) fn sidebar(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     let content = match app.rail {
-        Rail::Axes if !app.font.axes.is_empty() => recipes::panel_stack((
-            axes_section(app).map(|body| recipes::panel_group(&app.palette, body)),
-        ))
-        .boxed(),
+        Rail::Axes if !app.font.axes.is_empty() => axes_rail(app).boxed(),
         Rail::LocalAi => local_ai_panel(app).boxed(),
         Rail::Chat => chat_panel(app).boxed(),
         Rail::Scripts => scripts_panel(app).boxed(),
@@ -749,7 +721,7 @@ fn category_sidebar(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
             Region::Inline,
             (
                 label(name).text_size(TextSize::Body.px()).color(pal.text),
-                FlexSpacer::Flex(1.0),
+                xilem::view::FlexSpacer::Flex(1.0),
                 label(value.to_string())
                     .text_size(TextSize::Body.px())
                     .color(pal.text_muted),
@@ -769,6 +741,12 @@ fn category_sidebar(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
         total("Incompatible masters", app.font.incompatible_count()),
     ];
     filters.extend(filter_rows.into_iter().map(|row| row.boxed()));
+    let continuation = crate::application::view::canvas::specimen::spacing_canvas(app);
+    let bottom_inset = if continuation.is_some() {
+        design::PANEL_SECTION_INSET.px()
+    } else {
+        0.0
+    };
     flex_col((
         xcolumn(
             Region::List,
@@ -787,14 +765,26 @@ fn category_sidebar(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
         .padding(Space::Md),
         recipes::hairline(pal),
         // All sidebar sections share one scrolling area and the same folding headers.
-        portal(recipes::panel_stack((
-            sidebar_group(app, "Categories", cat_rows),
-            (!lang_rows.is_empty()).then(|| sidebar_group(app, "Global Scripts", lang_rows)),
-            sidebar_group(app, "Filters", filters),
-            crate::application::view::canvas::specimen::glyph_specimen(app),
-        )))
-        .trailing_rule_clearance(design::PANEL_SECTION_INSET.px())
-        .constrain_horizontal(true)
+        sized_box(
+            portal(recipes::panel_stack((
+                sidebar_group(app, "Categories", cat_rows),
+                (!lang_rows.is_empty()).then(|| sidebar_group(app, "Global Scripts", lang_rows)),
+                sidebar_group(app, "Filters", filters),
+                crate::application::view::canvas::specimen::glyph_specimen(app),
+                continuation.map(|view| view.flex(1.0)),
+            )))
+            .must_fill(true)
+            .trailing_rule_clearance(if bottom_inset > 0.0 {
+                0.0
+            } else {
+                design::PANEL_SECTION_INSET.px()
+            })
+            .constrain_horizontal(true),
+        )
+        .padding(masonry::properties::Padding {
+            bottom: Length::px(bottom_inset),
+            ..Default::default()
+        })
         .flex(1.0),
     ))
     .cross_axis_alignment(CrossAxisAlignment::Stretch)

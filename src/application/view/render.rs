@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! The render tree: how the workspace's state becomes a frame.
 
@@ -7,11 +7,10 @@ use crate::application::actions;
 use crate::application::design;
 use crate::application::design::{DOCK_WIDTH, PROOF_STRIP_HEIGHT};
 use crate::application::design::{Space, Stroke, TextSize};
-use crate::application::editor::tools::{chat, graph, local_ai, scripts, weight_debt};
+use crate::application::editor::tools::{chat, graph, local_ai, weight_debt};
 use crate::application::platform::export;
 #[cfg(unix)]
 use crate::application::platform::live;
-use crate::application::platform::model;
 use crate::application::platform::train;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::application::platform::watch;
@@ -23,6 +22,7 @@ use crate::application::view::panels::info::info_panel;
 use crate::application::view::panels::preview::{glyph_preview, preview_strip};
 use crate::application::view::panels::tabs::{editor_nav, sidebar};
 use crate::application::widgets::ground::ground;
+use crate::application::widgets::keyed_canvas::keyed_canvas;
 use crate::application::widgets::menu_shell;
 use crate::application::widgets::scroll_viewport::portal;
 #[cfg(target_os = "macos")]
@@ -39,7 +39,7 @@ use xilem::core::lens;
 use xilem::style::Style;
 use xilem::view::FlexExt as _;
 use xilem::view::ZStackExt as _;
-use xilem::view::{canvas, flex_col, sized_box};
+use xilem::view::{flex_col, sized_box};
 
 /// A kurbo value as the `f32` a Vello text size or stroke width
 /// takes.
@@ -87,7 +87,7 @@ where
     };
     xilem::view::zstack((
         content.alignment(UnitPoint::TOP_LEFT),
-        sized_box(canvas(move |_: &mut State, _, scene, size| {
+        sized_box(keyed_canvas(color, move |_, scene, size| {
             use masonry::imaging::Painter;
             let mut painter = Painter::new(scene);
             painter.fill(size.to_rect(), color).draw();
@@ -215,7 +215,6 @@ where
         // the visible gutter comes from padding, not its hard-coded bar.
         .bar_thickness(Length::ZERO)
         .min_bar_area(Length::px(SIDEBAR_SPLITTER_HIT_WIDTH))
-        .solid_bar(false)
         .draggable(!left_collapsed);
     let columns = crate::application::widgets::quiet_split::split(columns, right)
         .split_point_from_end(Length::px(right_width))
@@ -225,7 +224,6 @@ where
         )
         .bar_thickness(Length::ZERO)
         .min_bar_area(Length::px(SPLITTER_HIT_WIDTH))
-        .solid_bar(false)
         .draggable(!right_collapsed);
     clip_split(columns)
 }
@@ -302,8 +300,7 @@ where
                 Length::px(design::PROOF_MIN_HEIGHT),
             )
             .bar_thickness(Length::ZERO)
-            .min_bar_area(Length::px(design::SPLITTER_HIT_WIDTH))
-            .solid_bar(false);
+            .min_bar_area(Length::px(design::SPLITTER_HIT_WIDTH));
     clip_split(split)
 }
 
@@ -330,6 +327,18 @@ where
 
 pub(crate) fn app_logic(app: &mut Workspace) -> impl WidgetView<Workspace> + use<> {
     use xilem::core::one_of::{Either, OneOf3};
+    crate::application::platform::frame_times::context(|| match app.mode {
+        Mode::Overview => "overview".into(),
+        Mode::Editor(_) => format!("editor {} {:?}", app.session.glyph_name, app.tool),
+        Mode::Graph => "graph".into(),
+    });
+    // Tell the proof-file watcher which document and view are open.
+    if let Ok(mut watch) = app.proof_watch.lock() {
+        let document = app.font.document_source();
+        if watch.0 != document || watch.1 != app.proof_view {
+            *watch = (document.to_path_buf(), app.proof_view);
+        }
+    }
     // The piece view cuts its pieces, and the model view asks its worker, before any view
     // borrows the workspace.
     if matches!(app.mode, Mode::Editor(_)) && app.preview_visible && app.font.project.is_neural() {
@@ -340,11 +349,6 @@ pub(crate) fn app_logic(app: &mut Workspace) -> impl WidgetView<Workspace> + use
         }
     }
     let pal = &app.palette;
-
-    // Left column: category sidebar in overview only. In the editor the
-    // tools live in the header, so the left column collapses.
-    let _editing_mode = matches!(app.mode, Mode::Editor(_));
-    let _ = &app.multi_selected;
 
     // The header shares the window ground. Each workspace column is an inset
     // panel with its own content and footer.
@@ -464,7 +468,11 @@ pub(crate) fn app_logic(app: &mut Workspace) -> impl WidgetView<Workspace> + use
                                                     .boxed(),
                                                 app.font.project.preview_pending()
                                                     || app.review_compile_pending(),
-                                                app.proof_view,
+                                                app.proof_view
+                                                    || (matches!(app.mode, Mode::Editor(_))
+                                                        && !app.collapsed.contains(
+                                                            crate::application::view::panels::live_proof::KEY,
+                                                        )),
                                             )
                                             .boxed(),
                                             app.graph.job.clone(),
@@ -492,8 +500,97 @@ pub(crate) fn app_logic(app: &mut Workspace) -> impl WidgetView<Workspace> + use
             .boxed(),
             app.debt.eval_job.clone(),
         ),
-        app.font.master_paths().clone(),
+        &app.source_roots,
     )
+}
+
+/// What a background poll decides each time it looks at the thing it watches.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Poll {
+    /// Nothing new; look again after the next interval.
+    Wait,
+    /// Wake the interface and keep polling.
+    Wake,
+    /// Wake the interface once more, then stop: the work has ended.
+    WakeThenStop,
+    /// Stop without waking the interface.
+    Stop,
+}
+
+/// The message a poll sends to wake the interface.
+#[derive(Debug)]
+struct PollTick;
+
+/// Runs `view` and, while `watched` is present, a task that looks at it every `period` and
+/// calls `on_wake` on the interface thread as `check` decides.
+///
+/// Every background job reaches the interface this way: its thread writes to shared state,
+/// and Xilem has no hook to drain a channel from a thread, so a task polls that state.
+fn poll<V, T>(
+    view: V,
+    watched: Option<T>,
+    period: std::time::Duration,
+    check: fn(&T) -> Poll,
+    on_wake: fn(&mut Workspace),
+) -> impl WidgetView<Workspace> + use<V, T>
+where
+    V: WidgetView<Workspace>,
+    T: Clone + Send + Sync + 'static,
+{
+    use xilem::core::{MessageProxy, fork};
+    use xilem::view::task_raw;
+    fork(
+        view,
+        watched.map(|watched| {
+            task_raw(
+                move |proxy: MessageProxy<PollTick>, _: &mut Workspace| {
+                    let watched = watched.clone();
+                    async move {
+                        loop {
+                            tokio::time::sleep(period).await;
+                            let poll = check(&watched);
+                            if poll == Poll::Stop
+                                || (poll != Poll::Wait && proxy.message(PollTick).is_err())
+                                || poll == Poll::WakeThenStop
+                            {
+                                return;
+                            }
+                        }
+                    }
+                },
+                move |app: &mut Workspace, _: PollTick| on_wake(app),
+            )
+        }),
+    )
+}
+
+fn millis(count: u64) -> std::time::Duration {
+    std::time::Duration::from_millis(count)
+}
+
+/// Whether a job has stored its result.
+fn is_set<T>(slot: &std::sync::Mutex<Option<T>>) -> bool {
+    slot.lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .is_some()
+}
+
+/// Wake on every look until the job has finished, and once more when it has.
+fn until(finished: bool) -> Poll {
+    if finished {
+        Poll::WakeThenStop
+    } else {
+        Poll::Wake
+    }
+}
+
+/// Wake only when the job has unread events or has finished.
+fn on_events(pending: bool, finished: bool) -> Poll {
+    match (pending, finished) {
+        (_, true) => Poll::WakeThenStop,
+        (true, false) => Poll::Wake,
+        (false, false) => Poll::Wait,
+    }
 }
 
 /// Poll a `font-ml eval` measurement from the Weight debt block until it ends.
@@ -501,119 +598,60 @@ fn debt_eval_pump<V: WidgetView<Workspace>>(
     view: V,
     job: Option<weight_debt::DebtEvalJob>,
 ) -> impl WidgetView<Workspace> + use<V> {
-    use xilem::core::{MessageProxy, fork};
-    use xilem::view::task_raw;
-    fork(
+    poll(
         view,
-        job.map(|job| {
-            task_raw(
-                move |proxy: MessageProxy<weight_debt::DebtEvalProgress>, _: &mut Workspace| {
-                    let job = job.clone();
-                    async move {
-                        loop {
-                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                            let done = job
-                                .finished
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .is_some();
-                            if proxy.message(weight_debt::DebtEvalProgress).is_err() || done {
-                                return;
-                            }
-                        }
-                    }
-                },
-                |app: &mut Workspace, _: weight_debt::DebtEvalProgress| app.debt_eval_pump(),
-            )
-        }),
+        job,
+        millis(500),
+        |job| until(is_set(&job.finished)),
+        |app| app.debt_eval_pump(),
     )
 }
 
 /// Poll the model worker while the model view shows, so its drawings reach the strip.
 fn model_pump<V: WidgetView<Workspace>>(view: V, on: bool) -> impl WidgetView<Workspace> + use<V> {
-    use xilem::core::{MessageProxy, fork};
-    use xilem::view::task_raw;
-    fork(
+    poll(
         view,
-        on.then(|| {
-            task_raw(
-                move |proxy: MessageProxy<model::ModelProgress>, _: &mut Workspace| async move {
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
-                        if proxy.message(model::ModelProgress).is_err() {
-                            return;
-                        }
-                    }
-                },
-                |app: &mut Workspace, _: model::ModelProgress| app.model_pump(),
-            )
-        }),
+        on.then_some(()),
+        millis(40),
+        |()| Poll::Wake,
+        |app| {
+            app.model_pump();
+        },
     )
 }
 
-/// Poll a training run: its streamed lines reach the Neural section, and its exit ends the run.
-/// Runs `view`, and while the shapes tool has a worker going (a
-/// drawing or a training run), a task that polls it. The token is
-/// cleared by the pump when nothing is left to poll.
+/// Poll the shapes tool while it has a worker going, a drawing or a training run.
+/// The pump clears the token when nothing is left to poll.
 fn shapes_pump<V: WidgetView<Workspace>>(
     view: V,
     token: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> impl WidgetView<Workspace> + use<V> {
-    use crate::application::editor::tools::ai_shapes::ShapesProgress;
-    use xilem::core::{MessageProxy, fork};
-    use xilem::view::task_raw;
-    fork(
+    poll(
         view,
-        token.map(|token| {
-            task_raw(
-                move |proxy: MessageProxy<ShapesProgress>, _: &mut Workspace| {
-                    let token = token.clone();
-                    async move {
-                        loop {
-                            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                            if !token.load(std::sync::atomic::Ordering::Relaxed)
-                                || proxy.message(ShapesProgress).is_err()
-                            {
-                                return;
-                            }
-                        }
-                    }
-                },
-                |app: &mut Workspace, _: ShapesProgress| app.shapes_pump(),
-            )
-        }),
+        token,
+        millis(250),
+        |token| {
+            if token.load(std::sync::atomic::Ordering::Relaxed) {
+                Poll::Wake
+            } else {
+                Poll::Stop
+            }
+        },
+        |app| app.shapes_pump(),
     )
 }
 
+/// Poll a training run: its streamed lines reach the Neural section, and its exit ends the run.
 fn train_pump<V: WidgetView<Workspace>>(
     view: V,
     job: Option<train::TrainJob>,
 ) -> impl WidgetView<Workspace> + use<V> {
-    use xilem::core::{MessageProxy, fork};
-    use xilem::view::task_raw;
-    fork(
+    poll(
         view,
-        job.map(|job| {
-            task_raw(
-                move |proxy: MessageProxy<train::TrainProgress>, _: &mut Workspace| {
-                    let job = job.clone();
-                    async move {
-                        loop {
-                            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                            let done = job
-                                .finished
-                                .lock()
-                                .unwrap_or_else(|error| error.into_inner())
-                                .is_some();
-                            if proxy.message(train::TrainProgress).is_err() || done {
-                                return;
-                            }
-                        }
-                    }
-                },
-                |app: &mut Workspace, _: train::TrainProgress| app.train_pump(),
-            )
-        }),
+        job,
+        millis(250),
+        |job| until(is_set(&job.finished)),
+        |app| app.train_pump(),
     )
 }
 
@@ -622,23 +660,107 @@ fn script_pump<V: WidgetView<Workspace>>(
     view: V,
     running: bool,
 ) -> impl WidgetView<Workspace> + use<V> {
-    use xilem::core::{MessageProxy, fork};
-    use xilem::view::task_raw;
-    fork(
+    poll(
         view,
-        running.then(|| {
-            task_raw(
-                |proxy: MessageProxy<scripts::ScriptProgress>, _: &mut Workspace| async move {
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-                        if proxy.message(scripts::ScriptProgress).is_err() {
-                            return;
-                        }
-                    }
-                },
-                |app: &mut Workspace, _: scripts::ScriptProgress| app.script_pump(),
-            )
-        }),
+        running.then_some(()),
+        millis(120),
+        |()| Poll::Wake,
+        |app| {
+            app.script_pump();
+        },
+    )
+}
+
+/// Drain streamed local-chat events while its child process is running.
+fn chat_pump<V: WidgetView<Workspace>>(
+    view: V,
+    job: Option<chat::ChatJob>,
+) -> impl WidgetView<Workspace> + use<V> {
+    job_pump(view, job, |app| app.chat_pump())
+}
+
+/// Put a finished voice transcription into the chat field.
+fn voice_pump<V: WidgetView<Workspace>>(
+    view: V,
+    job: Option<chat::ChatJob>,
+) -> impl WidgetView<Workspace> + use<V> {
+    job_pump(view, job, |app| app.voice_pump())
+}
+
+/// Wake `on_progress` while `job` has unread events, and once when it ends.
+fn job_pump<V: WidgetView<Workspace>>(
+    view: V,
+    job: Option<chat::ChatJob>,
+    on_progress: fn(&mut Workspace),
+) -> impl WidgetView<Workspace> + use<V> {
+    poll(
+        view,
+        job,
+        millis(120),
+        |job| {
+            let pending = !job
+                .events
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_empty();
+            on_events(pending, is_set(&job.finished))
+        },
+        on_progress,
+    )
+}
+
+/// Poll a font-ml run from the Local AI panel for its progress and its result.
+fn ai_pump<V: WidgetView<Workspace>>(
+    view: V,
+    job: Option<local_ai::AiJob>,
+) -> impl WidgetView<Workspace> + use<V> {
+    poll(
+        view,
+        job,
+        millis(200),
+        |job| until(is_set(&job.finished)),
+        |app| app.ai_pump(),
+    )
+}
+
+/// Post what a nodes run's thread has said back into the application while it runs.
+fn graph_pump<V: WidgetView<Workspace>>(
+    view: V,
+    job: Option<graph::NodeJob>,
+) -> impl WidgetView<Workspace> + use<V> {
+    poll(
+        view,
+        job,
+        millis(120),
+        |job| {
+            let pending = !job
+                .events
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_empty();
+            on_events(pending, is_set(&job.finished))
+        },
+        |app| app.graph_pump(),
+    )
+}
+
+/// Wake the interface once, when an export has finished.
+fn export_pump<V: WidgetView<Workspace>>(
+    view: V,
+    job: Option<export::ExportJob>,
+) -> impl WidgetView<Workspace> + use<V> {
+    poll(
+        view,
+        job,
+        millis(120),
+        |job| {
+            if is_set(&job.finished) {
+                Poll::WakeThenStop
+            } else {
+                Poll::Wait
+            }
+        },
+        |app| app.export_pump(),
     )
 }
 
@@ -670,7 +792,7 @@ pub(crate) fn root_logic(app: &mut AppState) -> impl WidgetView<AppState> + use<
     // application boundary so they remain present without an open document.
     actions::install(app);
     #[cfg(target_os = "macos")]
-    let root = if std::env::var("RUNEBENDER_IN_WINDOW_MENU").is_ok() {
+    let root = if crate::application::launch_options::LaunchOptions::current().in_window_menu {
         OneOf2::A(menu_shell::menu_shell(content, app.palette.clone(), app))
     } else {
         OneOf2::B(shortcuts::shortcut_host(content))
@@ -705,148 +827,13 @@ fn welcome(app: &mut AppState) -> impl WidgetView<AppState> + use<> {
     .background_color(palette.app_background())
 }
 
-/// Drain streamed local-chat events while its child process is running.
-fn chat_pump<V: WidgetView<Workspace>>(
-    view: V,
-    job: Option<chat::ChatJob>,
-) -> impl WidgetView<Workspace> + use<V> {
-    job_pump(view, job, |app: &mut Workspace| app.chat_pump())
-}
-
-/// Put a finished voice transcription into the chat field.
-fn voice_pump<V: WidgetView<Workspace>>(
-    view: V,
-    job: Option<chat::ChatJob>,
-) -> impl WidgetView<Workspace> + use<V> {
-    job_pump(view, job, |app: &mut Workspace| app.voice_pump())
-}
-
-/// Wake `on_progress` while `job` has unread events, and once when it ends.
-fn job_pump<V: WidgetView<Workspace>>(
-    view: V,
-    job: Option<chat::ChatJob>,
-    on_progress: fn(&mut Workspace),
-) -> impl WidgetView<Workspace> + use<V> {
-    use xilem::core::{MessageProxy, fork};
-    use xilem::view::task_raw;
-    fork(
-        view,
-        job.map(|job| {
-            task_raw(
-                move |proxy: MessageProxy<chat::ChatProgress>, _: &mut Workspace| {
-                    let job = job.clone();
-                    async move {
-                        loop {
-                            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-                            let pending = !job
-                                .events
-                                .lock()
-                                .unwrap_or_else(|error| error.into_inner())
-                                .is_empty();
-                            let done = job
-                                .finished
-                                .lock()
-                                .unwrap_or_else(|error| error.into_inner())
-                                .is_some();
-                            if (pending || done) && proxy.message(chat::ChatProgress).is_err() {
-                                return;
-                            }
-                            if done {
-                                return;
-                            }
-                        }
-                    }
-                },
-                move |app: &mut Workspace, _: chat::ChatProgress| on_progress(app),
-            )
-        }),
-    )
-}
-
-/// The same pump for a font-ml run from the Local AI panel: while one
-/// is going, poll its progress and its result and post them back.
-fn ai_pump<V: WidgetView<Workspace>>(
-    view: V,
-    job: Option<local_ai::AiJob>,
-) -> impl WidgetView<Workspace> + use<V> {
-    use xilem::core::{MessageProxy, fork};
-    use xilem::view::task_raw;
-    fork(
-        view,
-        job.map(|job| {
-            task_raw(
-                move |proxy: MessageProxy<local_ai::AiProgress>, _: &mut Workspace| {
-                    let job = job.clone();
-                    async move {
-                        loop {
-                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                            let done = job
-                                .finished
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .is_some();
-                            if proxy.message(local_ai::AiProgress).is_err() || done {
-                                return;
-                            }
-                        }
-                    }
-                },
-                |app: &mut Workspace, _: local_ai::AiProgress| app.ai_pump(),
-            )
-        }),
-    )
-}
-
-/// Runs `view`, and while a nodes run is going, a task that polls what
-/// the run thread has said and posts it back into the application.
-/// The same pump shape as the watcher and the menu, for the same
-/// reason: Xilem has no hook to drain a channel from a thread.
-fn graph_pump<V: WidgetView<Workspace>>(
-    view: V,
-    job: Option<graph::NodeJob>,
-) -> impl WidgetView<Workspace> + use<V> {
-    use xilem::core::{MessageProxy, fork};
-    use xilem::view::task_raw;
-    fork(
-        view,
-        job.map(|job| {
-            task_raw(
-                move |proxy: MessageProxy<graph::GraphProgress>, _: &mut Workspace| {
-                    let job = job.clone();
-                    async move {
-                        loop {
-                            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-                            let pending = !job
-                                .events
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .is_empty();
-                            let done = job
-                                .finished
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .is_some();
-                            if (pending || done) && proxy.message(graph::GraphProgress).is_err() {
-                                return;
-                            }
-                            if done {
-                                return;
-                            }
-                        }
-                    }
-                },
-                |app: &mut Workspace, _: graph::GraphProgress| app.graph_pump(),
-            )
-        }),
-    )
-}
-
-/// Poll the preview queue until its latest revision has finished compiling.
+/// Poll the preview queue until its latest revision has finished compiling, and check the
+/// reference fonts and proof samples of the project once a second while a proof shows.
 #[cfg(not(target_arch = "wasm32"))]
 fn preview_pump<V: WidgetView<Workspace>>(
     view: V,
     pending: bool,
-    references: bool,
+    proof_files: bool,
 ) -> impl WidgetView<Workspace> + use<V> {
     use xilem::core::{MessageProxy, fork};
     use xilem::view::task;
@@ -870,50 +857,35 @@ fn preview_pump<V: WidgetView<Workspace>>(
     );
     fork(
         view,
-        references.then(|| {
+        proof_files.then(|| {
             task(
-                |proxy: MessageProxy<()>, _: &mut Workspace| async move {
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                        if proxy.message(()).is_err() {
-                            return;
-                        }
-                    }
-                },
-                |app: &mut Workspace, ()| app.refresh_review_references(),
-            )
-        }),
-    )
-}
-
-fn export_pump<V: WidgetView<Workspace>>(
-    view: V,
-    job: Option<export::ExportJob>,
-) -> impl WidgetView<Workspace> + use<V> {
-    use xilem::core::{MessageProxy, fork};
-    use xilem::view::task_raw;
-    fork(
-        view,
-        job.map(|job| {
-            task_raw(
-                move |proxy: MessageProxy<export::ExportProgress>, _: &mut Workspace| {
-                    let job = job.clone();
+                |proxy: MessageProxy<()>, app: &mut Workspace| {
+                    let watch = app.proof_watch.clone();
                     async move {
+                        use crate::application::platform::{proof_samples, reference_fonts};
+                        // The files are checked here, off the interface thread, and the
+                        // interface is woken only when one was added, changed or removed.
+                        // An idle editor is otherwise rebuilt once a second for nothing.
+                        let mut seen = None;
                         loop {
-                            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
-                            if job
-                                .finished
-                                .lock()
-                                .unwrap_or_else(|error| error.into_inner())
-                                .is_some()
-                            {
-                                let _ = proxy.message(export::ExportProgress);
-                                return;
+                            let (document, references) =
+                                watch.lock().map(|watch| watch.clone()).unwrap_or_default();
+                            let now = (
+                                document.clone(),
+                                proof_samples::disk_signature(&document),
+                                references.then(|| reference_fonts::disk_signature(&document)),
+                            );
+                            if seen.as_ref() != Some(&now) {
+                                seen = Some(now);
+                                if proxy.message(()).is_err() {
+                                    return;
+                                }
                             }
+                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                         }
                     }
                 },
-                |app: &mut Workspace, _: export::ExportProgress| app.export_pump(),
+                |app: &mut Workspace, ()| app.refresh_proof_files(),
             )
         }),
     )
@@ -1520,9 +1492,12 @@ mod panel_resize_tests {
             pod.new_widget,
             (1336, 30),
         );
-        let normal_count = harness.root_widget().children()[0].children()[0]
-            .children()
-            .len();
+        let controls_count = |harness: &TestHarness<masonry::widgets::SizedBox>| {
+            harness.root_widget().children()[0].children()[0].children()[0]
+                .children()
+                .len()
+        };
+        let normal_count = controls_count(&harness);
 
         app.fullscreen = true;
         let fullscreen = xilem::view::sized_box(titlebar(&app));
@@ -1530,9 +1505,7 @@ mod panel_resize_tests {
             fullscreen.rebuild(&normal, &mut state, &mut ctx, root, &mut app);
         });
         assert_eq!(
-            harness.root_widget().children()[0].children()[0]
-                .children()
-                .len(),
+            controls_count(&harness),
             normal_count - 1,
             "full screen must remove the window-controls spacer"
         );
@@ -1542,12 +1515,7 @@ mod panel_resize_tests {
         harness.edit_root_widget(|root| {
             restored.rebuild(&fullscreen, &mut state, &mut ctx, root, &mut app);
         });
-        assert_eq!(
-            harness.root_widget().children()[0].children()[0]
-                .children()
-                .len(),
-            normal_count
-        );
+        assert_eq!(controls_count(&harness), normal_count);
     }
 
     #[test]
@@ -2272,9 +2240,7 @@ mod rail_width_tests {
 
     #[test]
     fn every_rail_panel_stays_inside_the_dock() {
-        let Some(mut app) = workspace_for_layout() else {
-            return;
-        };
+        let mut app = workspace_for_layout();
         let width = DOCK_WIDTH;
         let mut failures = Vec::new();
         for rail in [
@@ -2338,9 +2304,7 @@ mod rail_width_tests {
     /// that follows it, which is when the text reaches the state.
     #[test]
     fn typing_in_the_chat_field_stays_inside_the_dock() {
-        let Some(mut app) = workspace_for_layout() else {
-            return;
-        };
+        let mut app = workspace_for_layout();
         app.rail = Rail::Chat;
         let width = DOCK_WIDTH;
         let mut ctx = context();
@@ -2423,24 +2387,85 @@ pub(crate) mod panel_resize_tests_support {
         )
     }
 
-    /// A workspace on the two-master Virtua fixture with the glyph A open
-    /// in the lighter master, so panels that depend on a second master
-    /// show their rows. `None` when the fixture is not checked out.
-    pub(super) fn workspace_for_layout() -> Option<Workspace> {
-        let dir = match std::env::var_os("RUNEBENDER_TEST_FONTS") {
-            Some(dir) => std::path::PathBuf::from(dir),
-            None => std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../virtua-grotesk/sources"),
-        };
-        let designspace = dir.join("VirtuaGrotesk.designspace");
-        if !designspace.is_file() {
-            return None;
-        }
-        let project = Project::load(&designspace).ok()?;
-        let mut app = Workspace::from_model(FontModel::from_project(project)).ok()?;
+    /// A workspace on the repository-owned two-master fixture with A open.
+    /// Missing or invalid fixtures fail the layout tests instead of skipping them.
+    pub(crate) fn workspace_for_layout() -> Workspace {
+        let designspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/core/Core.designspace");
+        let project = Project::load(&designspace).expect("core designspace loads");
+        let mut app = Workspace::from_model(FontModel::from_project(project))
+            .expect("core fixture opens in the workspace");
         app.set_theme("gray");
-        let index = app.font.index_of("A")?;
+        let index = app.font.index_of("A").expect("core fixture contains A");
         app.open_glyph(index);
-        Some(app)
+        app
+    }
+}
+
+#[cfg(test)]
+mod idle_tests {
+    //! Count-based checks of wasted work: what a rebuild invalidates when nothing changed.
+
+    use super::app_logic;
+    use super::panel_resize_tests_support::workspace_for_layout;
+    use crate::application::platform::screenshot::Headless;
+    use std::time::Duration;
+    use xilem::view::sized_box;
+
+    /// A rebuild of the editor with no change in state must not make the window render.
+    ///
+    /// Each widget that records its scene or requests layout during such a rebuild costs a
+    /// paint pass, a GPU render and a presentation of the whole window, and background
+    /// polls rebuild several times a second.
+    #[test]
+    fn an_idle_editor_rebuild_requests_no_frame() {
+        settles(workspace_for_layout());
+    }
+
+    /// The same rule for the overview, where the glyph grid takes the canvas's place.
+    #[test]
+    fn an_idle_overview_rebuild_requests_no_frame() {
+        let mut app = workspace_for_layout();
+        app.back_to_overview();
+        settles(app);
+    }
+
+    /// A category selection filters the cells on each rebuild. The grid compares its cells by
+    /// pointer, so the filter must return the same list while its inputs are the same.
+    #[test]
+    fn an_idle_overview_with_a_category_selected_requests_no_frame() {
+        use crate::application::workspace::Sel;
+        let mut app = workspace_for_layout();
+        app.back_to_overview();
+        app.sel = Sel::Category(runebender::GlyphCategory::Letter);
+        settles(app);
+    }
+
+    /// Away from a master the editor shows an interpolated outline. The canvas compares it
+    /// by pointer, so the same axis values must give the same outline on each rebuild.
+    #[test]
+    fn an_idle_editor_between_masters_requests_no_frame() {
+        let mut app = workspace_for_layout();
+        let axis = app.font.axes.first().expect("the fixture has an axis");
+        let middle = (axis.min + axis.max) / 2.0 + 1.0;
+        app.set_axis(0, middle);
+        assert!(!app.on_active_master());
+        assert!(app.interp_preview().is_some(), "the glyph interpolates");
+        settles(app);
+    }
+
+    fn settles(app: crate::application::workspace::Workspace) {
+        let logic = |app: &mut crate::application::workspace::Workspace| sized_box(app_logic(app));
+        let mut headless = Headless::new(app, logic, (1400, 900), 1.0);
+        // Settle: the first rebuilds record the canvases and lay the tree out.
+        for _ in 0..3 {
+            headless.rebuild(logic);
+            headless.anim_frame(Duration::from_millis(500));
+            headless.redraw();
+        }
+        assert!(
+            !headless.rebuild(logic),
+            "a rebuild with no state change invalidated a widget"
+        );
     }
 }

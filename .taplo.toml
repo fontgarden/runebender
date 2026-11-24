@@ -1,0 +1,16 @@
+# See https://taplo.tamasfe.dev/configuration/file.html
+# and https://taplo.tamasfe.dev/configuration/formatter-options.html
+include = ["**/*.toml", ".*.toml", ".cargo/*.toml", ".codex/*.toml"]
+# Build outputs and separately checked-out fixtures are not repository configuration.
+exclude = ["**/target/**", "target-*/**", "**/node_modules/**", ".git/**", ".worktrees/**", "test-fonts/**"]
+
+[formatting]
+# Aligning comments with the largest line creates unrelated diff noise.
+align_comments = false
+column_width = 100
+indent_string = "    "
+# Preserve deliberately grouped feature lists and compact dependency declarations.
+array_auto_expand = false
+array_auto_collapse = false
+inline_table_expand = false
+reorder_keys = false

@@ -494,7 +494,7 @@ mod tests {
     use crate::testing::fonts;
 
     #[test]
-    fn virtua_h_reports_stems_and_compares_both_masters() {
+    fn fixture_h_reports_stems_and_compares_both_masters() {
         let project = Project::load(&fonts::designspace()).expect("the designspace loads");
         let ids: Vec<_> = project.document_sources().map(|s| s.id()).collect();
         let report = analyze_project_glyph(&project, ids[0], "H", None).unwrap();
@@ -519,9 +519,10 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "integration-fonts")]
     #[test]
     fn virtua_font_audit_counts_every_glyph_and_names_the_worst() {
-        let project = Project::load(&fonts::designspace()).expect("the designspace loads");
+        let project = Project::load(&fonts::virtua_designspace()).expect("the designspace loads");
         let id = project.document_sources().next().unwrap().id();
         let started = std::time::Instant::now();
         let audit = analyze_project_font(&project, id, 5).unwrap();

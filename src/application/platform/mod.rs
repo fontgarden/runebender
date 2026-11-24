@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! The world outside the window: files, watching, and headless frames.
 
@@ -10,10 +10,14 @@ pub(crate) mod dialogs;
 #[path = "browser_dialogs.rs"]
 pub(crate) mod dialogs;
 pub(crate) mod export;
+pub(crate) mod frame_times;
 pub(crate) mod model;
+pub(crate) mod proof_samples;
 pub(crate) mod reference_fonts;
 pub(crate) mod train;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod guarded_file;
 pub(crate) mod host;
 pub(crate) mod screenshot;
 #[allow(

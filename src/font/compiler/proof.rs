@@ -1624,7 +1624,8 @@ mod tests {
             .insert_glyph(norad::Glyph::new("A"));
         let project = Project::from_source(super::super::super::project::SourceInput::from_font(
             font, ufo,
-        ));
+        ))
+        .expect("valid source fixture");
 
         let input = capture(&project).unwrap();
         let source = project.document_sources().next().unwrap();
@@ -1692,16 +1693,18 @@ mod tests {
         font.features = "include (includes/captured.fea);\n".into();
         let project = Project::from_source(super::super::super::project::SourceInput::from_font(
             font, ufo,
-        ));
+        ))
+        .expect("valid source fixture");
 
         let error = capture(&project).unwrap_err();
         assert!(error.contains("unresolved include directive"));
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(feature = "integration-fonts")]
     #[test]
     fn compiled_proof_uses_one_immutable_byte_snapshot_for_multilingual_text() {
-        let project = project();
+        let project = Project::load(&crate::testing::fonts::virtua_designspace()).unwrap();
         let snapshot = compile(capture(&project).unwrap()).unwrap();
         let latin = prove(
             &snapshot,
@@ -1743,11 +1746,12 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "integration-fonts")]
     #[test]
     fn selected_arabic_occurrence_survives_real_compiled_proof_and_rejects_drift() {
         use crate::text::buffer::{TextBuffer, TextDirection, TextGlyphInventory};
 
-        let project = project();
+        let project = Project::load(&crate::testing::fonts::virtua_designspace()).unwrap();
         let source = project.document_sources().next().unwrap().id();
         let snapshot = compile(capture(&project).unwrap()).unwrap();
         let mut buffer = TextBuffer::new();
@@ -2064,7 +2068,8 @@ mod tests {
         let project = Project::from_source(super::super::super::project::SourceInput::from_font(
             norad::Font::new(),
             "Empty.ufo".into(),
-        ));
+        ))
+        .expect("valid source fixture");
         assert!(compile(capture(&project).unwrap()).is_err());
     }
 }

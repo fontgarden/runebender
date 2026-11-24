@@ -27,18 +27,19 @@ name = "Gray"
 "09" = "oklch(0.84 0 0)"
 
 # Rainbow palette: named hues for glyph marks and semantic editor colors.
+# Glyph tiles, the mark picker, points, and other semantic colors all use these values.
 [rainbow]
 # Glyph mark colors and their order in the mark picker.
 marks = ["red", "orange", "yellow", "green", "blue", "purple", "pink"]
 # Complete OKLCH colors before the step offsets below are added.
 [rainbow.hues]
-red = "oklch(0.61 0.167 27)"
-orange = "oklch(0.68 0.15 46)"
-yellow = "oklch(0.82 0.135 96)"
-green = "oklch(0.69 0.126 152)"
-blue = "oklch(0.64 0.119 248)"
-purple = "oklch(0.61 0.15 292)"
-pink = "oklch(0.68 0.15 350)"
+red = "oklch(0.619 0.144 26)"
+orange = "oklch(0.681 0.130 47)"
+yellow = "oklch(0.802 0.119 96)"
+green = "oklch(0.691 0.108 153)"
+blue = "oklch(0.648 0.103 247)"
+purple = "oklch(0.624 0.128 293)"
+pink = "oklch(0.683 0.128 349)"
 
 # Signed OKLCH offsets added to each hue, not complete colors.
 # Negative lightness darkens; positive lightness brightens; chroma changes saturation.
@@ -53,9 +54,6 @@ deep = "oklch(-0.26 0.0 0)"
 [drawing]
 # Rainbow step used for glyph marks: dim, base, bright, or deep.
 markStep = "base"
-# Opacity of glyph tile faces and the metrics card header over the canvas, as in the
-# label tool's letter colors. Points, anchors, combs, and the mark picker stay opaque.
-markTileOpacity = 0.85
 # Glyph mark treatment: fill colors the tile; border colors its outline.
 markStyle = "fill"
 # Outline around a tile with a filled rainbow mark.
@@ -75,7 +73,7 @@ pointHalo = false
 app = "baseUi.02"
 # Gray overlay on the native macOS blur; independent of the opaque app background.
 # Its opacity is window.blurTintOpacity. Other hosts ignore this tint.
-backdropTint = "#808080"
+backdropTint = "#606060"
 # Main floating panel faces and sidebar backgrounds.
 panel = "baseUi.07"
 # Face color of frosted side panels (window.blurPanels); defaults to panel. It is lighter
@@ -157,8 +155,25 @@ headerMutedInk = "baseUi.08"
 # Colors named by editor purpose; shared across hosts, so some are host-specific.
 # Values can reference Base UI or Rainbow, or use a literal color such as #17B870.
 [roles]
+# Code editor in script nodes: its ground, text, and syntax colors.
+codeBackground = "#000000"
+codeText = "#D8C8A0"
+codeKeyword = "#CC6255"
+codeFunction = "#D9BE4A"
+codeType = "#4D9E78"
+codeString = "#6DBF4E"
+codeNumber = "#D4943D"
+codeComment = "#58524A"
+codeConstant = "#8878A8"
+codeOperator = "#A0A0C0"
+# Line numbers, and the visual-mode selection behind the text.
+codeLineNumber = "#3A3632"
+codeSelection = "#2A2520"
 # Dark Agent Proof page; independent of the glyph fill.
 proofDarkBackground = "baseUi.01"
+# Outlines of other layers and masters behind the layer being edited. Dark blue, so they
+# stand apart from both the mid-gray canvas and the near-black outline being edited.
+layerOutline = "rainbow.blue.deep"
 # Red pencil strokes drawn over a review proof; brighter than the red mark.
 proofPencil = "#E6282D"
 # The save state beside the file name: lighter than the marks, so it reads like the
@@ -170,14 +185,16 @@ toolActiveInk = "baseUi.08"
 toolInactiveInk = "baseUi.05"
 # Shared selected-grid color token.
 gridSelected = "baseUi.02"
-# Selected glyph tile face: two steps darker than controlSelected, so the
+# Selected glyph tile face: one step darker than controlSelected, so the
 # selected tile stands apart from the colored tiles around it.
-cellSelectedFill = "baseUi.01"
+cellSelectedFill = "baseUi.02"
 # Shared selected-cell ink token.
 cellSelectedInk = "baseUi.07"
 # Native selected backgrounds, including glyph tiles, sidebar rows, and controls.
-# Native selected glyphs and sidebar labels use rainbow.yellow at markStep.
 controlSelected = "baseUi.03"
+# Selected glyph names and sidebar labels: a brighter yellow than the mark, so the
+# label stays readable on controlSelected.
+selectedContentInk = "oklch(0.82 0.135 96)"
 # Contrasting ink for other selected controls.
 controlSelectedInk = "baseUi.09"
 # Keyboard focus ring: a one-pixel ring inside the focused control.
@@ -261,7 +278,6 @@ popcount4 = "#FF4A3D"
 # Linux, browser, and headless proofs always use flat colors.
 blurBackground = true
 # Opacity of surfaces.backdropTint over the blur: 0 is clear, 1 is solid.
-# Midpoint tint at 0.25 lifts dark wallpaper while retaining visible blur.
 # The final blended color still varies with the wallpaper behind the window.
 # Used only on macOS with blurBackground enabled.
 blurTintOpacity = 0.50

@@ -224,8 +224,10 @@ impl ControlStyle {
             (ControlKind::Toggle | ControlKind::Chip, false) => outlined,
             (ControlKind::Toggle | ControlKind::Chip, true) => inverted,
             (ControlKind::Row, false) => bare(pal.text),
+            // A selected row uses the selected glyph tile's face, so one selection color
+            // runs through the sidebar and the grid.
             (ControlKind::Row, true) => Face {
-                fill: pal.selected_bg(),
+                fill: pal.selected_cell_bg(),
                 outline: pal.outline,
                 ink: pal.selected_content_ink(),
             },
@@ -244,8 +246,9 @@ impl ControlStyle {
                 outline: pal.outline,
                 ink: pal.inactive_tab_ink,
             },
+            // The open tab takes the panel's own face, so it reads as part of the panel.
             (ControlKind::Tab, true) => Face {
-                fill: Palette::FLAT,
+                fill: pal.side_panel_face(),
                 outline: pal.outline,
                 ink: pal.active_tab_ink,
             },
@@ -310,6 +313,11 @@ impl ControlStyle {
             (
                 Face {
                     fill: shift(base, hover_step),
+                    outline: if kind == ControlKind::Row {
+                        pal.outline
+                    } else {
+                        rest.outline
+                    },
                     ..rest
                 },
                 Face {
@@ -378,6 +386,11 @@ impl ControlStyle {
     /// The color of the keyboard focus ring.
     pub(crate) fn focus_ring(&self) -> Color {
         self.focus_ring
+    }
+
+    pub(crate) fn with_radius(mut self, radius: f64) -> Self {
+        self.radius = radius;
+        self
     }
 
     /// The corner radius.
@@ -470,6 +483,19 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn selectable_rows_outline_hover_and_keep_the_selected_ink() {
+        let pal = Palette::load("gray");
+        for selected in [false, true] {
+            let style = ControlStyle::new(&pal, ControlKind::Row).selected(&pal, selected);
+            let hover = style.face(true, false);
+            assert_eq!(hover.outline, pal.outline);
+            assert_eq!(hover.ink, style.ink());
+            let disabled = style.disabled(&pal, true);
+            assert_eq!(disabled.face(true, false), disabled.face(false, false));
         }
     }
 

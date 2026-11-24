@@ -288,7 +288,12 @@ impl Workspace {
                 dot_grid,
                 ..self.trace_options()
             };
-            trace_image_placed(&bytes, image.transform(), options)
+            trace_image_placed(
+                &bytes,
+                image.transform(),
+                options,
+                self.session.grid_spacing,
+            )
         })();
         match traced {
             Ok(contours) => {

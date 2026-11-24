@@ -1,4 +1,4 @@
-# Local Virtua models
+# Local model packages
 
 The native Brush panel can discover compatible local checkpoints, select one, and run **Draft with Virtua** without overwriting the source glyph.
 Use **Open folder** to reveal the library and **Refresh** after adding a package.

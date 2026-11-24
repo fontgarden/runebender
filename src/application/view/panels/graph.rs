@@ -30,11 +30,11 @@ use masonry::properties::Dimensions;
 use masonry::properties::LineBreaking;
 use masonry::properties::types::CrossAxisAlignment;
 use runebender::font::variable::SourceId;
-use runebender::formats::specimen_script::ScriptLanguage;
 use runebender::ui::graph::{
     ContentState, ImageAction, ImageContent, ImmutablePng, NodeContent, NodeContentMap,
     ScriptContent,
 };
+use runebender::ui::syntax::Syntax;
 use runebender::workflows::graph::{NodeGraph, Registry};
 use runebender::workflows::graph_session::GraphGuard;
 use std::sync::Arc;
@@ -46,6 +46,8 @@ use xilem::view::{FlexSpacer, flex_col, portal, sized_box};
 
 #[cfg(unix)]
 use crate::application::editor::tools::graph::execution::LiveGraphPhase;
+#[cfg(unix)]
+use runebender::formats::specimen_script::ScriptLanguage;
 #[cfg(unix)]
 use runebender::workflows::graph_session::{GraphRunHandle, GraphRunStatus};
 
@@ -111,7 +113,8 @@ fn fixture_png() -> ImmutablePng {
 fn legacy_projection(app: &Workspace) -> Option<CanvasProjection> {
     let state = app.graph.open.as_ref()?;
     let mut content = NodeContentMap::default();
-    let fixture = std::env::var_os("RUNEBENDER_NODES_CONTENT_FIXTURE").is_some();
+    let fixture =
+        crate::application::launch_options::LaunchOptions::current().nodes_content_fixture;
     for node in &state.graph.nodes {
         match node.type_name.as_str() {
             "live.python" => {
@@ -126,6 +129,7 @@ fn legacy_projection(app: &Workspace) -> Option<CanvasProjection> {
                     NodeContent::Script(ScriptContent {
                         content_hash: if fixture { "ui-fixture" } else { "" }.into(),
                         text,
+                        syntax: Syntax::Python,
                         state: if fixture {
                             ContentState::Current
                         } else {
@@ -351,6 +355,7 @@ fn live_projection(app: &Workspace) -> Option<CanvasProjection> {
                             .and_then(serde_json::Value::as_str)
                             .unwrap_or_default()
                             .into(),
+                        syntax: Syntax::Python,
                         content_hash,
                         state: node_state.clone(),
                         size: content_size(app, node.id, runebender::ui::graph::CODE_H),
@@ -379,6 +384,10 @@ fn live_projection(app: &Workspace) -> Option<CanvasProjection> {
                             .and_then(serde_json::Value::as_str)
                             .unwrap_or(language.starter())
                             .into(),
+                        syntax: match language {
+                            ScriptLanguage::Designbot => Syntax::Rust,
+                            ScriptLanguage::Drawbot => Syntax::Python,
+                        },
                         content_hash: snapshot.semantic_hash.clone(),
                         state: node_state.clone(),
                         size: app

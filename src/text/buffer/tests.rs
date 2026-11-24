@@ -230,6 +230,39 @@ fn active_sort_flags_remain_unique_after_switch_and_insert() {
     );
 }
 
+/// The stored text of a buffer holds a line break as a line ending.
+/// A buffer built again from that text keeps its lines, where `insert_characters` joined them.
+#[test]
+fn stored_text_restores_its_line_breaks() {
+    let inventory = || {
+        serde_json::from_str(
+            r#"{
+                "unicode": { "65": "A", "66": "B" },
+                "widths": { "A": 640, "B": 600 }
+            }"#,
+        )
+        .expect("valid glyph inventory")
+    };
+    let mut typed = TextBuffer::new();
+    typed.set_glyph_inventory(inventory());
+    assert!(typed.insert_character('A'));
+    typed.insert_line_break();
+    assert!(typed.insert_character('B'));
+    let stored = typed.text();
+    assert_eq!(stored, "A\nB");
+
+    let mut restored = TextBuffer::new();
+    restored.set_glyph_inventory(inventory());
+    assert_eq!(restored.insert_text(&stored), 3);
+    assert_eq!(restored.text(), stored);
+    assert_eq!(restored.len(), typed.len());
+
+    let mut windows = TextBuffer::new();
+    windows.set_glyph_inventory(inventory());
+    assert_eq!(windows.insert_text("A\r\nB\rZ"), 4, "Z has no glyph");
+    assert_eq!(windows.text(), "A\nB\n");
+}
+
 #[test]
 fn insert_character_uses_glyph_inventory() {
     let mut buffer = TextBuffer::new();
@@ -260,6 +293,87 @@ fn insert_character_uses_glyph_inventory() {
     };
     assert_eq!(*codepoint, Some('A'));
     assert_eq!(*advance_width, 640.0);
+}
+
+#[test]
+fn batch_characters_preserve_selection_and_active_sort_identity() {
+    let mut buffer = TextBuffer::new();
+    buffer.set_glyph_inventory(
+        serde_json::from_str(r#"{"unicode":{"65":"A","86":"V"},"widths":{"A":600,"V":620}}"#)
+            .unwrap(),
+    );
+    buffer.insert_inactive_glyph("A", Some('A'), 600.0);
+    buffer.insert_inactive_glyph("A", Some('A'), 600.0);
+    buffer.insert_glyph("V", Some('V'), 620.0);
+    buffer.select_range(0, 1);
+    let before = buffer.clone();
+    assert_eq!(buffer.insert_characters(""), 0);
+    assert_eq!(buffer.insert_characters("\u{10FFFF}\n"), 0);
+    assert_eq!(
+        buffer, before,
+        "unmapped text must not delete the selection"
+    );
+
+    assert_eq!(buffer.insert_characters("\u{10FFFF}VA"), 2);
+    assert_eq!(buffer.text(), "VAAV");
+    assert_eq!(buffer.cursor(), 2);
+    assert_eq!(buffer.selection_range(), None);
+    assert_eq!(buffer.active_sort(), Some(3));
+    assert_eq!(buffer.sort(3).unwrap().glyph_name(), Some("V"));
+    assert_eq!(buffer.layout(1000.0).items[1].x, 620.0);
+}
+
+#[test]
+fn batch_characters_match_incremental_shaping_and_bidi_layout() {
+    let inventory: TextGlyphInventory = serde_json::from_str(
+        r#"{
+            "unicode":{"32":"space","65":"A","102":"f","105":"i","1576":"beh-ar","1605":"meem-ar"},
+            "widths":{"space":250,"A":600,"f":300,"i":200,"fi":450,
+                      "beh-ar":500,"beh-ar.init":480,"meem-ar":520,"meem-ar.fina":490}
+        }"#,
+    )
+    .unwrap();
+    for features in ["", "feature liga { sub f i by fi; } liga;"] {
+        for direction in [
+            None,
+            Some(TextDirection::LeftToRight),
+            Some(TextDirection::RightToLeft),
+        ] {
+            for text in ["fi A بم", "بم fi", "A\u{10FFFF}fi"] {
+                let mut original = TextBuffer::new();
+                let mut inventory = inventory.clone();
+                inventory.features = features.into();
+                original.set_glyph_inventory(inventory);
+                if let Some(direction) = direction {
+                    original.set_direction(direction);
+                }
+                let mut batch = original.clone();
+                let mut inserted = 0;
+                for character in text.chars() {
+                    inserted += usize::from(original.insert_character(character));
+                }
+                original.shape_arabic_if_rtl();
+                assert_eq!(batch.insert_characters(text), inserted);
+                assert_eq!(batch.sorts, original.sorts, "{text}");
+                assert_eq!(batch.cursor(), original.cursor());
+                assert_eq!(batch.layout(1000.0), original.layout(1000.0), "{text}");
+                if !features.is_empty() {
+                    assert!(batch.iter().any(|sort| sort.glyph_name() == Some("fi")));
+                    assert!(
+                        !batch.shape_arabic_if_rtl(),
+                        "unchanged shaping must not fall back"
+                    );
+                    assert!(!batch.shape_arabic());
+                    assert!(!batch.shape_arabic_around_if_rtl(0));
+                    assert_eq!(
+                        batch.sorts, original.sorts,
+                        "repeated shaping preserves ligatures"
+                    );
+                    assert_eq!(batch.layout(1000.0), original.layout(1000.0));
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -1075,10 +1189,11 @@ fn click_places_the_caret_on_the_clicked_line() {
     assert_eq!(buffer.line_number_for_sort(cursor), 1);
 }
 
-/// A buffer wired to the bundled font's inventory and features, the
+/// A buffer wired to the pinned integration font's inventory and features, the
 /// way the editor sets one up.
+#[cfg(feature = "integration-fonts")]
 fn buffer_with_shaping_font() -> TextBuffer {
-    let ufo_dir = crate::testing::fonts::regular_ufo();
+    let ufo_dir = crate::testing::fonts::virtua_regular_ufo();
     let font = norad::Font::load(&ufo_dir).expect("test UFO loads");
     let features = std::fs::read_to_string(ufo_dir.join("features.fea")).expect("features.fea");
 
@@ -1103,6 +1218,7 @@ fn buffer_with_shaping_font() -> TextBuffer {
     buffer
 }
 
+#[cfg(feature = "integration-fonts")]
 fn type_chars(buffer: &mut TextBuffer, text: &str) {
     for char in text.chars() {
         let name = buffer
@@ -1121,6 +1237,7 @@ fn type_chars(buffer: &mut TextBuffer, text: &str) {
     }
 }
 
+#[cfg(feature = "integration-fonts")]
 #[test]
 fn latin_keeps_one_glyph_per_character_when_shaped_by_the_font() {
     let mut buffer = buffer_with_shaping_font();
@@ -1138,6 +1255,7 @@ fn latin_keeps_one_glyph_per_character_when_shaped_by_the_font() {
     assert_eq!(buffer.sort_glyph_name(0), Some("R"));
 }
 
+#[cfg(feature = "integration-fonts")]
 #[test]
 fn arabic_in_a_latin_line_still_ligates() {
     // A line whose first strong character is Latin still reads LTR,
@@ -1185,6 +1303,7 @@ fn a_glyph_opens_at_the_cursor_when_nothing_is_active() {
     assert_eq!(buffer.sort_glyph_name(1), Some("C"));
 }
 
+#[cfg(feature = "integration-fonts")]
 #[test]
 fn lam_alef_renders_as_one_ligature_glyph() {
     let mut buffer = buffer_with_shaping_font();
@@ -1203,6 +1322,7 @@ fn lam_alef_renders_as_one_ligature_glyph() {
     assert_eq!(layout.items[0].index, 0);
 }
 
+#[cfg(feature = "integration-fonts")]
 #[test]
 fn deleting_the_lam_brings_the_alef_back() {
     let mut buffer = buffer_with_shaping_font();
@@ -1219,10 +1339,11 @@ fn deleting_the_lam_brings_the_alef_back() {
     assert_eq!(buffer.layout(1000.0).items.len(), 1);
 }
 
+#[cfg(feature = "integration-fonts")]
 #[test]
 fn shaping_falls_back_when_the_feature_file_is_broken() {
     let mut buffer = buffer_with_shaping_font();
-    let mut inventory = buffer.glyph_inventory.clone();
+    let mut inventory = (*buffer.glyph_inventory).clone();
     inventory.features = "feature liga { sub missing by alsoMissing; } liga;".into();
     buffer.set_glyph_inventory(inventory);
     type_chars(&mut buffer, "\u{0628}\u{0628}");
@@ -2176,4 +2297,22 @@ fn rtl_preview_layout_breaks_kerning_across_line_breaks_like_xilem() {
     // The pair straddles a line break, so it does not kern.
     assert_eq!(preview_x(&preview, 0), 500.0);
     assert_eq!(preview_x(&preview, 2), 0.0);
+}
+
+#[test]
+fn active_visual_kern_uses_logical_pair_for_the_neighbor_on_the_left_in_arabic() {
+    let mut buffer = TextBuffer::new();
+    buffer.insert_glyph("reh-ar.fina", Some('ر'), 496.0);
+    buffer.insert_glyph("teh-ar.init", Some('ت'), 260.0);
+    buffer.activate_sort(0);
+    assert_eq!(
+        buffer.active_visual_kern(true),
+        Some(("reh-ar.fina", "teh-ar.init", 0.0))
+    );
+    assert_eq!(buffer.active_visual_kern(false), None);
+    buffer.activate_sort(1);
+    assert_eq!(
+        buffer.active_visual_kern(false),
+        Some(("reh-ar.fina", "teh-ar.init", 0.0))
+    );
 }

@@ -6,6 +6,8 @@
 //! Workflows describe and run typed operations over a font.
 //! They do not own the canonical font or application session.
 
+/// Lowercase hexadecimal SHA-256 digests shared by workflow, agent and file identities.
+pub mod digest;
 pub mod graph;
 /// Connected workflows over the editor's isolated font versions.
 pub mod graph_live;
@@ -20,5 +22,7 @@ pub mod local_sketch;
 pub mod process;
 /// Runebender's own Python virtual environment, shared with tools outside the editor.
 pub mod python_environment;
+/// Bounded retry receipts that evict the oldest finished entry.
+pub mod receipt_ledger;
 /// A supervised `whisper-server` child turning speech into chat text.
 pub mod whisper_server;

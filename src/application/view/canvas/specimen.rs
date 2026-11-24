@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! The sidebar specimen: the selected glyph in the contexts a type designer reads it in,
 //! then the basic sets of the scripts the font covers.
@@ -13,20 +13,21 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use masonry::imaging::Painter;
-use masonry::kurbo::{Affine, BezPath, Size};
+use masonry::kurbo::{Affine, BezPath, Shape, Size};
 use masonry::layout::{Dim, Length};
 use masonry::properties::Dimensions;
 use xilem::WidgetView;
 use xilem::style::Style;
-use xilem::view::{canvas, sized_box};
+use xilem::view::sized_box;
 
 use crate::application::design::recipes::{Group, Row};
 use crate::application::design::{self, recipes};
 use crate::application::editor::tools::text as text_tool;
+use crate::application::widgets::keyed_canvas::keyed_canvas;
 use crate::application::workspace::Workspace;
 
 /// One shaped line in font units, baseline at zero, starting at x = 0.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct Run {
     paths: Vec<BezPath>,
     width: f64,
@@ -34,7 +35,7 @@ struct Run {
 }
 
 /// How a block sizes its lines.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Setting {
     /// Every line at one size: the largest at which the widest line fits, up to `max_em`
     /// pixels of em.
@@ -43,7 +44,7 @@ enum Setting {
     Waterfall { max_em: f64 },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Block {
     key: &'static str,
     caption: String,
@@ -54,15 +55,22 @@ pub(crate) struct Block {
 #[derive(Debug, Default)]
 struct Specimen {
     blocks: Vec<Block>,
+    extra_spacing: Vec<Run>,
     ascender: f64,
     descender: f64,
 }
 
 /// The document state a specimen was shaped from.
-type Key = (u64, usize, Vec<u64>, Option<usize>);
+type Key = (u64, usize, Vec<u64>, Option<usize>, [bool; 4]);
+
+/// One specimen for each master of a large family.
+const CACHE_LIMIT: usize = 16;
 
 thread_local! {
-    static CACHE: RefCell<Option<(Key, Arc<Specimen>)>> = const { RefCell::new(None) };
+    /// The specimens of the current document revision, newest last. A switch between
+    /// masters returns to a location shaped before, and shaping every block again takes
+    /// several milliseconds.
+    static CACHE: RefCell<Vec<(Key, Arc<Specimen>)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The independently folding proofs below Categories, Global Scripts, and Filters.
@@ -72,23 +80,111 @@ pub(crate) fn glyph_specimen(app: &Workspace) -> impl WidgetView<Workspace> + us
         .blocks
         .iter()
         .map(|block| {
-            recipes::section_of(
-                app,
-                block.key,
-                &block.caption,
-                vec![Group::new(
-                    "",
-                    vec![Row::Specimen {
-                        block: block.clone(),
-                        ascender: specimen.ascender,
-                        descender: specimen.descender,
-                    }],
-                )],
-            )
-            .boxed()
+            let groups = vec![Group::new(
+                "",
+                vec![Row::Specimen {
+                    block: block.clone(),
+                    ascender: specimen.ascender,
+                    descender: specimen.descender,
+                }],
+            )];
+            if block.key == "Sidebar Spacing" && !app.collapsed.contains(block.key) {
+                return sized_box(recipes::section(
+                    app,
+                    block.key,
+                    &block.caption,
+                    recipes::panel_stack(()),
+                ))
+                .padding(masonry::properties::Padding {
+                    top: design::PANEL_SECTION_INSET.length(),
+                    bottom: Length::px(0.0),
+                    left: design::PANEL_SECTION_INSET.length(),
+                    right: design::PANEL_SECTION_INSET.length(),
+                })
+                .boxed();
+            }
+            recipes::section_of(app, block.key, &block.caption, groups).boxed()
         })
         .collect::<Vec<_>>();
     recipes::panel_stack(sections)
+}
+
+/// One flexible canvas owns every spacing baseline, including the required examples.
+pub(crate) fn spacing_canvas(app: &Workspace) -> Option<impl WidgetView<Workspace> + use<>> {
+    if app.collapsed.contains("Sidebar Spacing") {
+        return None;
+    }
+    let proof = specimen(app);
+    let base = proof
+        .blocks
+        .last()
+        .filter(|block| block.key == "Sidebar Spacing")?;
+    let inset = design::PANEL_SECTION_INSET.px();
+    let em = (proof.ascender - proof.descender).max(1.0);
+    let natural = line_scales(base, design::DOCK_WIDTH - 2.0 * inset, em)[0]
+        * em
+        * LINE
+        * base.lines.len() as f64;
+    let ink = app.palette.proof_ink();
+    Some(
+        // The cached specimen is one allocation until the document or the master changes.
+        keyed_canvas(
+            (Arc::as_ptr(&proof) as usize, ink),
+            move |_, scene, size: Size| {
+                let base = proof.blocks.last().unwrap();
+                let width = size.width - 2.0 * inset;
+                if width <= 0.0 || size.height <= 0.0 {
+                    return;
+                }
+                let nominal = line_scales(base, width, em)[0];
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "a rounded, non-negative count of lines that fit the panel"
+                )]
+                let count =
+                    ((size.height / (nominal * em * LINE)).round() as usize).max(base.lines.len());
+                let runs: Vec<_> = base
+                    .lines
+                    .iter()
+                    .chain(proof.extra_spacing.iter().cycle())
+                    .take(count)
+                    .collect();
+                let scale = runs
+                    .iter()
+                    .fold(nominal, |s, run| s.min(width / run.width))
+                    .min(size.height / (runs.len() as f64 * em));
+                let last_bottom = runs
+                    .last()
+                    .unwrap()
+                    .paths
+                    .iter()
+                    .filter(|p| !p.elements().is_empty())
+                    .map(|p| p.bounding_box().y0)
+                    .reduce(f64::min)
+                    .unwrap_or(0.0);
+                let first = scale * proof.ascender;
+                let last = size.height + last_bottom * scale;
+                let leading = (last - first) / runs.len().saturating_sub(1).max(1) as f64;
+                let mut painter = Painter::new(scene);
+                for (i, run) in runs.iter().enumerate() {
+                    let baseline = if runs.len() == 1 {
+                        last
+                    } else {
+                        first + i as f64 * leading
+                    };
+                    let transform = Affine::new([scale, 0.0, 0.0, -scale, inset, baseline]);
+                    for path in &run.paths {
+                        painter.fill(path, ink).transform(transform).draw();
+                    }
+                }
+            },
+        )
+        .dims(Dimensions::new(
+            Dim::Stretch,
+            Dim::Fixed(Length::px(natural)),
+        )),
+    )
 }
 
 /// One proof body without a second caption, divider, or scrolling area.
@@ -100,23 +196,28 @@ pub(crate) fn block_view(
 ) -> impl WidgetView<Workspace> + use<> {
     let specimen = Specimen {
         blocks: vec![block],
+        extra_spacing: Vec::new(),
         ascender,
         descender,
     };
     let width = design::DOCK_WIDTH - 2.0 * design::PANEL_SECTION_INSET.px();
     let height = layout(None, &specimen, width, f64::INFINITY);
     let pal = app.palette.clone();
-    sized_box(canvas(
-        move |_app: &mut Workspace, _ctx, scene, size: Size| {
-            let mut painter: Painter<'_> = Painter::new(scene);
-            layout(
-                Some((&mut painter, pal.proof_ink())),
-                &specimen,
-                size.width,
-                size.height,
-            );
-        },
-    ))
+    let key = (
+        specimen.blocks.clone(),
+        ascender,
+        descender,
+        pal.proof_ink(),
+    );
+    sized_box(keyed_canvas(key, move |_ctx, scene, size: Size| {
+        let mut painter: Painter<'_> = Painter::new(scene);
+        layout(
+            Some((&mut painter, pal.proof_ink())),
+            &specimen,
+            size.width,
+            size.height,
+        );
+    }))
     .dims(Dimensions::new(
         Dim::Stretch,
         Dim::Fixed(Length::px(height)),
@@ -132,18 +233,65 @@ fn specimen(app: &Workspace) -> Arc<Specimen> {
             .map(|value| value.to_bits())
             .collect(),
         app.selected,
+        // A folded block is listed without its lines, so opening it builds again.
+        [
+            "Sidebar Waterfall",
+            "Basic Latin",
+            "Basic Arabic",
+            "Basic Hebrew",
+        ]
+        .map(|key| app.collapsed.contains(key)),
     );
     CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if let Some((cached, specimen)) = cache.as_ref()
-            && *cached == key
-        {
+        // An edit makes every stored specimen stale.
+        cache.retain(|(cached, _)| cached.0 == key.0);
+        if let Some((_, specimen)) = cache.iter().find(|(cached, _)| *cached == key) {
             return specimen.clone();
         }
         let specimen = Arc::new(build(app));
-        *cache = Some((key, specimen.clone()));
+        if cache.len() >= CACHE_LIMIT {
+            cache.remove(0);
+        }
+        cache.push((key, specimen.clone()));
         specimen
     })
+}
+
+/// Shape each pair as continuous text, then fill its visual right edge.
+fn spacing_rows(c: char, em: f64, shape: impl Fn(&str) -> Option<Run>) -> Vec<Run> {
+    let samples = spacing_strings(c);
+    let mut rows = samples
+        .chunks(2)
+        .filter_map(|pair| {
+            let text = pair.concat();
+            shape(&text).map(|run| (text, run))
+        })
+        .collect::<Vec<_>>();
+    let measure = design::DOCK_WIDTH - 2.0 * design::PANEL_SECTION_INSET.px();
+    let limit = rows
+        .iter()
+        .map(|(_, run)| run.width)
+        .fold(measure * em / 36.0, f64::max);
+    for (text, run) in &mut rows {
+        while run.width < limit {
+            if run.rtl {
+                text.insert(0, c);
+            } else {
+                text.push(c);
+            }
+            let Some(next) = shape(text) else {
+                break;
+            };
+            if next.width <= run.width || next.width > limit {
+                break;
+            }
+            *run = next;
+        }
+        // The shaped paths already encode writing direction. Align the row to the left inset.
+        run.rtl = false;
+    }
+    rows.into_iter().map(|(_, run)| run).collect()
 }
 
 /// Which script's proof strings a character takes.
@@ -260,35 +408,21 @@ fn build(app: &Workspace) -> Specimen {
         .iter()
         .filter_map(|glyph| glyph.codepoint)
         .collect();
-    let shape = |text: &str| -> Option<Run> {
-        if !text
-            .chars()
+    let is_covered = |text: &str| {
+        text.chars()
             .filter(|c| !c.is_whitespace() && *c != '\u{0640}')
             .all(|c| covered.contains(&c))
-        {
-            return None;
-        }
-        let placed = text_tool::TextState::new(&inputs.clone().with_text(text)).placed();
-        let start = placed
-            .iter()
-            .map(|sort| sort.origin.x)
-            .fold(f64::INFINITY, f64::min);
-        let end = placed
-            .iter()
-            .map(|sort| sort.origin.x + sort.advance)
-            .fold(f64::NEG_INFINITY, f64::max);
-        if !start.is_finite() || end <= start {
-            return None;
-        }
-        let shift = Affine::translate((-start, 0.0));
-        Some(Run {
-            paths: placed.into_iter().map(|sort| shift * sort.path).collect(),
-            width: end - start,
-            rtl: text
-                .chars()
-                .any(|c| matches!(script_of(c), Script::Arabic | Script::Hebrew)),
-        })
     };
+    let shape = |text: &str| -> Option<Run> {
+        if !is_covered(text) {
+            return None;
+        }
+        shape_line(&inputs, text)
+    };
+    // A folded block shows only its header. It is listed when the font covers its text,
+    // and its lines are shaped when it opens: shaping every block takes several
+    // milliseconds on each new master or selection.
+    let folded = |key: &str| app.collapsed.contains(key);
 
     let mut blocks = Vec::new();
     // The selected glyph's character: its own, or its base glyph's for an unencoded form
@@ -305,31 +439,35 @@ fn build(app: &Workspace) -> Specimen {
         })
     });
     let selected_script = character.map(script_of);
-    if let (Some(glyph), Some(c)) = (selected, character) {
-        let lines: Vec<Run> = spacing_strings(c).iter().filter_map(|s| shape(s)).collect();
-        if !lines.is_empty() {
-            blocks.push(Block {
-                key: "Sidebar Spacing",
-                caption: format!("Spacing · {}", glyph.name),
-                lines,
-                setting: Setting::Even { max_em: 36.0 },
-            });
+    let waterfall = character.map(waterfall_string).and_then(|text| {
+        if folded("Sidebar Waterfall") {
+            is_covered(&text).then(Vec::new)
+        } else {
+            shape(&text).map(|run| vec![run; 6])
         }
-        if let Some(run) = shape(&waterfall_string(c)) {
-            blocks.push(Block {
-                key: "Sidebar Waterfall",
-                caption: "Waterfall".into(),
-                lines: vec![run; 6],
-                setting: Setting::Waterfall { max_em: 72.0 },
-            });
-        }
+    });
+    if let Some(lines) = waterfall {
+        blocks.push(Block {
+            key: "Sidebar Waterfall",
+            caption: "Waterfall".into(),
+            lines,
+            setting: Setting::Waterfall { max_em: 72.0 },
+        });
     }
     // The selected glyph's script first, then the others the font covers.
     let mut sets = basic_sets();
     sets.sort_by_key(|(script, _, _)| Some(*script) != selected_script);
     for (_, caption, lines) in sets {
-        let lines: Vec<Run> = lines.iter().filter_map(|line| shape(line)).collect();
-        if lines.len() >= 2 {
+        let (count, lines) = if folded(caption) {
+            (
+                lines.iter().filter(|line| is_covered(line)).count(),
+                Vec::new(),
+            )
+        } else {
+            let lines: Vec<Run> = lines.iter().filter_map(|line| shape(line)).collect();
+            (lines.len(), lines)
+        };
+        if count >= 2 {
             blocks.push(Block {
                 key: caption,
                 caption: caption.into(),
@@ -338,11 +476,144 @@ fn build(app: &Workspace) -> Specimen {
             });
         }
     }
+    if let (Some(glyph), Some(c)) = (selected, character) {
+        let lines = spacing_rows(
+            c,
+            (app.font.ascender() - app.font.descender()).max(1.0),
+            shape,
+        );
+        if !lines.is_empty() {
+            blocks.push(Block {
+                key: "Sidebar Spacing",
+                caption: format!("Spacing · {}", glyph.name),
+                lines,
+                setting: Setting::Even { max_em: 36.0 },
+            });
+        }
+    }
+    let mut extra_spacing = Vec::new();
+    if let Some(c) = character
+        && blocks.last().is_some_and(|b| b.key == "Sidebar Spacing")
+    {
+        let controls = match script_of(c) {
+            Script::Arabic => "بتمهلويد",
+            Script::Hebrew => "הסתנכלרב",
+            Script::Figures => "0123456789",
+            _ => "HOnovaxTVe",
+        };
+        for (a, b) in controls.chars().zip(controls.chars().cycle().skip(1)) {
+            if let Some(run) = shape(&format!("{a}{c}{b}{c}{c}{a}{c}{b}{a}{c}")) {
+                extra_spacing.push(run);
+            }
+        }
+    }
     Specimen {
+        extra_spacing,
         blocks,
         ascender: app.font.ascender(),
         descender: app.font.descender(),
     }
+}
+
+/// Shape one line of `text`, moved to start at x = 0.
+fn shape_line(inputs: &text_tool::TextInputs, text: &str) -> Option<Run> {
+    let placed = text_tool::TextState::new(&inputs.clone().with_text(text)).placed();
+    let start = placed
+        .iter()
+        .map(|sort| sort.origin.x)
+        .fold(f64::INFINITY, f64::min);
+    let end = placed
+        .iter()
+        .map(|sort| sort.origin.x + sort.advance)
+        .fold(f64::NEG_INFINITY, f64::max);
+    if !start.is_finite() || end <= start {
+        return None;
+    }
+    let shift = Affine::translate((-start, 0.0));
+    Some(Run {
+        paths: placed
+            .into_iter()
+            .map(|sort| {
+                (shift * Affine::translate(sort.origin.to_vec2())) * (*sort.outline).clone()
+            })
+            .collect(),
+        width: end - start,
+        rtl: text
+            .chars()
+            .any(|c| matches!(script_of(c), Script::Arabic | Script::Hebrew)),
+    })
+}
+
+/// The most lines the live proof sets; later words are left out.
+const LIVE_MAX_LINES: usize = 8;
+/// The live proof's em size range and default, in pixels.
+pub(crate) const LIVE_EM_RANGE: (f64, f64) = (16.0, 120.0);
+/// The size a proof starts at.
+pub(crate) const LIVE_EM_DEFAULT: f64 = 40.0;
+
+/// `text` shaped from the live outline of the open glyph, for the Proof section of the editor
+/// panel, set at `size` pixels of em and wrapped at spaces to the panel's width.
+/// The shaping options of the Shaping section apply. `None` when nothing has ink or advance.
+pub(crate) fn live_block(app: &Workspace, text: &str, size: f64) -> Option<(Block, f64, f64)> {
+    let inputs = text_tool::TextInputs::new(&app.font)
+        .with_location(&app.font, &app.axis_values)
+        .with_shaping_options(
+            &app.text_features_disabled,
+            app.text_script.as_deref(),
+            app.text_language.as_deref(),
+        );
+    // Off a master, the interpolated font is what the designer reads.
+    let inputs = if app.on_active_master() {
+        let mut live = app.session.outline();
+        live.extend(app.session.components.clone());
+        inputs.with_live_outline(&app.session.glyph_name, Arc::new(live))
+    } else {
+        inputs
+    };
+    let ascender = app.font.ascender();
+    let descender = app.font.descender();
+    let em = (ascender - descender).max(1.0);
+    let measure = design::DOCK_WIDTH - 2.0 * design::PANEL_SECTION_INSET.px();
+    // Words fill each line at `size` pixels of em; a word wider than the panel has its own
+    // line and makes every line smaller.
+    let fits = |run: &Run| run.width * size / em <= measure;
+    let mut lines: Vec<Run> = Vec::new();
+    let mut line = String::new();
+    let mut shaped: Option<Run> = None;
+    for word in text.split_whitespace() {
+        let candidate = if line.is_empty() {
+            word.to_owned()
+        } else {
+            format!("{line} {word}")
+        };
+        let run = shape_line(&inputs, &candidate);
+        if line.is_empty() || run.as_ref().is_some_and(&fits) {
+            (line, shaped) = (candidate, run);
+        } else {
+            lines.extend(shaped.take());
+            shaped = shape_line(&inputs, word);
+            line = word.to_owned();
+        }
+        if lines.len() >= LIVE_MAX_LINES {
+            break;
+        }
+    }
+    if lines.len() < LIVE_MAX_LINES {
+        lines.extend(shaped);
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    Some((
+        Block {
+            key: "Proof",
+            caption: String::new(),
+            lines,
+            setting: Setting::Even { max_em: size },
+        },
+        ascender,
+        descender,
+    ))
 }
 
 /// The smallest waterfall line, in pixels of em.
@@ -409,7 +680,7 @@ fn layout(
                 };
                 let t = Affine::new([*scale, 0.0, 0.0, -scale, x, baseline]);
                 for path in &run.paths {
-                    painter.fill(&(t * path.clone()), *ink).draw();
+                    painter.fill(path, *ink).transform(t).draw();
                 }
             }
             y += line;
@@ -421,6 +692,60 @@ fn layout(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spacing_uses_the_extra_height_of_the_glyph_sidebar() {
+        use crate::application::view::panels::tabs::sidebar;
+        use crate::application::view::render::panel_resize_tests_support::context;
+        use masonry::core::{Widget, WidgetRef};
+        use masonry_testing::TestHarness;
+        use xilem::core::View;
+
+        fn last_canvas_height(widget: WidgetRef<'_, dyn Widget>) -> Option<(f64, f64)> {
+            if widget.short_type_name() == "Canvas" {
+                let ctx = widget.ctx();
+                let height = ctx.border_box().height();
+                return Some((height, ctx.to_window((0.0, height).into()).y));
+            }
+            widget
+                .children()
+                .into_iter()
+                .filter_map(last_canvas_height)
+                .last()
+        }
+
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/font-sources/variable-fonts/VirtuaGrotesk/VirtuaGrotesk-Regular.ufo");
+        let mut app = Workspace::open(&fixture).unwrap();
+        app.selected = app.font.index_of("A");
+        let height = |app: &mut Workspace, window_height| {
+            let (pod, _) = sized_box(sidebar(app)).build(&mut context(), app);
+            let mut harness = TestHarness::create_with_size(
+                crate::application::view::default_property_set(),
+                pod.new_widget,
+                (254, window_height),
+            );
+            let _ = harness.render();
+            let (height, bottom) = last_canvas_height(harness.root_widget().as_dyn()).unwrap();
+            assert_eq!(
+                f64::from(window_height) - bottom,
+                design::PANEL_SECTION_INSET.px()
+            );
+            height
+        };
+        let short = height(&mut app, 1000);
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a rounded test width in logical pixels, below 1000"
+        )]
+        let required = 1000 - short.round() as u32;
+        for slack in [160, 180, 200, 220] {
+            assert!((height(&mut app, required + slack) - f64::from(slack)).abs() < 1.0);
+        }
+        let tall = height(&mut app, 1200);
+        assert!((tall - short - 200.0).abs() < 1.0, "{short} -> {tall}");
+    }
 
     #[test]
     fn proofs_fold_independently_and_keep_their_state_when_selection_changes() {
@@ -437,8 +762,11 @@ mod tests {
         let mut app = Workspace::untitled().expect("blank font");
         app.selected = app.font.index_of("A");
         app.set_theme("gray");
+        assert!(!app.collapsed.contains("Sidebar Spacing"));
+        app.collapsed.insert("Sidebar Spacing");
         let blocks = specimen(&app);
         assert!(blocks.blocks.len() >= 3);
+        assert_eq!(blocks.blocks.last().unwrap().key, "Sidebar Spacing");
         assert!(
             blocks
                 .blocks
@@ -446,7 +774,13 @@ mod tests {
                 .all(|block| app.collapsed.contains(block.key))
         );
         let mut ctx = context();
-        let mut view = sized_box(glyph_specimen(&app));
+        let proof_view = |app: &Workspace| {
+            sized_box(recipes::panel_stack((
+                glyph_specimen(app),
+                spacing_canvas(app),
+            )))
+        };
+        let mut view = proof_view(&app);
         let (pod, mut state) = view.build(&mut ctx, &mut app);
         let mut harness = TestHarness::create_with_size(
             crate::application::view::default_property_set(),
@@ -465,7 +799,7 @@ mod tests {
             if !app.collapsed.remove(key) {
                 app.collapsed.insert(key);
             }
-            let next = sized_box(glyph_specimen(&app));
+            let next = proof_view(&app);
             harness.edit_root_widget(|root| {
                 next.rebuild(&view, &mut state, &mut ctx, root, &mut app);
             });
@@ -474,7 +808,7 @@ mod tests {
             let _ = harness.render();
         }
         app.selected = app.font.index_of("B");
-        let next = sized_box(glyph_specimen(&app));
+        let next = proof_view(&app);
         harness.edit_root_widget(|root| {
             next.rebuild(&view, &mut state, &mut ctx, root, &mut app);
         });
@@ -521,6 +855,48 @@ mod tests {
         assert!(scales.windows(2).all(|pair| pair[1] < pair[0]));
         assert!(scales.iter().all(|scale| scale * 1000.0 >= SMALLEST_EM));
         assert!(scales.len() < 8);
+    }
+
+    #[test]
+    fn the_panel_proof_follows_the_live_outline() {
+        use crate::application::view::render::panel_resize_tests_support::workspace_for_layout;
+        use masonry::kurbo::Shape as _;
+        let mut app = workspace_for_layout();
+        let top = |app: &Workspace| {
+            let (block, _, _) = live_block(app, "A A", LIVE_EM_DEFAULT).expect("A has ink");
+            block.lines[0]
+                .paths
+                .iter()
+                .map(|path| path.bounding_box().y1)
+                .fold(f64::MIN, f64::max)
+        };
+        let before = top(&app);
+        let mut session = (*app.session).clone();
+        session.select_all();
+        assert!(session.nudge(0.0, 40.0));
+        app.session = Arc::new(session);
+        assert!((top(&app) - before - 40.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_panel_proof_wraps_into_more_lines_as_its_size_grows() {
+        use crate::application::view::render::panel_resize_tests_support::workspace_for_layout;
+        let app = workspace_for_layout();
+        let lines = |size: f64| {
+            live_block(&app, "A A A A A A A A A A A A", size)
+                .expect("A has ink")
+                .0
+                .lines
+                .len()
+        };
+        let (small, large) = (lines(LIVE_EM_RANGE.0), lines(LIVE_EM_RANGE.1));
+        assert!(
+            small >= 1 && large > small,
+            "{small} lines small, {large} lines large"
+        );
+        assert!(large <= LIVE_MAX_LINES);
+        // One word wider than the panel still sets, on a line of its own.
+        assert_eq!(lines(4000.0), LIVE_MAX_LINES);
     }
 
     #[test]

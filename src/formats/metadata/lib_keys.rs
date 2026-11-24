@@ -1,21 +1,66 @@
 // Copyright 2026 the Runebender Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Runebender's own `com.runebender.*` lib keys, and `public.postscriptNames`.
+//! Runebender's own `com.runebender.*` lib keys and public glyph metadata.
 //!
-//! Masks, saved sidebar filters, annotations, and HOI intermediates.
+//! Masks and the keys of foreign and proposal sources.
 //! Each key has one reader and one writer here, so the on-disk format
 //! is defined in one place.
 
 use std::collections::HashSet;
 
-#[cfg(test)]
-use kurbo::BezPath;
+/// Font lib key recording which original foreign-source glyphs were imported.
+pub const FOREIGN_GLYPHS_KEY: &str = "com.runebender.foreignGlyphs";
 
-#[cfg(test)]
-use crate::formats::ufo::bezpath_to_contour;
-#[cfg(test)]
-use crate::outline::glyph_paths::contour_to_bezpath;
+/// Read original glyph import status, independently of the current glyph inventory.
+pub fn read_foreign_glyphs(font: &norad::Font) -> Option<std::collections::HashMap<&str, bool>> {
+    font.lib
+        .get(FOREIGN_GLYPHS_KEY)?
+        .as_dictionary()?
+        .iter()
+        .map(|(name, imported)| Some((name.as_str(), imported.as_boolean()?)))
+        .collect()
+}
+
+/// Record which original glyphs were imported, including an empty inventory.
+pub fn write_foreign_glyphs<'a>(
+    lib: &mut plist::Dictionary,
+    imported: impl IntoIterator<Item = &'a str>,
+    original: impl IntoIterator<Item = &'a str>,
+) {
+    let imported: HashSet<_> = imported.into_iter().collect();
+    lib.insert(
+        FOREIGN_GLYPHS_KEY.into(),
+        plist::Value::Dictionary(
+            original
+                .into_iter()
+                .map(|name| {
+                    (
+                        name.to_owned(),
+                        plist::Value::Boolean(imported.contains(name)),
+                    )
+                })
+                .collect(),
+        ),
+    );
+}
+
+/// Component object-lib key holding its original Fontra payload.
+pub const FONTRA_COMPONENT_KEY: &str = "com.runebender.fontraComponent";
+
+/// Read preserved Fontra data only while this remains the same component base.
+pub fn read_fontra_component(component: &norad::Component) -> Option<serde_json::Value> {
+    let text = component.lib()?.get(FONTRA_COMPONENT_KEY)?.as_string()?;
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    (value["name"].as_str() == Some(component.base.as_str())).then_some(value)
+}
+
+/// Bind unsupported Fontra data to the component's own stable UFO identity.
+pub fn write_fontra_component(component: &mut norad::Component, value: &serde_json::Value) {
+    let mut lib = component.lib().cloned().unwrap_or_default();
+    lib.insert(FONTRA_COMPONENT_KEY.into(), value.to_string().into());
+    component.replace_lib(lib);
+}
 
 /// Original Python Babelfont layer identity retained when importing into UFO.
 pub const BABELFONT_LAYER_KEY: &str = "com.runebender.babelfontLayer";
@@ -110,56 +155,8 @@ pub fn write_masks(glyph: &mut norad::Glyph, masks: &HashSet<usize>) {
     );
 }
 
-/// Cut the mask contours out of the rest and drop them.
-///
-/// The result is the final outline every compiler understands.
-/// Returns false when the glyph has no masks or the boolean fails.
-#[cfg(test)]
-pub fn bake_masks(glyph: &mut norad::Glyph) -> bool {
-    let masks = read_masks(glyph);
-    if masks.is_empty() || masks.len() >= glyph.contours.len() {
-        return false;
-    }
-    let mut keep = BezPath::new();
-    let mut cut = BezPath::new();
-    for (ci, contour) in glyph.contours.iter().enumerate() {
-        let path = contour_to_bezpath(contour);
-        let target = if masks.contains(&ci) {
-            &mut cut
-        } else {
-            &mut keep
-        };
-        target.extend(path.elements().iter().copied());
-    }
-    let Ok(result) = linesweeper::binary_op(
-        &keep,
-        &cut,
-        linesweeper::FillRule::NonZero,
-        linesweeper::BinaryOp::Difference,
-    ) else {
-        return false;
-    };
-    let empty = std::collections::HashMap::new();
-    let mut contours = Vec::new();
-    for contour in result.contours() {
-        if let Some(c) = bezpath_to_contour(&contour.path, &empty) {
-            contours.push(c);
-        }
-    }
-    if contours.is_empty() {
-        return false;
-    }
-    glyph.contours = contours;
-    write_masks(glyph, &HashSet::new());
-    true
-}
-
-/// Font lib key for the saved sidebar filters.
-///
-/// A saved filter is a search the user pinned, stored as an array
-/// of `{name, query}` dicts. Ours reuse the search-field predicate
-/// language. Glyphs calls these smart filters.
-pub const SAVED_FILTERS_KEY: &str = "com.runebender.savedFilters";
+/// UFO-standard ordered glyph names.
+pub const GLYPH_ORDER_KEY: &str = "public.glyphOrder";
 
 /// UFO-standard glyph name -> production name mapping.
 ///
@@ -174,191 +171,94 @@ pub fn read_production_name(font: &norad::Font, glyph: &str) -> Option<String> {
     }
 }
 
-/// Set or clear one glyph's production name in `public.postscriptNames`.
-/// An empty `text` clears it, and removes the dictionary when it was
-/// the last entry. Returns true when the lib changed.
-pub fn write_production_name(font: &mut norad::Font, glyph: &str, text: &str) -> bool {
-    let dict = match font.lib.get_mut(PSNAMES_KEY) {
-        Some(plist::Value::Dictionary(d)) => d,
-        _ => {
-            if text.is_empty() {
-                return false;
-            }
-            font.lib.insert(
-                PSNAMES_KEY.into(),
-                plist::Value::Dictionary(plist::Dictionary::new()),
-            );
-            match font.lib.get_mut(PSNAMES_KEY) {
-                Some(plist::Value::Dictionary(d)) => d,
-                _ => return false,
-            }
-        }
-    };
-    let before = dict.get(glyph).and_then(|v| v.as_string());
-    if text.is_empty() {
-        if before.is_none() {
-            return false;
-        }
-        dict.remove(glyph);
-        if dict.is_empty() {
-            font.lib.remove(PSNAMES_KEY);
-        }
-        true
-    } else if before != Some(text) {
-        dict.insert(glyph.to_string(), plist::Value::String(text.to_string()));
-        true
-    } else {
-        false
-    }
-}
-
-/// Reads the saved sidebar filters from the font lib as `(name, query)` pairs. Malformed rows are skipped.
-pub fn read_saved_filters(font: &norad::Font) -> Vec<(String, String)> {
-    let Some(plist::Value::Array(rows)) = font.lib.get(SAVED_FILTERS_KEY) else {
-        return Vec::new();
-    };
-    rows.iter()
-        .filter_map(|row| {
-            let dict = row.as_dictionary()?;
-            let name = dict.get("name")?.as_string()?.to_string();
-            let query = dict.get("query")?.as_string()?.to_string();
-            Some((name, query))
-        })
-        .collect()
-}
-
-/// Writes the saved sidebar filters to the font lib. An empty slice removes the key.
-pub fn write_saved_filters(font: &mut norad::Font, filters: &[(String, String)]) {
-    if filters.is_empty() {
-        font.lib.remove(SAVED_FILTERS_KEY);
-        return;
-    }
-    let rows = filters
-        .iter()
-        .map(|(name, query)| {
-            let mut dict = plist::Dictionary::new();
-            dict.insert("name".into(), plist::Value::String(name.clone()));
-            dict.insert("query".into(), plist::Value::String(query.clone()));
-            plist::Value::Dictionary(dict)
-        })
-        .collect();
-    font.lib
-        .insert(SAVED_FILTERS_KEY.into(), plist::Value::Array(rows));
-}
-
-/// Glyph lib key holding editor annotations as an array of `{kind, x, y, text}` dicts.
-pub const ANNOTATIONS_KEY: &str = "com.runebender.annotations";
-
-#[derive(Clone, Debug, PartialEq)]
-/// One editor annotation pinned to a design-space point.
-pub struct Annotation {
-    /// Annotation kind, such as `arrow`, `circle`, `plus`, `minus`, or `note`.
-    pub kind: String,
-    /// X position in font units.
-    pub x: f64,
-    /// Y position in font units.
-    pub y: f64,
-    /// Optional note text; empty when the annotation has no text.
-    pub text: String,
-}
-
-/// Reads the annotations from the glyph lib. Rows without `kind`, `x`, and `y` are skipped.
-pub fn read_annotations(glyph: &norad::Glyph) -> Vec<Annotation> {
-    glyph
-        .lib
-        .get(ANNOTATIONS_KEY)
-        .and_then(|v| v.as_array())
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|row| {
-                    let dict = row.as_dictionary()?;
-                    Some(Annotation {
-                        kind: dict.get("kind")?.as_string()?.to_string(),
-                        x: dict.get("x")?.as_real()?,
-                        y: dict.get("y")?.as_real()?,
-                        text: dict
-                            .get("text")
-                            .and_then(|t| t.as_string())
-                            .unwrap_or_default()
-                            .to_string(),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Writes the annotations to the glyph lib. An empty slice removes the key.
-pub fn write_annotations(glyph: &mut norad::Glyph, notes: &[Annotation]) {
-    if notes.is_empty() {
-        glyph.lib.remove(ANNOTATIONS_KEY);
-        return;
-    }
-    let rows = notes
-        .iter()
-        .map(|a| {
-            let mut dict = plist::Dictionary::new();
-            dict.insert("kind".into(), plist::Value::String(a.kind.clone()));
-            dict.insert("x".into(), plist::Value::Real(a.x));
-            dict.insert("y".into(), plist::Value::Real(a.y));
-            if !a.text.is_empty() {
-                dict.insert("text".into(), plist::Value::String(a.text.clone()));
-            }
-            plist::Value::Dictionary(dict)
-        })
-        .collect();
-    glyph
-        .lib
-        .insert(ANNOTATIONS_KEY.into(), plist::Value::Array(rows));
-}
-
-/// Glyph lib key for per-node HOI intermediate points.
+/// Rename references without rebuilding lib values or changing production names.
 ///
-/// An intermediate point makes the node's interpolation path curve
-/// through it at the axis middle. This is the "Intermediate Point"
-/// in Glyphs.
-///
-/// Points are stored on the axis-min master's glyph, in absolute
-/// design coordinates, keyed `"contour,point"`. The key is the
-/// source of truth for re-editing; compilers consume the baked
-/// brace layers.
-pub use crate::font::model::hoi::HOI_INTERMEDIATE_KEY;
-
-/// Reads HOI intermediate points from the glyph lib, keyed by `(contour, point)` index, as absolute design coordinates.
-pub fn read_hoi_intermediates(
-    glyph: &norad::Glyph,
-) -> std::collections::HashMap<(usize, usize), (f64, f64)> {
-    glyph
-        .lib
-        .get(HOI_INTERMEDIATE_KEY)
-        .and_then(|value| crate::font::model::hoi::HoiIntermediates::from_plist(value).ok())
-        .map(|value| value.points().collect())
-        .unwrap_or_default()
+/// Malformed containers and affected production values reject the operation, as do
+/// occupied destination entries. Unrelated opaque values, including non-string
+/// glyph-order entries, are retained verbatim.
+pub(crate) fn rename_glyph_lib_references(
+    lib: &mut norad::Plist,
+    old: &str,
+    new: &str,
+) -> Result<bool, String> {
+    if old == new {
+        return Ok(false);
+    }
+    update_glyph_lib_references(lib, old, Some(new))
 }
 
-/// Writes HOI intermediate points to the glyph lib. An empty map removes the key.
-pub fn write_hoi_intermediates(
-    glyph: &mut norad::Glyph,
-    map: &std::collections::HashMap<(usize, usize), (f64, f64)>,
-) {
-    crate::font::model::hoi::HoiIntermediates::from_points(
-        map.iter().map(|(index, point)| (*index, *point)),
-    )
-    .expect("HOI source points must be finite")
-    .write_to_lib(&mut glyph.lib);
+/// Remove only the named glyph's order entries and production-name mapping.
+pub(crate) fn remove_glyph_lib_references(
+    lib: &mut norad::Plist,
+    name: &str,
+) -> Result<bool, String> {
+    update_glyph_lib_references(lib, name, None)
 }
 
-/// Quadratic through Q at the middle: position at `t` between `a`
-/// and `b` when the path must pass through `q` at t = 0.5.
-pub fn hoi_quad_at(a: (f64, f64), b: (f64, f64), q: (f64, f64), t: f64) -> (f64, f64) {
-    // Control C with (1-t)²A + 2(1-t)tC + t²B passing Q at 0.5:
-    // Q = A/4 + C/2 + B/4  =>  C = 2Q - (A+B)/2.
-    let c = (2.0 * q.0 - (a.0 + b.0) / 2.0, 2.0 * q.1 - (a.1 + b.1) / 2.0);
-    let u = 1.0 - t;
-    (
-        u * u * a.0 + 2.0 * u * t * c.0 + t * t * b.0,
-        u * u * a.1 + 2.0 * u * t * c.1 + t * t * b.1,
-    )
+fn update_glyph_lib_references(
+    lib: &mut norad::Plist,
+    old: &str,
+    new: Option<&str>,
+) -> Result<bool, String> {
+    // Validate both keys before changing either: even direct codec callers get
+    // an unchanged lib on error.
+    let has_order_entry = match lib.get(GLYPH_ORDER_KEY) {
+        None => false,
+        Some(plist::Value::Array(order)) => {
+            let present = order.iter().any(|value| value.as_string() == Some(old));
+            if present
+                && new.is_some_and(|new| order.iter().any(|value| value.as_string() == Some(new)))
+            {
+                return Err(format!(
+                    "{GLYPH_ORDER_KEY} already contains the destination glyph"
+                ));
+            }
+            present
+        }
+        Some(_) => return Err(format!("{GLYPH_ORDER_KEY} must be an array")),
+    };
+    let has_production_name = match lib.get(PSNAMES_KEY) {
+        None => false,
+        Some(plist::Value::Dictionary(names)) => {
+            if let Some(value) = names.get(old) {
+                if value.as_string().is_none() {
+                    return Err(format!("{PSNAMES_KEY} entry for {old:?} must be a string"));
+                }
+                if new.is_some_and(|new| names.contains_key(new)) {
+                    return Err(format!(
+                        "{PSNAMES_KEY} already contains the destination glyph"
+                    ));
+                }
+                true
+            } else {
+                false
+            }
+        }
+        Some(_) => return Err(format!("{PSNAMES_KEY} must be a dictionary")),
+    };
+
+    if has_order_entry && let Some(plist::Value::Array(order)) = lib.get_mut(GLYPH_ORDER_KEY) {
+        if let Some(new) = new {
+            for value in order {
+                if value.as_string() == Some(old) {
+                    *value = plist::Value::String(new.to_owned());
+                }
+            }
+        } else {
+            order.retain(|value| value.as_string() != Some(old));
+        }
+    }
+    if has_production_name && let Some(plist::Value::Dictionary(names)) = lib.get_mut(PSNAMES_KEY) {
+        if let Some(value) = names.remove(old)
+            && let Some(new) = new
+        {
+            names.insert(new.to_owned(), value);
+        }
+        if names.is_empty() {
+            lib.remove(PSNAMES_KEY);
+        }
+    }
+    Ok(has_order_entry || has_production_name)
 }
 
 #[cfg(test)]
@@ -379,21 +279,61 @@ mod tests {
         );
         assert_eq!(read_production_name(&font, "beh-ar"), None);
     }
+    /// Saved filters and annotations were written by earlier editors.
+    /// Nothing reads them now, but a font that carries them keeps them through a save.
     #[test]
-    fn saved_filters_roundtrip() {
+    fn retired_saved_filter_and_annotation_keys_survive_a_save() {
+        use crate::font::project::Project;
+        use crate::font::variable::SourceId;
+
+        let path = std::env::temp_dir().join(format!(
+            "runebender-retired-lib-keys-{}.ufo",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        let mut filter = plist::Dictionary::new();
+        filter.insert("name".into(), plist::Value::String("wide".into()));
+        filter.insert("query".into(), plist::Value::String("w>600".into()));
+        let filters = plist::Value::Array(vec![plist::Value::Dictionary(filter)]);
+        let mut note = plist::Dictionary::new();
+        note.insert("kind".into(), plist::Value::String("note".into()));
+        note.insert("x".into(), plist::Value::Real(-5.0));
+        note.insert("y".into(), plist::Value::Real(700.0));
+        note.insert("text".into(), plist::Value::String("fix this join".into()));
+        let notes = plist::Value::Array(vec![plist::Value::Dictionary(note)]);
         let mut font = norad::Font::new();
-        assert!(read_saved_filters(&font).is_empty());
-        let filters = vec![
-            ("wide".to_string(), "w>600".to_string()),
-            ("marks".to_string(), "cat:mark".to_string()),
-        ];
-        write_saved_filters(&mut font, &filters);
-        assert_eq!(read_saved_filters(&font), filters);
-        write_saved_filters(&mut font, &[]);
-        assert!(font.lib.get(SAVED_FILTERS_KEY).is_none());
+        font.lib
+            .insert("com.runebender.savedFilters".into(), filters.clone());
+        let mut glyph = norad::Glyph::new("A");
+        glyph.width = 500.0;
+        glyph
+            .lib
+            .insert("com.runebender.annotations".into(), notes.clone());
+        font.default_layer_mut().insert_glyph(glyph);
+        font.save(&path).unwrap();
+
+        let mut project = Project::load(&path).unwrap();
+        let layer = project
+            .document_source(SourceId(0))
+            .unwrap()
+            .default_layer();
+        project
+            .edit_document_layer("A", &layer, |draft| {
+                draft.set_width(612.0)?;
+                Ok(())
+            })
+            .unwrap();
+        project.save().unwrap();
+
+        let saved = norad::Font::load(&path).unwrap();
+        let glyph = saved.get_glyph("A").unwrap();
+        assert_eq!(glyph.width, 612.0);
+        assert_eq!(saved.lib.get("com.runebender.savedFilters"), Some(&filters));
+        assert_eq!(glyph.lib.get("com.runebender.annotations"), Some(&notes));
+        std::fs::remove_dir_all(&path).unwrap();
     }
     #[test]
-    fn masks_roundtrip_and_bake() {
+    fn masks_roundtrip() {
         use norad::{Contour, ContourPoint, PointType};
         let square = |x0: f64, y0: f64, x1: f64, y1: f64| {
             Contour::new(
@@ -405,8 +345,6 @@ mod tests {
             )
         };
         let mut glyph = norad::Glyph::new("mask-test");
-        // A big square with a smaller mask square overlapping its
-        // right edge.
         glyph.contours = vec![
             square(0.0, 0.0, 100.0, 100.0),
             square(60.0, 20.0, 140.0, 80.0),
@@ -415,66 +353,7 @@ mod tests {
         masks.insert(1_usize);
         write_masks(&mut glyph, &masks);
         assert_eq!(read_masks(&glyph), masks);
-        assert!(bake_masks(&mut glyph));
-        // The bite is real: no point reaches past x=60 inside the
-        // mask's y-band, and the mask key is cleared.
+        write_masks(&mut glyph, &HashSet::new());
         assert!(read_masks(&glyph).is_empty());
-        let max_x_in_band = glyph
-            .contours
-            .iter()
-            .flat_map(|c| c.points.iter())
-            .filter(|p| p.y > 25.0 && p.y < 75.0)
-            .map(|p| p.x)
-            .fold(f64::MIN, f64::max);
-        assert!(
-            max_x_in_band <= 61.0,
-            "mask cut the right side: {max_x_in_band}"
-        );
-    }
-    #[test]
-    fn annotations_roundtrip() {
-        let mut glyph = norad::Glyph::new("anno");
-        let notes = vec![
-            Annotation {
-                kind: "arrow".into(),
-                x: 10.0,
-                y: 20.0,
-                text: String::new(),
-            },
-            Annotation {
-                kind: "note".into(),
-                x: -5.0,
-                y: 700.0,
-                text: "fix this join".into(),
-            },
-        ];
-        write_annotations(&mut glyph, &notes);
-        assert_eq!(read_annotations(&glyph), notes);
-        write_annotations(&mut glyph, &[]);
-        assert!(glyph.lib.get(ANNOTATIONS_KEY).is_none());
-    }
-    #[test]
-    fn hoi_quad_passes_through_the_intermediate() {
-        let a = (0.0, 0.0);
-        let b = (100.0, 0.0);
-        let q = (50.0, 40.0);
-        assert_eq!(hoi_quad_at(a, b, q, 0.0), a);
-        assert_eq!(hoi_quad_at(a, b, q, 1.0), b);
-        assert_eq!(hoi_quad_at(a, b, q, 0.5), q);
-        // Quarter stop, worked by hand: control C = (50, 80).
-        let (x, y) = hoi_quad_at(a, b, q, 0.25);
-        assert!((x - 25.0).abs() < 1e-9 && (y - 30.0).abs() < 1e-9);
-    }
-    #[test]
-    fn hoi_intermediates_roundtrip_the_lib_key() {
-        let mut glyph = norad::Glyph::new("hoi-store");
-        let mut map = std::collections::HashMap::new();
-        map.insert((0_usize, 3_usize), (166.0, 73.0));
-        map.insert((2, 0), (-12.0, 400.0));
-        write_hoi_intermediates(&mut glyph, &map);
-        assert_eq!(read_hoi_intermediates(&glyph), map);
-        // Empty map clears the key.
-        write_hoi_intermediates(&mut glyph, &std::collections::HashMap::new());
-        assert!(glyph.lib.get(HOI_INTERMEDIATE_KEY).is_none());
     }
 }
