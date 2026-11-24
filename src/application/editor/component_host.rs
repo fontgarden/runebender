@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Editing a component in place: the session opens the component's base glyph,
 //! but the canvas keeps drawing it where the composite places it.

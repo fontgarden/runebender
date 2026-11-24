@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! What the window shows: the canvases, the panels, the chrome, the
 //! render tree, the design system, the recipes, and the theme.

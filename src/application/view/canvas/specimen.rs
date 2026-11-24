@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! The sidebar specimen: the selected glyph in the contexts a type designer reads it in,
 //! then the basic sets of the scripts the font covers.
