@@ -432,7 +432,7 @@ Defaults chosen where the owner has not decided: `icu_properties` as a direct de
 ### 6.3 Skeleton and dots through ccmp (L, needs 6.2)
 - compose.rs makes static composites from `com.runebender.compose` (glyph_metadata.rs:25).
 - New `assets/data/arabic-skeletons.toml` (code point, skeleton, dot marks); `ccmp_decomposition(...)` in arabic_features.rs reading the existing lib key first. Package A adds extra glyphs to `TextSort`; layout emits one item per glyph.
-- Fixture adds `teh-ar`, `behDotless-ar` forms, `twodotsabove-ar`; `تت` shapes to skeletons with dots on `top`, four layout items.
+- Fixture adds `teh-ar`, `behDotless-ar` forms, `twodotshorizontalabove-ar`; `تت` shapes to skeletons with dots on `top`, four layout items.
 
 ### 6.4 Cursive attachment (M, needs 3.4/3.5)
 - fontbe writes `curs` from `entry`/`exit` (fixture `سسس`). `joining_band` exists (analysis/measure, commands.rs:510).
@@ -463,6 +463,7 @@ basmala; pause marks U+06D6-06DC on a letter; U+06DD with Arabic-Indic and Exten
 
 ### Work packages (disjoint files)
 Step 0, alone first: fixture commit (generate.py, README): tatweel, skeletons and dots, `caret_1`, U+08F0, U+06E1, Arabic-Indic digits with a pair.
+Done 2026-11-24: 68 glyphs; `ccmp` decomposes `teh-ar` into `behDotless-ar` and `twodotshorizontalabove-ar`, the `teh-ar` forms are composites, and `reh-ar` with `one-ar` is a mixed-direction pair that fontc drops.
 - A, text line engine: 6.1, multi-glyph clusters, 6.4 draft overlay. Files: src/text/buffer/*, src/text/layout_tables.rs, application/editor/tools/text.rs, canvas/editor/tools/text.rs, metrics_card.rs, font_model.rs, glyphs_import.rs, glyphs_export.rs.
 - B, feature generators: 6.2, 6.3 generator, `ligature_component_names`. Files: arabic_features.rs, arabic-skeletons.toml, inspector.rs, editor_info.rs, cli features.rs.
 - C, canvas overlays: 6.4 drawing, 6.5, 6.6. Files: analysis/collisions.rs, canvas/editor/arabic_overlays.rs (new), paint.rs, view.rs, menu.rs, widgets/context_menu.rs, launch_options.rs, sections.rs, src/font/ligature_anchors.rs (new), UI-DESIGN.md variable row. Waits for B's function signature.

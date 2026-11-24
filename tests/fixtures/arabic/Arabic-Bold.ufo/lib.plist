@@ -56,6 +56,22 @@
 		<string>alefabove-ar</string>
 		<string>noon-ar</string>
 		<string>dal-ar</string>
+		<string>tatweel-ar</string>
+		<string>behDotless-ar</string>
+		<string>behDotless-ar.init</string>
+		<string>behDotless-ar.medi</string>
+		<string>behDotless-ar.fina</string>
+		<string>teh-ar</string>
+		<string>teh-ar.init</string>
+		<string>teh-ar.medi</string>
+		<string>teh-ar.fina</string>
+		<string>twodotshorizontalabove-ar</string>
+		<string>dotbelow-ar</string>
+		<string>fathatanOpen-ar</string>
+		<string>smallhighdotlessheadofkhah-ar</string>
+		<string>zero-ar</string>
+		<string>one-ar</string>
+		<string>two-ar</string>
 	</array>
 	<key>public.openTypeCategories</key>
 	<dict>
@@ -85,11 +101,23 @@
 		<string>base</string>
 		<key>beh-ar.medi</key>
 		<string>base</string>
+		<key>behDotless-ar</key>
+		<string>base</string>
+		<key>behDotless-ar.fina</key>
+		<string>base</string>
+		<key>behDotless-ar.init</key>
+		<string>base</string>
+		<key>behDotless-ar.medi</key>
+		<string>base</string>
 		<key>dal-ar</key>
 		<string>base</string>
 		<key>damma-ar</key>
 		<string>mark</string>
+		<key>dotbelow-ar</key>
+		<string>mark</string>
 		<key>fatha-ar</key>
+		<string>mark</string>
+		<key>fathatanOpen-ar</key>
 		<string>mark</string>
 		<key>hamzaabove-ar</key>
 		<string>mark</string>
@@ -131,6 +159,8 @@
 		<string>base</string>
 		<key>one</key>
 		<string>base</string>
+		<key>one-ar</key>
+		<string>base</string>
 		<key>period</key>
 		<string>base</string>
 		<key>reh-ar</key>
@@ -147,12 +177,28 @@
 		<string>base</string>
 		<key>shadda-ar</key>
 		<string>mark</string>
+		<key>smallhighdotlessheadofkhah-ar</key>
+		<string>mark</string>
 		<key>space</key>
 		<string>base</string>
 		<key>sukun-ar</key>
 		<string>mark</string>
+		<key>tatweel-ar</key>
+		<string>base</string>
+		<key>teh-ar</key>
+		<string>base</string>
+		<key>teh-ar.fina</key>
+		<string>base</string>
+		<key>teh-ar.init</key>
+		<string>base</string>
+		<key>teh-ar.medi</key>
+		<string>base</string>
 		<key>two</key>
 		<string>base</string>
+		<key>two-ar</key>
+		<string>base</string>
+		<key>twodotshorizontalabove-ar</key>
+		<string>mark</string>
 		<key>yeh-ar</key>
 		<string>base</string>
 		<key>yeh-ar.fina</key>
@@ -162,6 +208,8 @@
 		<key>yeh-ar.medi</key>
 		<string>base</string>
 		<key>zero</key>
+		<string>base</string>
+		<key>zero-ar</key>
 		<string>base</string>
 	</dict>
 </dict>

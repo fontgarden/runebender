@@ -931,7 +931,14 @@ mod tests {
         let tags: Vec<&str> = block.features.iter().map(|f| f.tag.as_str()).collect();
         assert_eq!(tags, ["fina", "medi", "init", "rlig"]);
         assert!(block.kept.is_empty(), "{:?}", block.kept);
-        assert!(block.notes.is_empty(), "{:?}", block.notes);
+        // The fixture has heh and the two dots of teh, and no teh marbuta.
+        assert_eq!(
+            block.notes,
+            [
+                "U+0629 tehMarbuta-ar: no glyph has this code point; an empty glyph with it would \
+              be composed from heh-ar and twodotshorizontalabove-ar"
+            ]
+        );
         let rlig = block.feature("rlig").unwrap();
         assert!(rlig.ignore_marks);
         assert_eq!(

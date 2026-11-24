@@ -5,6 +5,7 @@
   <anchor name="top_2" x="140" y="760" />
   <anchor name="bottom_1" x="360" y="-140" />
   <anchor name="bottom_2" x="140" y="-140" />
+  <anchor name="caret_1" x="250" y="0" />
   <outline>
     <contour>
       <point x="60" y="0" type="line" />

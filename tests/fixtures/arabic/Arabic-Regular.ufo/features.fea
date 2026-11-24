@@ -2,17 +2,24 @@ languagesystem DFLT dflt;
 languagesystem arab dflt;
 languagesystem latn dflt;
 
-@dual = [beh-ar seen-ar lam-ar meem-ar heh-ar yeh-ar];
-@dual.init = [beh-ar.init seen-ar.init lam-ar.init meem-ar.init heh-ar.init yeh-ar.init];
-@dual.medi = [beh-ar.medi seen-ar.medi lam-ar.medi meem-ar.medi heh-ar.medi yeh-ar.medi];
-@joining = [alef-ar reh-ar beh-ar seen-ar lam-ar meem-ar heh-ar yeh-ar];
+@dual = [beh-ar seen-ar lam-ar meem-ar heh-ar yeh-ar behDotless-ar teh-ar];
+@dual.init = [beh-ar.init seen-ar.init lam-ar.init meem-ar.init heh-ar.init yeh-ar.init
+    behDotless-ar.init teh-ar.init];
+@dual.medi = [beh-ar.medi seen-ar.medi lam-ar.medi meem-ar.medi heh-ar.medi yeh-ar.medi
+    behDotless-ar.medi teh-ar.medi];
+@joining = [alef-ar reh-ar beh-ar seen-ar lam-ar meem-ar heh-ar yeh-ar behDotless-ar teh-ar];
 @joining.fina = [alef-ar.fina reh-ar.fina beh-ar.fina seen-ar.fina lam-ar.fina meem-ar.fina
-    heh-ar.fina yeh-ar.fina];
+    heh-ar.fina yeh-ar.fina behDotless-ar.fina teh-ar.fina];
 
 feature ccmp {
     lookup ccmp_alef_hamza {
         sub alefHamzaabove-ar by alef-ar hamzaabove-ar;
     } ccmp_alef_hamza;
+    # teh is the dotless skeleton with two dots above. With ccmp off, the
+    # composites teh-ar and its forms are shown instead.
+    lookup ccmp_teh_skeleton {
+        sub teh-ar by behDotless-ar twodotshorizontalabove-ar;
+    } ccmp_teh_skeleton;
 } ccmp;
 
 feature init {

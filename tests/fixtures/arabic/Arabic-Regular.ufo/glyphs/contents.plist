@@ -28,12 +28,24 @@
 	<string>glyph18.glif</string>
 	<key>beh-ar.medi</key>
 	<string>glyph19.glif</string>
+	<key>behDotless-ar</key>
+	<string>glyph53.glif</string>
+	<key>behDotless-ar.fina</key>
+	<string>glyph56.glif</string>
+	<key>behDotless-ar.init</key>
+	<string>glyph54.glif</string>
+	<key>behDotless-ar.medi</key>
+	<string>glyph55.glif</string>
 	<key>dal-ar</key>
 	<string>glyph51.glif</string>
 	<key>damma-ar</key>
 	<string>glyph44.glif</string>
+	<key>dotbelow-ar</key>
+	<string>glyph62.glif</string>
 	<key>fatha-ar</key>
 	<string>glyph43.glif</string>
+	<key>fathatanOpen-ar</key>
+	<string>glyph63.glif</string>
 	<key>hamzaabove-ar</key>
 	<string>glyph48.glif</string>
 	<key>heh-ar</key>
@@ -74,6 +86,8 @@
 	<string>glyph11.glif</string>
 	<key>one</key>
 	<string>glyph04.glif</string>
+	<key>one-ar</key>
+	<string>glyph66.glif</string>
 	<key>period</key>
 	<string>glyph02.glif</string>
 	<key>reh-ar</key>
@@ -90,12 +104,28 @@
 	<string>glyph23.glif</string>
 	<key>shadda-ar</key>
 	<string>glyph46.glif</string>
+	<key>smallhighdotlessheadofkhah-ar</key>
+	<string>glyph64.glif</string>
 	<key>space</key>
 	<string>glyph01.glif</string>
 	<key>sukun-ar</key>
 	<string>glyph47.glif</string>
+	<key>tatweel-ar</key>
+	<string>glyph52.glif</string>
+	<key>teh-ar</key>
+	<string>glyph57.glif</string>
+	<key>teh-ar.fina</key>
+	<string>glyph60.glif</string>
+	<key>teh-ar.init</key>
+	<string>glyph58.glif</string>
+	<key>teh-ar.medi</key>
+	<string>glyph59.glif</string>
 	<key>two</key>
 	<string>glyph05.glif</string>
+	<key>two-ar</key>
+	<string>glyph67.glif</string>
+	<key>twodotshorizontalabove-ar</key>
+	<string>glyph61.glif</string>
 	<key>yeh-ar</key>
 	<string>glyph37.glif</string>
 	<key>yeh-ar.fina</key>
@@ -106,5 +136,7 @@
 	<string>glyph39.glif</string>
 	<key>zero</key>
 	<string>glyph03.glif</string>
+	<key>zero-ar</key>
+	<string>glyph65.glif</string>
 </dict>
 </plist>

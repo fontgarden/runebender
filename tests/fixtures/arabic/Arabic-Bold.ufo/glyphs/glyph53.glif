@@ -1,0 +1,23 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<glyph name="behDotless-ar" format="2">
+  <advance width="600" />
+  <unicode hex="066E" />
+  <anchor name="top" x="300" y="320" />
+  <anchor name="bottom" x="300" y="-140" />
+  <outline>
+    <contour>
+      <point x="60" y="0" type="line" />
+      <point x="60" y="120" type="line" />
+      <point x="100" y="120" type="line" />
+      <point x="100" y="220" type="line" />
+      <point x="220" y="220" type="line" />
+      <point x="220" y="120" type="line" />
+      <point x="380" y="120" type="line" />
+      <point x="380" y="220" type="line" />
+      <point x="500" y="220" type="line" />
+      <point x="500" y="120" type="line" />
+      <point x="540" y="120" type="line" />
+      <point x="540" y="0" type="line" />
+    </contour>
+  </outline>
+</glyph>

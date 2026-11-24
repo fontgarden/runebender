@@ -493,16 +493,19 @@ mod tests {
             Some(Point::new(380.0, 760.0)),
             "the anchor the fixture has"
         );
-        assert_eq!(anchor(&proposal, "caret_1").existing, None, "no caret yet");
+        assert_eq!(
+            anchor(&proposal, "caret_1").existing,
+            Some(Point::new(260.0, 0.0)),
+            "the caret the fixture has"
+        );
         assert!(
             anchor(&proposal, "top_1").reason.contains("lam-ar.init"),
             "{}",
             anchor(&proposal, "top_1").reason
         );
-        assert_eq!(
-            proposal.changes(true),
-            [("caret_1".to_owned(), Point::new(236.0, 0.0))],
-            "only the caret is missing"
+        assert!(
+            proposal.changes(true).is_empty(),
+            "the fixture has every anchor, the caret included"
         );
         assert_eq!(proposal.changes(false).len(), 5, "every anchor differs");
     }
@@ -557,7 +560,7 @@ mod tests {
     fn proposed_anchors_attach_the_marks_of_lam_alef_to_their_components() {
         let (mut project, source) = fixture();
         let layer = project.document_source(source).unwrap().default_layer();
-        let removed = ["top_1", "top_2", "bottom_1", "bottom_2"];
+        let removed = ["top_1", "top_2", "bottom_1", "bottom_2", "caret_1"];
         let ids: Vec<_> = project
             .document_layer("lam_alef-ar", &layer)
             .unwrap()
@@ -565,7 +568,7 @@ mod tests {
             .filter(|anchor| removed.contains(&anchor.name()))
             .map(|anchor| anchor.id())
             .collect();
-        assert_eq!(ids.len(), 4, "the fixture has the four anchors");
+        assert_eq!(ids.len(), 5, "the fixture has the five anchors");
         project
             .edit_document_layer("lam_alef-ar", &layer, |draft| {
                 for id in ids {

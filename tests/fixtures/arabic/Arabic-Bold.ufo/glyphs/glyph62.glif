@@ -1,0 +1,14 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<glyph name="dotbelow-ar" format="2">
+  <advance width="0" />
+  <anchor name="_bottom" x="0" y="0" />
+  <anchor name="bottom" x="0" y="-240" />
+  <outline>
+    <contour>
+      <point x="-60" y="-180" type="line" />
+      <point x="-60" y="-60" type="line" />
+      <point x="60" y="-60" type="line" />
+      <point x="60" y="-180" type="line" />
+    </contour>
+  </outline>
+</glyph>

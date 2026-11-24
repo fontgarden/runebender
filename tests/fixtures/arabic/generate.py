@@ -5,7 +5,9 @@
 No outlines, anchors or feature code are copied from an external font. The
 deliberately simple polygons exercise joining forms, a lam-alef ligature,
 marks on bases, ligatures and other marks, cursive attachment, right-to-left
-kerning and two unfinished-master cases. README.md lists the test strings.
+kerning, a dotless skeleton with dot marks, composites that take the anchors of
+their components, Arabic-Indic digits and two unfinished-master cases.
+README.md lists the test strings.
 Run: python3 tests/fixtures/arabic/generate.py
 """
 
@@ -32,6 +34,17 @@ MARKS = [("fatha-ar", 0x64E), ("damma-ar", 0x64F), ("kasra-ar", 0x650),
 # Unfinished-master glyphs. No test string and no feature rule uses them.
 INCOMPATIBLE = ("noon-ar", 0x646)
 PARTIAL_ANCHOR = ("dal-ar", 0x62F)
+# Glyphs added after the first version of the fixture. They come after the
+# unfinished glyphs in the glyph order, so the files of the earlier glyphs keep
+# their names.
+TATWEEL = ("tatweel-ar", 0x640)
+SKELETON = ("behDotless-ar", 0x66E)
+# teh-ar and its forms are composites of the skeleton and `twodotshorizontalabove-ar`.
+COMPOSED = ("teh-ar", 0x62A)
+DOT_MARKS = [("twodotshorizontalabove-ar", None), ("dotbelow-ar", None)]
+QURANIC_MARKS = [("fathatanOpen-ar", 0x8F0), ("smallhighdotlessheadofkhah-ar", 0x6E1)]
+DIGITS = [("zero-ar", 0x660), ("one-ar", 0x661), ("two-ar", 0x662)]
+FORMS = ("init", "medi", "fina")
 
 
 def glyph_list():
@@ -45,7 +58,16 @@ def glyph_list():
     glyphs += [("lam_alef-ar", None), ("lam_alef-ar.fina", None)]
     glyphs += MARKS
     glyphs += [INCOMPATIBLE, PARTIAL_ANCHOR]
+    glyphs.append(TATWEEL)
+    for name, codepoint in (SKELETON, COMPOSED):
+        glyphs.append((name, codepoint))
+        glyphs += [(f"{name}.{form}", None) for form in FORMS]
+    glyphs += DOT_MARKS + QURANIC_MARKS + DIGITS
     return glyphs
+
+
+def mark_names():
+    return dict(MARKS + DOT_MARKS + QURANIC_MARKS)
 
 
 def plist(path, value):
@@ -86,6 +108,8 @@ class Drawing:
         self.contours = []
         self.curves = []
         self.anchors = []
+        # Components as (base glyph, x offset, y offset).
+        self.components = []
 
     def anchor(self, name, x, y):
         self.anchors.append((name, round(x), round(y)))
@@ -105,6 +129,7 @@ def dual_letter(base, form, t):
         "meem-ar": {"isol": 460, "init": 320, "medi": 300, "fina": 420},
         "heh-ar": {"isol": 400, "init": 360, "medi": 340, "fina": 380},
         "yeh-ar": {"isol": 520, "init": 300, "medi": 240, "fina": 480},
+        "behDotless-ar": {"isol": 520, "init": 300, "medi": 240, "fina": 480},
     }
     width = widths[base][form] + 2 * g
     d = Drawing(width)
@@ -112,7 +137,7 @@ def dual_letter(base, form, t):
     center = (left + right) // 2
     top_y = 320
     bottom_y = -140
-    if base in ("beh-ar", "yeh-ar"):
+    if base in ("beh-ar", "yeh-ar", "behDotless-ar"):
         tick = 220
         if form == "medi":
             teeth = [(center, tick)]
@@ -123,12 +148,13 @@ def dual_letter(base, form, t):
         d.contours.append(comb(left, right, t, teeth))
         if base == "beh-ar":
             dot(d, center, -150, t)
-        else:
+        elif base == "yeh-ar":
             dot(d, center - t, -150, t)
             dot(d, center + t, -150, t)
         # beh and yeh share one bottom anchor, so the contextual kasra rule
-        # under yeh is the only difference between them.
-        bottom_y = -260
+        # under yeh is the only difference between them. The skeleton has no
+        # dot, so its bottom anchor is higher; `dotbelow-ar` passes a kasra on.
+        bottom_y = -140 if base == "behDotless-ar" else -260
     elif base == "seen-ar":
         step = t + 30
         start = right - 40 - t // 2
@@ -198,6 +224,8 @@ def ligature(form, t):
     d.anchor("top_2", alef, 760)
     d.anchor("bottom_1", lam, -140)
     d.anchor("bottom_2", alef, -140)
+    # The caret between the two components, for the GDEF ligature caret.
+    d.anchor("caret_1", (alef + lam) // 2, 0)
     return d
 
 
@@ -230,6 +258,72 @@ def mark(name, t):
     elif name == "alefabove-ar":
         d.contours.append(rectangle(-th // 2, 40, th // 2, 260))
         d.anchor("_top", 0, 0)
+    elif name == "twodotshorizontalabove-ar":
+        dot(d, -t, 60 + t // 2, t)
+        dot(d, t, 60 + t // 2, t)
+        d.anchor("_top", 0, 0)
+        # A vowel mark stacks above the dots, by mark-to-mark attachment.
+        d.anchor("top", 0, 120 + t)
+    elif name == "dotbelow-ar":
+        dot(d, 0, -60 - t // 2, t)
+        d.anchor("_bottom", 0, 0)
+        d.anchor("bottom", 0, -120 - t)
+    elif name == "fathatanOpen-ar":
+        # Two parallel strokes, the second offset to the left: the open form.
+        d.contours.append([(-60, 40), (-60, 40 + th), (100, 100 + th), (100, 100)])
+        d.contours.append([(-120, 140), (-120, 140 + th), (40, 200 + th), (40, 200)])
+        d.anchor("_top", 0, 0)
+    elif name == "smallhighdotlessheadofkhah-ar":
+        # The Quranic sukun: an open curve drawn as a small cup.
+        d.contours.append([(-60, 160), (-60, 60), (60, 60), (60, 160), (60 - th, 160),
+                           (60 - th, 60 + th), (-60 + th, 60 + th), (-60 + th, 160)])
+        d.anchor("_top", 0, 0)
+    return d
+
+
+def digit(name, t):
+    """Arabic-Indic digits, which are numbers and therefore laid out left to right."""
+    g = t - 80
+    width = 500 + 2 * g
+    d = Drawing(width)
+    mid = width // 2
+    if name == "zero-ar":
+        d.contours.append(rectangle(mid - t // 2 - 20, 300, mid + t // 2 + 20, 340 + t))
+    elif name == "one-ar":
+        d.contours.append([(mid - t // 2, 0), (mid - t // 2 - 60, 700),
+                           (mid + t // 2 - 60, 700), (mid + t // 2, 0)])
+    elif name == "two-ar":
+        d.contours.append([(mid - t // 2, 0), (mid - t // 2 - 60, 700),
+                           (mid + t // 2 - 60, 700), (mid + t // 2 - 40, 560),
+                           (mid + 160, 560), (mid + 160, 700), (mid + 160 + t, 700),
+                           (mid + 160 + t, 560 - t), (mid + t // 2 - 20, 560 - t),
+                           (mid + t // 2, 0)])
+    return d
+
+
+def tatweel(t):
+    """The kashida: a baseline stroke that joins on both sides."""
+    g = t - 80
+    width = 200 + 2 * g
+    d = Drawing(width)
+    d.contours.append(comb(0, width, t, []))
+    d.anchor("top", width // 2, 320)
+    d.anchor("bottom", width // 2, -140)
+    return d
+
+
+def composed(form, t):
+    """teh-ar: the dotless skeleton and `twodotshorizontalabove-ar` at the skeleton's `top` anchor.
+
+    The composite has no anchors of its own. It takes `top` from the dots, which
+    override the `top` of the skeleton, and `bottom` from the skeleton.
+    """
+    skeleton_name = SKELETON[0] + (f".{form}" if form != "isol" else "")
+    skeleton = dual_letter(SKELETON[0], form, t)
+    d = Drawing(skeleton.width)
+    d.components.append((skeleton_name, 0, 0))
+    top = next((x, y) for name, x, y in skeleton.anchors if name == "top")
+    d.components.append(("twodotshorizontalabove-ar", top[0], top[1]))
     return d
 
 
@@ -315,8 +409,14 @@ def draw(name, style, t):
         return noon(style, t)
     if name == PARTIAL_ANCHOR[0]:
         return dal(style, t)
-    if base in dict(DUAL):
+    if base in dict(DUAL) or base == SKELETON[0]:
         return dual_letter(base, form or "isol", t)
+    if base == COMPOSED[0]:
+        return composed(form or "isol", t)
+    if base == TATWEEL[0]:
+        return tatweel(t)
+    if base in dict(DIGITS):
+        return digit(base, t)
     if base in dict(RIGHT):
         return right_letter(base, form or "isol", t)
     if base == "alefHamzaabove-ar":
@@ -328,7 +428,7 @@ def draw(name, style, t):
         return d
     if base == "lam_alef-ar":
         return ligature(form or "isol", t)
-    if base in dict(MARKS):
+    if base in mark_names():
         return mark(base, t)
     return latin(name, t)
 
@@ -355,7 +455,7 @@ def write_oval(outline, cx, cy, rx, ry, direction):
 
 
 def category(name):
-    if name.partition(".")[0] in dict(MARKS):
+    if name.partition(".")[0] in mark_names():
         return "mark"
     if name.startswith("lam_alef-ar"):
         return "ligature"
@@ -367,17 +467,24 @@ languagesystem DFLT dflt;
 languagesystem arab dflt;
 languagesystem latn dflt;
 
-@dual = [beh-ar seen-ar lam-ar meem-ar heh-ar yeh-ar];
-@dual.init = [beh-ar.init seen-ar.init lam-ar.init meem-ar.init heh-ar.init yeh-ar.init];
-@dual.medi = [beh-ar.medi seen-ar.medi lam-ar.medi meem-ar.medi heh-ar.medi yeh-ar.medi];
-@joining = [alef-ar reh-ar beh-ar seen-ar lam-ar meem-ar heh-ar yeh-ar];
+@dual = [beh-ar seen-ar lam-ar meem-ar heh-ar yeh-ar behDotless-ar teh-ar];
+@dual.init = [beh-ar.init seen-ar.init lam-ar.init meem-ar.init heh-ar.init yeh-ar.init
+    behDotless-ar.init teh-ar.init];
+@dual.medi = [beh-ar.medi seen-ar.medi lam-ar.medi meem-ar.medi heh-ar.medi yeh-ar.medi
+    behDotless-ar.medi teh-ar.medi];
+@joining = [alef-ar reh-ar beh-ar seen-ar lam-ar meem-ar heh-ar yeh-ar behDotless-ar teh-ar];
 @joining.fina = [alef-ar.fina reh-ar.fina beh-ar.fina seen-ar.fina lam-ar.fina meem-ar.fina
-    heh-ar.fina yeh-ar.fina];
+    heh-ar.fina yeh-ar.fina behDotless-ar.fina teh-ar.fina];
 
 feature ccmp {
     lookup ccmp_alef_hamza {
         sub alefHamzaabove-ar by alef-ar hamzaabove-ar;
     } ccmp_alef_hamza;
+    # teh is the dotless skeleton with two dots above. With ccmp off, the
+    # composites teh-ar and its forms are shown instead.
+    lookup ccmp_teh_skeleton {
+        sub teh-ar by behDotless-ar twodotshorizontalabove-ar;
+    } ccmp_teh_skeleton;
 } ccmp;
 
 feature init {
@@ -466,8 +573,11 @@ def master(style, t):
     })
     plist(root / "kerning.plist", {
         "public.kern1.reh": {"public.kern2.alef": -60},
-        "reh-ar": {"meem-ar": -40},
+        # The pair of reh and a digit has mixed direction, and fontc drops it.
+        "reh-ar": {"meem-ar": -40, "one-ar": -20},
         "public.kern1.A": {"public.kern2.V": -70},
+        # Arabic-Indic digits are laid out left to right.
+        "one-ar": {"two-ar": -30},
     })
     (root / "features.fea").write_text(FEATURES, encoding="utf-8")
     contents = {}
@@ -480,6 +590,12 @@ def master(style, t):
         for anchor, x, y in drawing.anchors:
             ET.SubElement(glyph, "anchor", name=anchor, x=str(x), y=str(y))
         outline = ET.SubElement(glyph, "outline")
+        for base, x, y in drawing.components:
+            component = ET.SubElement(outline, "component", base=base)
+            if x:
+                component.set("xOffset", str(x))
+            if y:
+                component.set("yOffset", str(y))
         for points in drawing.contours:
             write_contour(outline, points)
         for cx, cy, rx, ry, direction in drawing.curves:

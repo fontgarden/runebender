@@ -1,0 +1,13 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<glyph name="one-ar" format="2">
+  <advance width="500" />
+  <unicode hex="0661" />
+  <outline>
+    <contour>
+      <point x="210" y="0" type="line" />
+      <point x="150" y="700" type="line" />
+      <point x="230" y="700" type="line" />
+      <point x="290" y="0" type="line" />
+    </contour>
+  </outline>
+</glyph>

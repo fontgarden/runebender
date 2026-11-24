@@ -195,6 +195,8 @@ Builds of other worktrees ran on the same host, so the figures are upper values.
 | `warm, no change` | 0.195 | 0.039 |
 | `shape one line` | 0.009 | 0.003 |
 
+The Arabic fixture has had 68 glyphs since the fixture step of phase 6; the figures above are from the earlier 52-glyph version.
+
 In the same run, a local Virtua Grotesk checkout with 914 glyphs, measured without its feature file, gave 0.49 ms to read the inputs, 6.9 ms for an anchor change, 3.6 ms for a kerning change and 2.8 ms with no change.
 That is above the 1 ms budget of item 5.3, so items 5.1 and 5.2 are still necessary.
 
