@@ -14,6 +14,11 @@
 //! the font's own `features.fea` when it compiles, and through the
 //! built-in Arabic joining rules in the `shaping` module otherwise.
 //!
+//! The Text tool does not use Parley for this, for three reasons.
+//! Each sort draws the live outline and advance of a glyph that is being edited.
+//! A sort can name a glyph that has no code point.
+//! The line must shape before a compiled font exists.
+//!
 //! Kerning comes from a `TextKerningModel` that resolves pairs
 //! through UFO `kern1` and `kern2` groups, and a manual kerning drag
 //! writes a direct pair value back into that model. The `layout` and
@@ -43,24 +48,15 @@ mod shaping;
 /// Neutrals, such as digits, punctuation, and spaces, return `None`
 /// so they never decide a line's direction on their own.
 pub fn strong_direction(char: char) -> Option<TextDirection> {
-    let code = char as u32;
-    let rtl = matches!(code,
-        0x0590..=0x05FF   // Hebrew
-        | 0x0600..=0x06FF // Arabic
-        | 0x0700..=0x074F // Syriac
-        | 0x0750..=0x077F // Arabic Supplement
-        | 0x0780..=0x07BF // Thaana
-        | 0x08A0..=0x08FF // Arabic Extended-A
-        | 0xFB1D..=0xFDFF // Hebrew / Arabic presentation forms
-        | 0xFE70..=0xFEFF // Arabic presentation forms-B
-    );
-    if rtl {
-        return Some(TextDirection::RightToLeft);
+    // The Unicode bidirectional class decides, so each right-to-left script counts and a
+    // digit of any script is not a strong character.
+    match unicode_bidi::bidi_class(char) {
+        unicode_bidi::BidiClass::R | unicode_bidi::BidiClass::AL => {
+            Some(TextDirection::RightToLeft)
+        }
+        unicode_bidi::BidiClass::L => Some(TextDirection::LeftToRight),
+        _ => None,
     }
-    if char.is_alphabetic() {
-        return Some(TextDirection::LeftToRight);
-    }
-    None
 }
 
 /// Reading direction of a line or a bidi run.
