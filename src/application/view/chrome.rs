@@ -329,18 +329,21 @@ pub(crate) fn status(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
             .unwrap_or_default(),
     };
     let text = if (app.has_text_session || !app.preview_text.is_empty())
-        // Text is shaped by the layout font; the complete preview matters only between masters
-        // and has its own status under the axis sliders.
-        && let Some(status) = if app.on_active_master() {
-            app.font
-                .live_layout()
-                .error
-                .map(|error| format!("Layout from the last features that compiled: {error}"))
-        } else {
-            match app.font.layout_font() {
-                Ok(Some(_)) => None,
-                Ok(None) => Some("Layout compiling…".to_string()),
-                Err(error) => Some(format!("Layout not compiled: {error}")),
+        // Text is shaped by layout tables built from live values at the slider location; the
+        // complete preview has its own status under the axis sliders.
+        && let Some(status) = {
+            let live = app.font.live_layout(&app.axis_values);
+            match (live.error, live.diagnostics.first()) {
+                (Some(error), _) => {
+                    Some(format!("Layout from the last features that compiled: {error}"))
+                }
+                (None, Some(first)) => Some(match live.diagnostics.len() {
+                    1 => format!("Layout from the nearest master for {first}"),
+                    more => format!(
+                        "Layout from the nearest master for {more} values, first {first}"
+                    ),
+                }),
+                (None, None) => None,
             }
         } {
         format!("{text}   {status}")

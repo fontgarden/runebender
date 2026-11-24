@@ -231,7 +231,7 @@ mod tests {
             &generated,
         )
         .unwrap();
-        let compiled = project.compile_layout().unwrap();
+        let compiled = project.compile().unwrap();
         let fontc = ShapingFont::from_bytes((*compiled.bytes).clone()).unwrap();
 
         for (text, rtl) in [

@@ -34,15 +34,6 @@ type CompileKey = (
     Option<super::model::designspace::CanonicalCompilerStructure>,
 );
 
-/// The two fonts compiled from the live document.
-#[derive(Clone, Copy, Debug)]
-enum CompileKind {
-    /// The complete font, for interpolated outlines, proofs and export checks.
-    Preview,
-    /// The font without outlines that shapes text; see [`Project::layout_snapshot`].
-    Layout,
-}
-
 #[derive(Debug, Default)]
 pub(super) struct CompileCache {
     key: Option<CompileKey>,
@@ -365,7 +356,7 @@ fn a_compiler_message_is_one_line() {
 
 #[cfg(test)]
 #[test]
-fn the_layout_font_ignores_point_moves_and_outline_compatibility() {
+fn the_layout_revision_ignores_point_moves_and_outline_compatibility() {
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/core/Core.designspace");
     let mut project = Project::load(&path).unwrap();
@@ -382,7 +373,7 @@ fn the_layout_font_ignores_point_moves_and_outline_compatibility() {
         })
         .expect("a glyph with contours")
         .to_string();
-    let layout = project.compiled_layout().unwrap();
+    let layout = project.layout_revision();
     let revision = project.document_revision();
 
     // A point move is a new document revision, but not a new layout.
@@ -403,9 +394,9 @@ fn the_layout_font_ignores_point_moves_and_outline_compatibility() {
         })
         .unwrap();
     assert_ne!(project.document_revision(), revision);
-    assert!(Arc::ptr_eq(&layout, &project.compiled_layout().unwrap()));
+    assert_eq!(project.layout_revision(), layout);
 
-    // Contours that no longer interpolate stop the complete font, not the layout font.
+    // Contours that no longer interpolate stop the complete font, not the layout.
     project
         .edit_document_layer(&glyph, &bold, |draft| {
             draft.clear_contours();
@@ -413,7 +404,7 @@ fn the_layout_font_ignores_point_moves_and_outline_compatibility() {
         })
         .unwrap();
     assert!(project.compiled_preview().is_err());
-    assert!(Arc::ptr_eq(&layout, &project.compiled_layout().unwrap()));
+    assert_eq!(project.layout_revision(), layout);
 
     // A width edit changes layout.
     project
@@ -422,14 +413,7 @@ fn the_layout_font_ignores_point_moves_and_outline_compatibility() {
             Ok(())
         })
         .unwrap();
-    let widened = project.compiled_layout().unwrap();
-    assert!(!Arc::ptr_eq(&layout, &widened));
-    assert!(
-        widened
-            .advances(&[0.0])
-            .unwrap()
-            .contains(&(glyph.clone(), 777.0))
-    );
+    assert_ne!(project.layout_revision(), layout);
 }
 
 /// Keep a compiled snapshot independent of the second when fontc finishes.
@@ -749,71 +733,24 @@ impl Project {
         CompiledFont::build(self.babelfont_snapshot()?)
     }
 
-    /// The document without outlines: advances, code points, anchors, kerning, groups,
-    /// features and axes.
-    ///
-    /// Text layout needs nothing else, so this compiles while the designer draws: a glyph whose
-    /// contours do not interpolate yet does not stop it.
-    pub fn layout_snapshot(&self) -> Result<babelfont::Font, String> {
-        let mut font = self.babelfont_snapshot()?;
-        // Mark positions come from anchors and kerning from the kerning data, so neither
-        // contours nor components are read. Removing both also removes every outline
-        // compatibility requirement between masters.
-        for glyph in &mut font.glyphs.0 {
-            for layer in &mut glyph.layers {
-                layer.shapes.clear();
-            }
-        }
-        Ok(font)
+    fn compile_key(&self) -> CompileKey {
+        (self.variable.revision, self.compiler_structure())
     }
 
-    /// Compile current unsaved sources into a font for text layout only; see
-    /// [`Self::layout_snapshot`].
-    pub fn compile_layout(&self) -> Result<CompiledFont, String> {
-        CompiledFont::build(self.layout_snapshot()?)
-    }
-
-    fn compile_key(&self, kind: CompileKind) -> CompileKey {
-        let revision = match kind {
-            CompileKind::Preview => self.variable.revision,
-            CompileKind::Layout => self.variable.layout_revision(),
-        };
-        (revision, self.compiler_structure())
-    }
-
-    fn compile_cache(&self, kind: CompileKind) -> std::sync::MutexGuard<'_, CompileCache> {
-        match kind {
-            CompileKind::Preview => &self.variable.compiled,
-            CompileKind::Layout => &self.variable.layout,
-        }
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-    }
-
-    fn compile_snapshot(&self, kind: CompileKind) -> Result<babelfont::Font, String> {
-        match kind {
-            CompileKind::Preview => self.babelfont_snapshot(),
-            CompileKind::Layout => self.layout_snapshot(),
-        }
+    fn compile_cache(&self) -> std::sync::MutexGuard<'_, CompileCache> {
+        self.variable
+            .compiled
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
     }
 
     /// Reuse a compiled revision for headless callers and deterministic proofs.
     pub fn compiled_preview(&self) -> Result<Arc<CompiledFont>, String> {
-        self.compiled_now(CompileKind::Preview)
-    }
-
-    /// The layout font of the current layout revision, compiled on the calling thread when
-    /// needed.
-    pub fn compiled_layout(&self) -> Result<Arc<CompiledFont>, String> {
-        self.compiled_now(CompileKind::Layout)
-    }
-
-    fn compiled_now(&self, kind: CompileKind) -> Result<Arc<CompiledFont>, String> {
-        let key = self.compile_key(kind);
-        let mut cache = self.compile_cache(kind);
+        let key = self.compile_key();
+        let mut cache = self.compile_cache();
         if cache.key.as_ref() != Some(&key) || cache.result.is_none() {
             cache.result = Some(
-                self.compile_snapshot(kind)
+                self.babelfont_snapshot()
                     .and_then(CompiledFont::build)
                     .map(Arc::new),
             );
@@ -823,15 +760,14 @@ impl Project {
         cache.result.as_ref().expect("compiled revision").clone()
     }
 
-    /// The flag that postpones the snapshots for both compiles.
+    /// The flag that postpones the snapshot for the preview compile.
     ///
     /// A snapshot copies the whole font on the calling thread, which is the interface
     /// thread. The editor sets the flag while a pointer gesture is in progress, so the copy
-    /// does not take frames from a drag. [`Self::request_preview`] and
-    /// [`Self::request_layout`] take the snapshot on their first call after the flag is
-    /// cleared.
+    /// does not take frames from a drag. [`Self::request_preview`] takes the snapshot on its
+    /// first call after the flag is cleared.
     pub fn preview_hold(&self) -> Arc<std::sync::atomic::AtomicBool> {
-        self.compile_cache(CompileKind::Preview).hold.clone()
+        self.compile_cache().hold.clone()
     }
 
     /// Request the latest preview without blocking the desktop event loop.
@@ -839,32 +775,15 @@ impl Project {
     /// snapshot of the latest sources starts the next compile; stale results never publish.
     /// Browser hosts currently compile synchronously because Rust threads are unavailable.
     pub fn request_preview(&self) -> Result<Option<Arc<CompiledFont>>, String> {
-        self.request_compile(CompileKind::Preview)
-    }
-
-    /// Request the layout font of the current layout revision without blocking, the same
-    /// way as [`Self::request_preview`].
-    ///
-    /// An edit that moves only contour points keeps the layout revision, so the font that
-    /// shapes text stays ready while the designer draws.
-    pub fn request_layout(&self) -> Result<Option<Arc<CompiledFont>>, String> {
-        self.request_compile(CompileKind::Layout)
-    }
-
-    fn request_compile(&self, kind: CompileKind) -> Result<Option<Arc<CompiledFont>>, String> {
         #[cfg(target_arch = "wasm32")]
         {
-            self.compiled_now(kind).map(Some)
+            self.compiled_preview().map(Some)
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let key = self.compile_key(kind);
-            // The gesture flag lives in the preview cache; read it before locking this one.
-            let hold = self
-                .compile_cache(CompileKind::Preview)
-                .hold
-                .load(std::sync::atomic::Ordering::Relaxed);
-            let mut cache = self.compile_cache(kind);
+            let key = self.compile_key();
+            let mut cache = self.compile_cache();
+            let hold = cache.hold.load(std::sync::atomic::Ordering::Relaxed);
             if cache.key.as_ref() != Some(&key) {
                 cache.result = None;
                 cache.key = Some(key);
@@ -894,7 +813,7 @@ impl Project {
                     .is_some_and(|since| since.elapsed() >= PREVIEW_DEBOUNCE)
             {
                 cache.wanted = None;
-                match self.compile_snapshot(kind) {
+                match self.babelfont_snapshot() {
                     Ok(font) => cache.pending = Some(PreviewJob::start(font)),
                     Err(error) => cache.result = Some(Err(error)),
                 }
@@ -905,28 +824,13 @@ impl Project {
 
     /// The current background job, if the UI should arrange a completion wakeup.
     pub fn preview_job(&self) -> Option<PreviewJob> {
-        self.variable
-            .compiled
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .pending
-            .clone()
+        self.compile_cache().pending.clone()
     }
 
     /// Whether a preview is still on its way: a compile is running, or edits are waiting
     /// for their pause before one starts. The UI polls [`Self::request_preview`] while true.
     pub fn preview_pending(&self) -> bool {
-        self.compile_pending(CompileKind::Preview)
-    }
-
-    /// Whether the layout font is still on its way, as [`Self::preview_pending`] tells for the
-    /// preview. The UI polls [`Self::request_layout`] while true.
-    pub fn layout_pending(&self) -> bool {
-        self.compile_pending(CompileKind::Layout)
-    }
-
-    fn compile_pending(&self, kind: CompileKind) -> bool {
-        let cache = self.compile_cache(kind);
+        let cache = self.compile_cache();
         #[cfg(not(target_arch = "wasm32"))]
         let waiting = cache.wanted.is_some();
         #[cfg(target_arch = "wasm32")]

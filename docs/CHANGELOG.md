@@ -25,11 +25,11 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
   No background compile takes part, and a glyph that does not interpolate, or an anchor that one master lacks, does not affect the text.
 - A composite glyph without anchors takes the anchors of its components in the compiled font too, not only in the editor.
   Before, an exported font did not attach marks to such a glyph, for example a kasra under a beh built from a dotless beh and a dot.
-- Between masters, text is shaped by a layout font: the live font compiled without outlines.
-  It is rebuilt only after an edit that can change layout, such as an advance, anchor, code point, kerning or feature edit.
-  Moving or deleting points no longer rebuilds it, so the text line around the edited glyph stays in place.
-  A glyph whose contours do not interpolate stops only the interpolated preview, not text layout.
-  When a layout edit leaves the font unable to compile, for example with a feature file error, text keeps the last layout that compiled and the status bar shows the error.
+- Between masters, text is shaped the same way, with advances, anchors and kerning interpolated from the live masters, each glyph and each anchor alone.
+  The text outlines are interpolated from the live masters too, and only for the glyphs the text shows.
+  A value that cannot be interpolated, such as an anchor that one master lacks, comes from the nearest master, and the status bar names the glyph and the anchor.
+  No compiled font supplies positions or outlines to the text line, so moving or deleting points does not move it, and a glyph whose contours do not interpolate changes only that glyph.
+  When the feature file does not compile, text keeps the last feature code that compiled, with live values, and the status bar shows the error.
 - Purple marks a machine draft that the designer has not reviewed, as in the Font.Garden source repositories.
   The Weight debt block marks installed drafts purple instead of orange, only green glyphs are frozen references, and `flag_glyph` refuses a purple draft.
 - The macOS renderer uses a [revision-pinned `block` compatibility fix](https://github.com/vaimeai/rust-block/commit/b88ec0fad1ed2a675bef651e8e23d49b649ba0be) instead of the crates.io 0.1.6 source.

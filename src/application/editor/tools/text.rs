@@ -122,13 +122,113 @@ enum OutlineSource {
         index: Arc<std::collections::HashMap<String, usize>>,
         outlines: Vec<Arc<BezPath>>,
     },
-    /// A compiled font at one location. A glyph is drawn the first time text shows it;
-    /// drawing all of them after every compile took longer than the rest of a rebuild.
-    Compiled {
-        font: Arc<runebender::font::compiler::CompiledFont>,
-        normalized: Vec<f64>,
-        drawn: std::sync::Mutex<std::collections::HashMap<String, Option<Arc<BezPath>>>>,
+    /// The live masters interpolated at one location between them.
+    Interpolated(InterpolatedOutlines),
+}
+
+/// One master's drawn outlines, as the interpolated text reads them.
+enum MasterOutlineSet {
+    /// The active master: the glyph list's outlines, in its order, with its name index.
+    Model {
+        index: Arc<std::collections::HashMap<String, usize>>,
+        outlines: Vec<Arc<BezPath>>,
     },
+    /// Another master, by glyph name.
+    Listed(crate::application::font_model::MasterOutlines),
+}
+
+impl MasterOutlineSet {
+    fn get(&self, name: &str) -> Option<&Arc<BezPath>> {
+        match self {
+            Self::Model { index, outlines } => outlines.get(*index.get(name)?),
+            Self::Listed(outlines) => outlines.get(name),
+        }
+    }
+}
+
+/// The outlines of the live masters, blended at one location for each glyph alone.
+///
+/// A glyph is drawn the first time text shows it; drawing every glyph after each edit would
+/// take longer than the rest of a rebuild.
+/// A glyph whose outlines do not have the same structure in every master that has it, or that
+/// has no layer at the default location, is drawn from the master nearest to the location,
+/// as its layout values are.
+struct InterpolatedOutlines {
+    /// Each master's normalized location and outlines, in master order.
+    masters: Vec<(runebender::font::var_model::Location, MasterOutlineSet)>,
+    target: runebender::font::var_model::Location,
+    /// The active master, which wins a tie for the nearest master.
+    preferred: usize,
+    /// The weights of each set of masters, by their indexes.
+    weights: std::sync::Mutex<std::collections::HashMap<Vec<usize>, Option<Vec<f64>>>>,
+    drawn: std::sync::Mutex<std::collections::HashMap<String, Option<Arc<BezPath>>>>,
+}
+
+impl InterpolatedOutlines {
+    fn contains(&self, name: &str) -> bool {
+        self.masters
+            .iter()
+            .any(|(_, outlines)| outlines.get(name).is_some())
+    }
+
+    fn get(&self, name: &str) -> Option<Arc<BezPath>> {
+        use runebender::font::var_model::{VariationModel, locations_match, squared_distance};
+        let mut drawn = self.drawn.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(found) = drawn.get(name) {
+            return found.clone();
+        }
+        let present: Vec<(usize, &Arc<BezPath>)> = self
+            .masters
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (_, outlines))| Some((index, outlines.get(name)?)))
+            .collect();
+        let outline = if present.is_empty() {
+            None
+        } else if let Some((_, exact)) = present
+            .iter()
+            .find(|(index, _)| locations_match(&self.masters[*index].0, &self.target))
+        {
+            Some((*exact).clone())
+        } else {
+            let indexes: Vec<usize> = present.iter().map(|(index, _)| *index).collect();
+            let weights = self
+                .weights
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .entry(indexes.clone())
+                .or_insert_with(|| {
+                    let locations: Vec<_> = indexes
+                        .iter()
+                        .map(|index| self.masters[*index].0.clone())
+                        .collect();
+                    VariationModel::new(&locations)
+                        .and_then(|model| model.weights(&self.target))
+                        .ok()
+                })
+                .clone();
+            let paths: Vec<&BezPath> = present.iter().map(|(_, path)| path.as_ref()).collect();
+            weights
+                .and_then(|weights| runebender::outline::glyph_paths::blend_paths(&paths, &weights))
+                .map(Arc::new)
+                .or_else(|| {
+                    // The nearest master, with the active one winning a tie.
+                    present
+                        .iter()
+                        .min_by(|(a, _), (b, _)| {
+                            let distance = |index: usize| {
+                                squared_distance(&self.masters[index].0, &self.target)
+                            };
+                            distance(*a)
+                                .total_cmp(&distance(*b))
+                                .then((*a != self.preferred).cmp(&(*b != self.preferred)))
+                        })
+                        .map(|(_, path)| (*path).clone())
+                })
+        };
+        drawn.insert(name.to_owned(), outline.clone());
+        outline
+    }
 }
 
 impl Default for GlyphOutlines {
@@ -146,19 +246,46 @@ impl PartialEq for GlyphOutlines {
 }
 
 impl GlyphOutlines {
-    fn compiled(font: Arc<runebender::font::compiler::CompiledFont>, normalized: Vec<f64>) -> Self {
-        Self(Arc::new(OutlineSource::Compiled {
-            font,
-            normalized,
-            drawn: std::sync::Mutex::default(),
-        }))
+    /// The live masters of `font`, each glyph interpolated alone at `target` when text shows it.
+    fn interpolated(font: &FontModel, target: runebender::font::var_model::Location) -> Self {
+        let active = font.active();
+        let masters = font
+            .project
+            .master_locations()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, location)| {
+                let outlines = if index == active {
+                    MasterOutlineSet::Model {
+                        index: font.name_index(),
+                        outlines: font
+                            .glyphs
+                            .iter()
+                            .map(|glyph| glyph.outline.clone())
+                            .collect(),
+                    }
+                } else {
+                    MasterOutlineSet::Listed(font.master_outlines(index)?)
+                };
+                Some((location.clone(), outlines))
+            })
+            .collect();
+        Self(Arc::new(OutlineSource::Interpolated(
+            InterpolatedOutlines {
+                masters,
+                target,
+                preferred: active,
+                weights: std::sync::Mutex::default(),
+                drawn: std::sync::Mutex::default(),
+            },
+        )))
     }
 
     fn contains(&self, name: &str) -> bool {
         match &*self.0 {
             OutlineSource::Listed(outlines) => outlines.contains_key(name),
             OutlineSource::Model { index, .. } => index.contains_key(name),
-            OutlineSource::Compiled { font, .. } => font.glyph_ids.contains_key(name),
+            OutlineSource::Interpolated(interpolated) => interpolated.contains(name),
         }
     }
 
@@ -166,41 +293,21 @@ impl GlyphOutlines {
         match &*self.0 {
             OutlineSource::Listed(outlines) => outlines.get(name).cloned(),
             OutlineSource::Model { index, outlines } => outlines.get(*index.get(name)?).cloned(),
-            OutlineSource::Compiled {
-                font,
-                normalized,
-                drawn,
-            } => {
-                let mut drawn = drawn.lock().unwrap_or_else(|error| error.into_inner());
-                if let Some(found) = drawn.get(name) {
-                    return found.clone();
-                }
-                let outline = match font.outline(name, normalized) {
-                    Ok(outline) => outline.map(Arc::new),
-                    Err(error) => {
-                        runebender::text::shape::log_shaping_failure(&error);
-                        None
-                    }
-                };
-                drawn.insert(name.to_owned(), outline.clone());
-                outline
-            }
+            OutlineSource::Interpolated(interpolated) => interpolated.get(name),
         }
     }
 }
 
-/// The compiled layout font read at one normalized location: every glyph's advance, which
-/// takes a pass over the whole binary to extract, and the outlines drawn between masters.
-pub(crate) struct CachedTextLocation {
-    kerning: Arc<TextKerningModel>,
-    /// The layout font, which has no outlines; see `Project::layout_snapshot`.
-    compiled: Arc<runebender::font::compiler::CompiledFont>,
-    normalized: Vec<f64>,
-    /// The complete preview font and its outlines at `normalized`, used between masters.
-    drawn: Option<(Arc<runebender::font::compiler::CompiledFont>, GlyphOutlines)>,
-    advances: std::collections::HashMap<String, f64>,
+/// The text between masters at one location: the interpolated outlines, and the inventory with
+/// the interpolated advances.
+pub(crate) struct CachedInterpolatedText {
+    /// The document revision, the active master, the glyph count and the location bits.
+    key: (u64, usize, usize, Vec<u64>),
+    outlines: GlyphOutlines,
+    /// The advances of the live layout at the location.
+    advances: Arc<std::collections::HashMap<String, f64>>,
     /// The inventory these advances were applied to, and the result. Applying them walks every
-    /// glyph, so it is done once for a compiled font and inventory, not on every rebuild.
+    /// glyph, so it is done once for an inventory and a set of advances, not on every rebuild.
     base_inventory: Arc<TextGlyphInventory>,
     inventory: Arc<TextGlyphInventory>,
 }
@@ -338,9 +445,13 @@ impl TextInputs {
         inputs
     }
 
-    /// Preview the live variable font at the sliders' user coordinates.
-    /// Advances, kerning and substitutions come from the layout font; outlines come from the
-    /// live source at a master and from the complete preview font between masters.
+    /// Preview the live font at the sliders' user coordinates.
+    ///
+    /// Advances, kerning, marks and substitutions come from layout tables built from live
+    /// values at the location; see [`FontModel::live_layout`].
+    /// Outlines come from the live source at a master, and between masters from the live
+    /// masters, each glyph interpolated alone.
+    /// No compiled font takes part, so a glyph that does not interpolate changes only itself.
     pub(crate) fn with_location(self, font: &FontModel, values: &[f64]) -> Self {
         self.located(font, values)
     }
@@ -349,104 +460,61 @@ impl TextInputs {
         if font.glyphs.is_empty() {
             return self;
         }
-        self.normalized = font
-            .axes
-            .iter()
-            .enumerate()
-            .map(|(index, axis)| {
-                axis.user_to_normalized(values.get(index).copied().unwrap_or(axis.default))
-            })
-            .collect();
-        // At a master the layout tables come from the live values of that master, built in
-        // this call. The advances in the inventory and the outlines are already live.
+        self.normalized = font.normalized_values(values);
+        // The tables come from the live values at this location, built in this call.
+        // When the feature code does not compile, they are the last that did.
+        let live = font.live_layout(values);
+        if let Some(tables) = live.font.clone() {
+            self.compiled = Some(tables);
+        }
+        // At a master the advances in the inventory and the outlines are already live.
         if font.at_active_master(values) {
-            if let Some(tables) = font.live_layout().font {
-                self.compiled = Some(tables);
-            }
             return self;
         }
-        // Between masters the variable layout font still supplies positions, until each glyph
-        // is interpolated alone.
+        let key = (
+            font.project.document_revision(),
+            font.active(),
+            font.glyphs.len(),
+            self.normalized
+                .iter()
+                .map(|value| value.to_bits())
+                .collect(),
+        );
         let mut cache = font
-            .text_location
+            .interpolated_text
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        // Positions come from the layout font, which has no outlines and is rebuilt only after
-        // an edit that can change layout, so moving a point never moves the line.
-        // While such an edit is compiling, or when it leaves the layout unable to compile,
-        // for example with an error in the feature file, the line keeps the last layout
-        // that compiled; the status bar names the error.
-        let compiled = match font.layout_font() {
-            Ok(Some(compiled)) => Some(compiled),
-            Ok(None) | Err(_) => cache
-                .as_ref()
-                .filter(|c| c.kerning == self.kerning)
-                .map(|c| c.compiled.clone()),
+        let outlines = match cache.as_ref().filter(|cached| cached.key == key) {
+            Some(cached) => cached.outlines.clone(),
+            None => GlyphOutlines::interpolated(font, font.normalized_location(values)),
         };
-        let Some(compiled) = compiled else {
-            return self;
+        let inventory = match cache.as_ref().filter(|cached| {
+            Arc::ptr_eq(&cached.advances, &live.advances)
+                && Arc::ptr_eq(&cached.base_inventory, &self.inventory)
+        }) {
+            Some(cached) => cached.inventory.clone(),
+            None => {
+                let mut inventory = (*self.inventory).clone();
+                for (name, advance) in live.advances.iter() {
+                    inventory.set_advance(name.clone(), *advance);
+                }
+                Arc::new(inventory)
+            }
         };
-        self.normalized = compiled
-            .axis_tags
-            .iter()
-            .map(|tag| {
-                font.axes
-                    .iter()
-                    .position(|axis| axis.tag == *tag)
-                    .map(|index| self.normalized[index])
-                    .unwrap_or(0.0)
-            })
-            .collect();
-        let fresh = cache.as_ref().is_some_and(|c| {
-            Arc::ptr_eq(&c.compiled, &compiled)
-                && c.normalized == self.normalized
-                && Arc::ptr_eq(&c.base_inventory, &self.inventory)
+        *cache = Some(CachedInterpolatedText {
+            key,
+            outlines: outlines.clone(),
+            advances: live.advances.clone(),
+            base_inventory: self.inventory.clone(),
+            inventory: inventory.clone(),
         });
-        if !fresh {
-            let advances: std::collections::HashMap<String, f64> = compiled
-                .advances(&self.normalized)
-                .unwrap_or_default()
-                .into_iter()
-                .collect();
-            let mut inventory = (*self.inventory).clone();
-            for (name, advance) in &advances {
-                inventory.set_advance(name.clone(), *advance);
-            }
-            *cache = Some(CachedTextLocation {
-                kerning: self.kerning.clone(),
-                compiled: compiled.clone(),
-                normalized: self.normalized.clone(),
-                drawn: None,
-                advances,
-                base_inventory: self.inventory.clone(),
-                inventory: Arc::new(inventory),
-            });
-        }
-        let located = cache.as_mut().expect("the location was just read");
-        // At a master the outlines come from the live source. Between masters they come from
-        // the complete preview font; until it compiles, the master outlines stand in.
-        if !font.at_active_master(values)
-            && let Ok(Some(preview)) = font.preview_font()
-        {
-            let current = located
-                .drawn
-                .as_ref()
-                .is_some_and(|(drawn, _)| Arc::ptr_eq(drawn, &preview));
-            if !current {
-                let outlines = GlyphOutlines::compiled(preview.clone(), located.normalized.clone());
-                located.drawn = Some((preview, outlines));
-            }
-            if let Some((_, outlines)) = &located.drawn {
-                self.outlines = outlines.clone();
-            }
-        }
-        self.compiled = Some(compiled.bytes.clone());
         if let Some((active, _, width)) = &mut self.active_glyph
-            && let Some(advance) = located.advances.get(active.as_str())
+            && let Some(advance) = live.advances.get(active.as_str())
         {
             *width = *advance;
         }
-        self.inventory = located.inventory.clone();
+        self.outlines = outlines;
+        self.inventory = inventory;
         self
     }
 
@@ -1099,7 +1167,7 @@ mod tests {
         assert_eq!(positions(&text), before);
 
         // A glyph whose contours no longer interpolate stops the complete preview, but not the
-        // layout font, which has no outlines.
+        // live layout tables, which read no outlines.
         let bold = app
             .font
             .project
@@ -1115,30 +1183,28 @@ mod tests {
             })
             .unwrap();
         assert!(app.font.project.compiled_preview().is_err());
-        let layout = app
-            .font
-            .project
-            .compiled_layout()
-            .expect("the layout compiles");
-        let live_before = app.font.live_layout().font;
-        // Moving contour points does not rebuild the layout font.
+        let layout = app.font.project.layout_revision();
+        let live_before = app.font.live_layout(&app.axis_values).font;
+        // Moving contour points does not rebuild the layout tables.
         // Anchors are not selected: moving one changes mark positions, which is layout.
-        app.apply_op(|s| {
-            let contour: Vec<_> = s
-                .current_layer()
-                .and_then(|layer| layer.contours().next())
-                .map(|contour| contour.points().map(|point| point.id()).collect())
-                .unwrap_or_default();
-            assert!(!contour.is_empty());
-            s.select_points(contour, false);
-            s.nudge(8.0, 0.0)
-        });
-        let after = app.font.project.compiled_layout().unwrap();
-        assert!(Arc::ptr_eq(&layout, &after));
+        let nudge_contour = |app: &mut Workspace| {
+            app.apply_op(|s| {
+                let contour: Vec<_> = s
+                    .current_layer()
+                    .and_then(|layer| layer.contours().next())
+                    .map(|contour| contour.points().map(|point| point.id()).collect())
+                    .unwrap_or_default();
+                assert!(!contour.is_empty());
+                s.select_points(contour, false);
+                s.nudge(8.0, 0.0)
+            });
+        };
+        nudge_contour(&mut app);
+        assert_eq!(app.font.project.layout_revision(), layout);
         let refreshed = TextInputs::for_editor(&app);
         // At a master the line is shaped by the live layout tables, which the complete
         // compile cannot stop and which a point edit does not rebuild.
-        let live = app.font.live_layout();
+        let live = app.font.live_layout(&app.axis_values);
         assert!(live.error.is_none());
         assert!(Arc::ptr_eq(
             refreshed.compiled.as_ref().expect("live layout tables"),
@@ -1147,6 +1213,33 @@ mod tests {
         assert!(Arc::ptr_eq(
             live_before.as_ref().expect("live layout tables"),
             live.font.as_ref().expect("live layout tables"),
+        ));
+        text.refresh(&refreshed);
+        assert_eq!(positions(&text), before);
+
+        // Between masters, with tet-hb still incompatible, the line is shaped by tables
+        // interpolated from the live masters, and a contour nudge does not move it.
+        let regular = app.font.master_axis_values(0);
+        let heavy = app.font.master_axis_values(1);
+        app.axis_values = regular
+            .iter()
+            .zip(&heavy)
+            .map(|(a, b)| (a + b) / 2.0)
+            .collect();
+        assert!(!app.font.at_active_master(&app.axis_values));
+        let between = TextInputs::for_editor(&app).with_text("فيرتوا غروتيسك");
+        assert!(between.compiled.is_some(), "a shaping font between masters");
+        let live = app.font.live_layout(&app.axis_values);
+        assert!(live.error.is_none(), "{:?}", live.error);
+        let mut text = TextState::new(&between);
+        let before = positions(&text);
+        assert!(before.len() > 4);
+        nudge_contour(&mut app);
+        assert_eq!(app.font.project.layout_revision(), layout);
+        let refreshed = TextInputs::for_editor(&app);
+        assert!(Arc::ptr_eq(
+            refreshed.compiled.as_ref().expect("live layout tables"),
+            between.compiled.as_ref().expect("live layout tables"),
         ));
         text.refresh(&refreshed);
         assert_eq!(positions(&text), before);

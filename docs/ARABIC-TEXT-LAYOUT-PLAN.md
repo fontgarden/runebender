@@ -306,18 +306,28 @@ Phases 1 to 4 are the new system; phases 5 to 7 build on it.
 
 ### Phase 2: values at a location
 
-- [ ] 2.1 Advances, anchors and kerning at a master come directly from that master.
-- [ ] 2.2 Between masters, each glyph is interpolated alone.
+- [x] 2.1 Advances, anchors and kerning at a master come directly from that master.
+      Done 2026-11-23: `LayoutInputs::at_location` takes the values of a layer at the location itself, and a test checks that the result equals `LayoutInputs::from_project` at each master.
+- [x] 2.2 Between masters, each glyph is interpolated alone.
       A glyph or anchor that cannot be interpolated uses the nearest master and gets a diagnostic.
-- [ ] 2.3 Text outlines between masters come from per-glyph interpolation, with the same fallback.
-- [ ] 2.4 Test: Amiri-style fixture with an anchor missing in one master; layout works, one diagnostic names the glyph and anchor.
+      Done 2026-11-23: advances and each anchor by name use the weights of the variation model of the outlines, over the layers of that glyph, sparse layers included.
+      Kerning pairs are resolved at each master with the UFO lookup that fontc uses, then interpolated.
+      Contour compatibility is not read.
+- [x] 2.3 Text outlines between masters come from per-glyph interpolation, with the same fallback.
+      Done 2026-11-23: the drawn outlines of the live masters are blended point by point for each glyph that the text shows.
+      Sparse layers are not used for outlines yet.
+- [x] 2.4 Test: Amiri-style fixture with an anchor missing in one master; layout works, one diagnostic names the glyph and anchor.
+      Done 2026-11-23 on `tests/fixtures/arabic`: at the midpoint the only diagnostic is the `top` anchor of `dal-ar`.
+      At three locations between the masters, the test strings give the same glyphs as the fontc variable compile of the finished glyphs, with advances and offsets within one unit.
 
 ### Phase 3: one path in the editor
 
-- [ ] 3.1 The Text tool, the proof strip, the specimen and the Proof panel section use the new engine.
+- [x] 3.1 The Text tool, the proof strip, the specimen and the Proof panel section use the new engine.
       Partly done 2026-11-23: at a master, `FontModel::live_layout` builds the tables on the calling thread and the text inputs use them.
-      Between masters the variable layout font of `6ca726a` is still used, until phase 2.
+      Done 2026-11-23: `FontModel::live_layout` is keyed on the layout revision, the active source and the location, and `TextInputs` uses it at every location.
 - [ ] 3.2 Remove from the editing path: the compiled preview font, `layout_font` and the layout compile cache of `6ca726a`, the `text_location` cache, the joining-rules fallback, and the post-shaping kerning lookup.
+      Partly done 2026-11-23: the text inputs no longer read the compiled preview font, and `layout_font`, the layout compile and its cache, `text_location` and the layout status of the status bar and the preview pump are removed.
+      The joining-rules fallback and the post-shaping kerning lookup remain.
 - [ ] 3.3 Rebuild triggers: feature code, glyph set, classes, and layout values of glyphs that the text can produce.
       A point edit rebuilds nothing.
 - [ ] 3.4 A drag step and a commit call the same layout function.

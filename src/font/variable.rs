@@ -312,9 +312,6 @@ pub(crate) struct VariableData {
     pub(super) font: babelfont::Font,
     pub(super) revision: u64,
     pub(super) compiled: std::sync::Mutex<super::compiler::CompileCache>,
-    /// The compiled layout font: the same document without outlines; see
-    /// [`Self::layout_revision`].
-    pub(super) layout: std::sync::Mutex<super::compiler::CompileCache>,
     /// The layout revision as of revision `layout_tracked`; see [`Self::layout_revision`].
     layout_revision: u64,
     layout_tracked: u64,
@@ -393,8 +390,8 @@ impl VariableData {
     ///
     /// Text layout reads advances, code points, anchors, components, kerning, groups,
     /// features and the glyph set, but no contour points.
-    /// A layer commit that changed nothing layout reads keeps the value, so the layout font that
-    /// shapes text is not rebuilt after a point moves.
+    /// A layer commit that changed nothing layout reads keeps the value, so the layout tables
+    /// that shape text are not rebuilt after a point moves.
     /// Every other change, including undo and redo, gives a new value.
     pub(super) fn layout_revision(&self) -> u64 {
         if self.layout_tracked == self.revision {
@@ -485,7 +482,6 @@ impl Clone for VariableData {
             font: self.font.clone(),
             revision: self.revision,
             compiled: std::sync::Mutex::default(),
-            layout: std::sync::Mutex::default(),
             layout_revision: self.layout_revision,
             layout_tracked: self.layout_tracked,
             glyphs: self.glyphs.clone(),

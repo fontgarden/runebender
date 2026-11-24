@@ -467,7 +467,6 @@ pub(crate) fn app_logic(app: &mut Workspace) -> impl WidgetView<Workspace> + use
                                                 shapes_pump(content, app.shapes.pump.clone())
                                                     .boxed(),
                                                 app.font.project.preview_pending()
-                                                    || app.font.project.layout_pending()
                                                     || app.review_compile_pending(),
                                                 app.proof_view
                                                     || (matches!(app.mode, Mode::Editor(_))
@@ -851,13 +850,10 @@ fn preview_pump<V: WidgetView<Workspace>>(
                     }
                 },
                 |app: &mut Workspace, ()| {
-                    // Poll only the compiles someone asked for; polling one that nobody
+                    // Poll only the compile someone asked for; polling one that nobody
                     // wants would start it.
                     if app.font.project.preview_pending() {
                         let _ = app.font.project.request_preview();
-                    }
-                    if app.font.project.layout_pending() {
-                        let _ = app.font.project.request_layout();
                     }
                 },
             )

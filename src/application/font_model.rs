@@ -74,11 +74,16 @@ pub(crate) struct FontModel {
     /// The text inputs last read from this model, reused while nothing they read has changed.
     pub(crate) text_inputs:
         std::sync::Mutex<Option<crate::application::editor::tools::text::CachedTextInputs>>,
-    /// The compiled preview's outlines and advances at the location last asked for.
-    pub(crate) text_location:
-        std::sync::Mutex<Option<crate::application::editor::tools::text::CachedTextLocation>>,
-    /// The layout tables of the active master, built from live values; see [`Self::live_layout`].
+    /// The interpolated advances and outlines of the text between masters, at the location last
+    /// asked for.
+    pub(crate) interpolated_text:
+        std::sync::Mutex<Option<crate::application::editor::tools::text::CachedInterpolatedText>>,
+    /// The layout tables at the location last asked for, built from live values; see
+    /// [`Self::live_layout`].
     live_layout: std::sync::Mutex<LiveLayoutCache>,
+    /// The outlines of masters that are not active, by master index, with the document
+    /// revision they were read at; see [`Self::master_outlines`].
+    master_outlines: std::sync::Mutex<HashMap<usize, (u64, MasterOutlines)>>,
     /// Inspector readouts that walk the whole font, kept until the document changes.
     readouts: std::sync::Mutex<Readouts>,
     /// Whether [`Self::preview_font`] compiles on the calling thread or on a worker thread.
@@ -224,38 +229,89 @@ impl FontModel {
         }
     }
 
-    /// The shaping font of the active master, built on the calling thread from live values.
+    /// Normalized coordinates, in axis order, of these user-space axis values.
+    pub(crate) fn normalized_values(&self, values: &[f64]) -> Vec<f64> {
+        self.axes
+            .iter()
+            .enumerate()
+            .map(|(index, axis)| {
+                axis.user_to_normalized(values.get(index).copied().unwrap_or(axis.default))
+            })
+            .collect()
+    }
+
+    /// The normalized designspace location, by axis name, of these user-space axis values.
+    pub(crate) fn normalized_location(
+        &self,
+        values: &[f64],
+    ) -> runebender::font::var_model::Location {
+        self.axes
+            .iter()
+            .zip(self.normalized_values(values))
+            .map(|(axis, value)| (axis.name.clone(), value))
+            .collect()
+    }
+
+    /// The shaping font at these user-space axis values, built on the calling thread from live
+    /// values.
     ///
-    /// The tables are a function of the feature code and of the advances, anchors, kerning
-    /// and groups of the master, so the same font state always gives the same layout, with
-    /// no background compile and no other master involved.
-    /// They are rebuilt only when the layout revision or the active master changes; moving
-    /// contour points changes neither.
+    /// The tables are a function of the feature code of the active master and of the
+    /// advances, anchors, kerning and groups at the location, so the same font state always
+    /// gives the same layout, with no background compile.
+    /// At a master the values are those of the master; between masters each glyph is
+    /// interpolated alone, and a value that cannot be interpolated comes from the nearest
+    /// master and is listed in `diagnostics`.
+    /// The tables are rebuilt only when the layout revision, the active master or the location
+    /// changes; moving contour points changes none of them.
     /// When the feature code does not compile, `font` is the last one that did and `error`
     /// says why; see `docs/ARABIC-TEXT-LAYOUT-PLAN.md`.
-    pub(crate) fn live_layout(&self) -> LiveLayout {
-        let key = (self.project.layout_revision(), self.active());
+    pub(crate) fn live_layout(&self, values: &[f64]) -> LiveLayout {
+        let normalized = self.normalized_values(values);
+        let key = (
+            self.project.layout_revision(),
+            self.active(),
+            normalized.iter().map(|value| value.to_bits()).collect(),
+        );
         let mut cache = self
             .live_layout
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if cache.key != Some(key) {
+        if cache.key.as_ref() != Some(&key) {
             cache.key = Some(key);
-            let built = self
+            let read = self
                 .project
                 .source_id(self.active())
                 .ok_or_else(|| "the active source is not loaded".to_string())
                 .and_then(|source| {
-                    runebender::text::layout_tables::LayoutInputs::from_project(
-                        &self.project,
-                        source,
-                    )
-                })
-                .and_then(|inputs| cache.tables.build(&inputs));
-            match built {
-                Ok(font) => {
-                    cache.font = Some(Arc::new(font.into_bytes()));
-                    cache.error = None;
+                    use runebender::text::layout_tables::LayoutInputs;
+                    if self.at_active_master(values) {
+                        LayoutInputs::from_project(&self.project, source)
+                            .map(|inputs| (inputs, Vec::new()))
+                    } else {
+                        LayoutInputs::at_location(
+                            &self.project,
+                            &self.normalized_location(values),
+                            source,
+                        )
+                    }
+                });
+            match read {
+                Ok((inputs, diagnostics)) => {
+                    cache.diagnostics = Arc::new(diagnostics);
+                    cache.advances = Arc::new(
+                        inputs
+                            .glyphs
+                            .iter()
+                            .map(|glyph| (glyph.name.clone(), glyph.advance))
+                            .collect(),
+                    );
+                    match cache.tables.build(&inputs) {
+                        Ok(font) => {
+                            cache.font = Some(Arc::new(font.into_bytes()));
+                            cache.error = None;
+                        }
+                        Err(error) => cache.error = Some(error),
+                    }
                 }
                 Err(error) => cache.error = Some(error),
             }
@@ -263,6 +319,8 @@ impl FontModel {
         LiveLayout {
             font: cache.font.clone(),
             error: cache.error.clone(),
+            diagnostics: cache.diagnostics.clone(),
+            advances: cache.advances.clone(),
         }
     }
 
@@ -280,18 +338,51 @@ impl FontModel {
         }
     }
 
-    /// The font that shapes text: the document without outlines.
+    /// The drawn outlines of one master that is not active, by glyph name.
     ///
-    /// It is rebuilt only after an edit that can change layout, so it stays ready while
-    /// points move, and a glyph whose contours do not interpolate does not stop it.
-    pub(crate) fn layout_font(
-        &self,
-    ) -> Result<Option<Arc<runebender::font::compiler::CompiledFont>>, String> {
-        match self.preview_mode {
-            CompileMode::Blocking => self.project.compiled_layout().map(Some),
-            CompileMode::Background => self.project.request_layout(),
+    /// Reading them draws every glyph of the master, so they are kept and read again only
+    /// after an edit to a layer of that master, or one that the layer journal cannot follow.
+    /// Edits of the active master, which is where the designer draws, keep them.
+    pub(crate) fn master_outlines(&self, index: usize) -> Option<MasterOutlines> {
+        let source = self.project.source_id(index)?;
+        let revision = self.project.document_revision();
+        let mut cache = self
+            .master_outlines
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some((built_at, outlines)) = cache.get_mut(&index) {
+            let current = *built_at == revision
+                || self
+                    .project
+                    .layer_changes_since(*built_at)
+                    .is_some_and(|changes| {
+                        changes.iter().all(|change| change.layer.source != source)
+                    });
+            if current {
+                *built_at = revision;
+                return Some(outlines.clone());
+            }
         }
+        let outlines: MasterOutlines = match self.parked_entries.get(&index) {
+            Some((built_at, glyphs, _)) if *built_at == revision => Arc::new(
+                glyphs
+                    .iter()
+                    .map(|glyph| (glyph.name.clone(), glyph.outline.clone()))
+                    .collect(),
+            ),
+            _ => Arc::new(
+                self.project
+                    .document_source_glyph_entries(source)
+                    .ok()?
+                    .iter()
+                    .map(|entry| (entry.name().to_owned(), entry.outline().clone()))
+                    .collect(),
+            ),
+        };
+        cache.insert(index, (revision, outlines.clone()));
+        Some(outlines)
     }
+
     pub(crate) fn open(path: &FsPath) -> Result<Self, String> {
         let project = Project::load(path)?;
         Ok(Self::from_project(project))
@@ -307,8 +398,9 @@ impl FontModel {
             axes,
             edit_layers: HashMap::new(),
             text_inputs: std::sync::Mutex::new(None),
-            text_location: std::sync::Mutex::new(None),
+            interpolated_text: std::sync::Mutex::new(None),
             live_layout: std::sync::Mutex::default(),
+            master_outlines: std::sync::Mutex::default(),
             readouts: std::sync::Mutex::new(Readouts::default()),
             preview_mode: CompileMode::current(),
         };
@@ -1408,6 +1500,9 @@ mod tests {
     }
 }
 
+/// The drawn outlines of one master by glyph name; see [`FontModel::master_outlines`].
+pub(crate) type MasterOutlines = Arc<HashMap<String, Arc<BezPath>>>;
+
 /// What [`FontModel::live_layout`] returns.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct LiveLayout {
@@ -1415,14 +1510,24 @@ pub(crate) struct LiveLayout {
     pub(crate) font: Option<Arc<Vec<u8>>>,
     /// Why the current font state could not be built.
     pub(crate) error: Option<String>,
+    /// The values at the location that came from the nearest master instead of the
+    /// interpolation; empty at a master.
+    pub(crate) diagnostics: Arc<Vec<runebender::text::layout_tables::LayoutDiagnostic>>,
+    /// The advance of each glyph at the location.
+    pub(crate) advances: Arc<HashMap<String, f64>>,
 }
+
+/// The layout revision, the active master and the bits of the normalized location of a build.
+type LiveLayoutKey = (u64, usize, Vec<u64>);
 
 /// The last build of the live layout and the state it was built from.
 #[derive(Debug, Default)]
 struct LiveLayoutCache {
-    /// The layout revision and the active master of the last build attempt.
-    key: Option<(u64, usize)>,
+    /// The state of the last build attempt.
+    key: Option<LiveLayoutKey>,
     tables: runebender::text::layout_tables::LayoutTables,
     font: Option<Arc<Vec<u8>>>,
     error: Option<String>,
+    diagnostics: Arc<Vec<runebender::text::layout_tables::LayoutDiagnostic>>,
+    advances: Arc<HashMap<String, f64>>,
 }
