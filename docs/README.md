@@ -37,6 +37,7 @@ Commands in these guides run from the repository root unless stated otherwise.
 These checklists retain implementation decisions, unfinished work, and earlier validation limits.
 Check their dates and the current implementation before treating an item as completed or as the next task.
 
+- [Arabic text layout: research and plan](ARABIC-TEXT-LAYOUT-PLAN.md): the comparison with Fontra, Counterpunch and Glyphs, measurements, the design that computes layout from live values, and the work checklist.
 - [Higher-order interpolation research and plan](HOI-RESEARCH-PLAN.md): research, accepted design decisions, the synthetic test font, and the phased implementation plan.
 - [Virtua Regular AI checklist](VIRTUA-REGULAR-AI-CHECKLIST.md)
 - [AI architecture checklist](AI-ARCHITECTURE-CHECKLIST.md)
