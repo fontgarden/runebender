@@ -681,3 +681,97 @@ fn the_frames_around_a_release_show_the_same_layout() {
         "the commit frame shows the same layout"
     );
 }
+
+/// `ccmp` decomposes each teh into the dotless skeleton and the dots: the line draws all four
+/// glyphs, and the dots, open in the editor, are edited at their own place in the line.
+#[test]
+fn a_decomposed_letter_draws_every_glyph_and_edits_its_dots_in_place() {
+    use crate::application::platform::screenshot::Headless;
+    use crate::application::view::render::app_logic;
+    use std::time::Duration;
+    use xilem::view::sized_box;
+    const TEXT: &str = "تت";
+
+    let app = arabic_workspace("twodotshorizontalabove-ar");
+    let mut editor = line_editor(&app, TEXT);
+    let text = editor.text.as_mut().expect("a text line");
+    let placed = text.placed();
+    let origins: Vec<Point> = placed.iter().map(|sort| sort.origin).collect();
+    assert_eq!(
+        origins,
+        [
+            Point::new(270.0, 320.0),
+            Point::new(0.0, 0.0),
+            Point::new(600.0, 320.0),
+            Point::new(480.0, 0.0),
+        ]
+    );
+    assert_eq!(
+        placed.iter().map(|sort| sort.index).collect::<Vec<_>>(),
+        [1, 1, 0, 0]
+    );
+    // The dots of the first teh are the glyph being edited.
+    assert_eq!(
+        text.buffer.active_glyph_name(),
+        Some("twodotshorizontalabove-ar")
+    );
+    let active: Vec<Point> = placed
+        .iter()
+        .filter(|sort| sort.active)
+        .map(|sort| sort.origin)
+        .collect();
+    assert_eq!(active, [Point::new(600.0, 320.0)]);
+    assert_eq!(text.active_origin(), Some(Point::new(600.0, 320.0)));
+    // The two dots share one outline, and the skeletons have their own.
+    assert!(Arc::ptr_eq(&placed[0].outline, &placed[2].outline));
+    assert!(!Arc::ptr_eq(&placed[1].outline, &placed[3].outline));
+
+    // A selection of the first teh covers its skeleton and its dots.
+    text.buffer.select_range(0, 1);
+    let selected: Vec<bool> = text.placed().iter().map(|sort| sort.selected).collect();
+    assert_eq!(selected, [false, false, true, true]);
+    // The caret between the letters is at the left edge of the first.
+    text.buffer.set_cursor(1);
+    assert_eq!(text.caret(), Point::new(480.0, 0.0));
+
+    // A click on the ink of the dots of the second teh edits those dots; a click on its
+    // skeleton edits the skeleton.
+    assert_eq!(text.click(Point::new(190.0, 420.0)), Some((1, Some(0))));
+    assert_eq!(
+        text.activate(1, Some(0)).as_deref(),
+        Some("twodotshorizontalabove-ar")
+    );
+    assert_eq!(text.active_origin(), Some(Point::new(270.0, 320.0)));
+    assert_eq!(text.click(Point::new(240.0, 40.0)), Some((1, None)));
+    assert_eq!(
+        text.activate(1, None).as_deref(),
+        Some("behDotless-ar.fina")
+    );
+
+    // The whole application draws the line, the strip and the canvas without a glyph lost.
+    let mut app = arabic_workspace("twodotshorizontalabove-ar");
+    app.set_editor_text(TEXT.into());
+    let logic = |app: &mut Workspace| sized_box(app_logic(app));
+    let mut headless = Headless::new(app, logic, (1400, 900), 1.0);
+    for _ in 0..2 {
+        headless.rebuild(logic);
+        headless.anim_frame(Duration::from_millis(500));
+        headless.redraw();
+    }
+    let canvas = headless
+        .find_widget::<EditorWidget>()
+        .expect("the editor canvas is in the tree");
+    let editor = canvas.inner();
+    let text = editor.text.as_ref().expect("a text line");
+    assert_eq!(text.placed().len(), 4);
+    assert_eq!(
+        text.buffer.active_glyph_name(),
+        Some("twodotshorizontalabove-ar")
+    );
+    let active = text.active_origin().expect("an active glyph");
+    assert_eq!(
+        editor.glyph_affine() * Point::ORIGIN,
+        editor.session.viewport.affine() * active,
+        "the glyph editor draws the dots at their place in the line"
+    );
+}

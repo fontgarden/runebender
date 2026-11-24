@@ -14,6 +14,14 @@
 //! the font's own `features.fea` when it compiles, and through the
 //! built-in Arabic joining rules in the `shaping` module otherwise.
 //!
+//! A sort stands for one typed character.
+//! When shaping gives that character several glyphs, as a `ccmp` decomposition of a letter
+//! into a skeleton and its dots does, the sort keeps every glyph of its cluster in the
+//! shaper's order, each with its own advance and offsets; see [`TextBuffer::cluster_glyphs`].
+//! Layout gives each glyph an item, hit testing and drawing see each glyph, and the caret,
+//! the selection and deletion treat the cluster as one unit.
+//! Any of the glyphs can be the one being edited; see [`TextBuffer::activate_cluster_glyph`].
+//!
 //! The Text tool does not use Parley for this, for three reasons.
 //! Each sort draws the live outline and advance of a glyph that is being edited.
 //! A sort can name a glyph that has no code point.
@@ -135,11 +143,20 @@ pub struct TextLayout {
     pub cursor_y: f64,
 }
 
-/// Placement of one sort in a layout.
+/// Placement of one glyph of a sort in a layout.
+///
+/// A sort usually draws one glyph.
+/// When shaping gives one character several glyphs, such as a `ccmp` decomposition of a
+/// letter into a skeleton and its dots, each glyph has its own item with the same `index`;
+/// `cluster_glyph` tells them apart.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextLayoutItem {
     /// Index of the sort in the buffer.
     pub index: usize,
+    /// `None` for the sort's own glyph, the one [`TextSort::glyph_name`] names.
+    /// `Some(position)` for another glyph of the sort's cluster, at that position of
+    /// [`TextBuffer::cluster_glyphs`].
+    pub cluster_glyph: Option<usize>,
     /// Left edge of the glyph in font units, kerning already applied.
     pub x: f64,
     /// Baseline y of the glyph's line.
@@ -207,6 +224,22 @@ pub struct TextHit {
     pub cursor: usize,
     /// The sort whose box contains the point, if any.
     pub active_sort: Option<usize>,
+    /// The glyph of that sort's cluster whose box contains the point, as
+    /// [`TextLayoutItem::cluster_glyph`] names it.
+    pub cluster_glyph: Option<usize>,
+}
+
+/// One glyph that shaping gave a sort, in the order of the shaper's output.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClusterGlyph {
+    /// The glyph name.
+    pub name: String,
+    /// The advance after positioning, in font units.
+    pub advance: f64,
+    /// Horizontal offset from the pen position, in font units.
+    pub x_offset: f64,
+    /// Vertical offset from the baseline, in font units.
+    pub y_offset: f64,
 }
 
 /// Result of `TextBuffer::activate_sort_at`: the sort that was activated and where it sits.
@@ -493,20 +526,34 @@ impl TextSort {
 #[derive(Debug, Default)]
 struct ShapingFontCache(RefCell<Option<Option<Rc<ShapingFont>>>>);
 
-/// Where shaping put each glyph relative to its pen position, by sort
-/// index: a mark's offset onto its base's anchor. Derived from the
-/// sorts and the font, so it is skipped by `PartialEq` and starts
-/// empty on clone, like the shaping font.
-#[derive(Debug, Default)]
-struct ShapedOffsets(HashMap<usize, (f64, f64)>);
+/// The glyphs that shaping gave one sort, when they are more than its own glyph at the pen.
+#[derive(Debug, Clone, PartialEq)]
+struct ShapedCluster {
+    /// Every glyph of the cluster in the order of the shaper's output, which is visual order.
+    glyphs: Vec<ClusterGlyph>,
+    /// The position of the sort's own glyph: the first glyph in logical order.
+    own: usize,
+}
 
-impl Clone for ShapedOffsets {
-    fn clone(&self) -> Self {
-        Self::default()
+impl ShapedCluster {
+    fn own_offset(&self) -> (f64, f64) {
+        self.glyphs
+            .get(self.own)
+            .map_or((0.0, 0.0), |glyph| (glyph.x_offset, glyph.y_offset))
     }
 }
 
-impl PartialEq for ShapedOffsets {
+/// What shaping gave each sort beyond its own glyph at the pen, by sort index: a mark's
+/// offset onto its base's anchor, and the other glyphs of a cluster.
+/// Sorts that shaping did not move and gave one glyph have no entry.
+/// Derived from the sorts and the font, so it is skipped by `PartialEq`; a clone keeps it,
+/// because it is right for the cloned sorts.
+/// An edit of the sorts clears it until the next shaping, so no glyph is drawn for a sort
+/// that has moved.
+#[derive(Debug, Default, Clone)]
+struct ShapedClusters(HashMap<usize, ShapedCluster>);
+
+impl PartialEq for ShapedClusters {
     fn eq(&self, _: &Self) -> bool {
         true
     }
@@ -606,8 +653,12 @@ pub struct TextBuffer {
     shaping_font: ShapingFontCache,
     compiled_font: Option<Arc<Vec<u8>>>,
     normalized: Vec<f64>,
-    /// The positioning shaping gave each sort, applied by `layout`.
-    shaped_offsets: ShapedOffsets,
+    /// The positioning and the other glyphs of a cluster that shaping gave each sort,
+    /// applied by `layout`.
+    shaped: ShapedClusters,
+    /// The glyph of the active sort's cluster that is being edited, as
+    /// [`TextLayoutItem::cluster_glyph`] names it; `None` for the sort's own glyph.
+    active_cluster_glyph: Option<usize>,
     /// Bidi runs per stretch of text. Derived from the sorts, so it is
     /// skipped by `PartialEq` and starts empty on clone.
     bidi_runs: BidiRunCache,
@@ -633,7 +684,8 @@ impl Default for TextBuffer {
             shaping_font: ShapingFontCache::default(),
             compiled_font: None,
             normalized: Vec::new(),
-            shaped_offsets: ShapedOffsets::default(),
+            shaped: ShapedClusters::default(),
+            active_cluster_glyph: None,
             bidi_runs: BidiRunCache::default(),
         }
     }
@@ -654,11 +706,100 @@ impl TextBuffer {
     /// a mark's offset onto its base. Zero for anything shaping did not
     /// move. `layout` already applies it.
     pub fn shaped_offset(&self, index: usize) -> (f64, f64) {
-        self.shaped_offsets
+        self.shaped
             .0
             .get(&index)
-            .copied()
-            .unwrap_or((0.0, 0.0))
+            .map_or((0.0, 0.0), ShapedCluster::own_offset)
+    }
+
+    /// Every glyph that shaping gave the sort at `index`, in the order of the shaper's output,
+    /// which is visual order.
+    ///
+    /// A sort that shaping gave one glyph has an empty list: it draws its own glyph, the one
+    /// [`TextSort::glyph_name`] names, at [`Self::shaped_offset`].
+    /// A sort with several glyphs, such as a letter that `ccmp` decomposes into a skeleton and
+    /// a dot mark, lists them all; its own glyph is the first in logical order.
+    pub fn cluster_glyphs(&self, index: usize) -> &[ClusterGlyph] {
+        self.shaped
+            .0
+            .get(&index)
+            .filter(|cluster| cluster.glyphs.len() > 1)
+            .map_or(&[], |cluster| cluster.glyphs.as_slice())
+    }
+
+    /// The name of the glyph that a layout item draws.
+    pub fn item_glyph_name(&self, item: &TextLayoutItem) -> Option<&str> {
+        match item.cluster_glyph {
+            None => self.sort(item.index)?.glyph_name(),
+            Some(position) => self
+                .cluster_glyphs(item.index)
+                .get(position)
+                .map(|glyph| glyph.name.as_str()),
+        }
+    }
+
+    /// The glyph of the active sort's cluster that is being edited, as
+    /// [`TextLayoutItem::cluster_glyph`] names it; `None` for the sort's own glyph.
+    pub fn active_cluster_glyph(&self) -> Option<usize> {
+        self.active_cluster_glyph.filter(|position| {
+            self.active_sort
+                .is_some_and(|active| self.cluster_glyphs(active).len() > *position)
+        })
+    }
+
+    /// The name of the glyph that is being edited: the active sort's own glyph, or the glyph
+    /// of its cluster that [`Self::activate_cluster_glyph`] chose.
+    pub fn active_glyph_name(&self) -> Option<&str> {
+        let active = self.active_sort?;
+        match self.active_cluster_glyph() {
+            Some(position) => self
+                .cluster_glyphs(active)
+                .get(position)
+                .map(|glyph| glyph.name.as_str()),
+            None => self.sort(active)?.glyph_name(),
+        }
+    }
+
+    /// Make the sort at `index` the active one, editing the glyph of its cluster at
+    /// `cluster_glyph`, or its own glyph for `None`.
+    /// Returns false, changing nothing, when the index is out of range, the sort is a line
+    /// break, or the cluster has no glyph at that position.
+    pub fn activate_cluster_glyph(&mut self, index: usize, cluster_glyph: Option<usize>) -> bool {
+        if cluster_glyph.is_some_and(|position| position >= self.cluster_glyphs(index).len()) {
+            return false;
+        }
+        if !self.activate_sort(index) {
+            return false;
+        }
+        // The sort's own glyph is named by `None`, whatever its position in the cluster.
+        self.active_cluster_glyph = cluster_glyph.filter(|position| {
+            self.shaped
+                .0
+                .get(&index)
+                .is_none_or(|cluster| cluster.own != *position)
+        });
+        true
+    }
+
+    /// The sort and the glyph of its cluster that draw `name`: the first sort whose own glyph
+    /// it is, or else the first cluster that has it.
+    pub fn find_glyph(&self, name: &str) -> Option<(usize, Option<usize>)> {
+        if let Some(index) = self
+            .sorts
+            .iter()
+            .position(|sort| sort.glyph_name() == Some(name))
+        {
+            return Some((index, None));
+        }
+        self.shaped
+            .0
+            .iter()
+            .filter(|(_, cluster)| cluster.glyphs.len() > 1)
+            .filter_map(|(index, cluster)| {
+                let position = cluster.glyphs.iter().position(|glyph| glyph.name == name)?;
+                (position != cluster.own).then_some((*index, Some(position)))
+            })
+            .min()
     }
 
     /// Make an empty buffer with no glyphs, no kerning, and per-line direction detection on.
@@ -751,7 +892,13 @@ impl TextBuffer {
         if sort.absorbed {
             return Err("selected character is absorbed into another shaped glyph".into());
         }
-        let Some(expected_name) = sort.glyph_name() else {
+        // The glyph being edited can be another glyph of the sort's cluster.
+        let expected_name = if self.active_sort == Some(selected) {
+            self.active_glyph_name()
+        } else {
+            sort.glyph_name()
+        };
+        let Some(expected_name) = expected_name else {
             return Err("selected sort has no glyph name".into());
         };
         let mut text = String::new();
@@ -859,6 +1006,20 @@ impl TextBuffer {
         *glyph_name = name.into();
         *glyph_codepoint = codepoint;
         *glyph_advance_width = advance_width;
+        // The sort now draws the glyph it names, at the offset shaping gave it, and none of the
+        // other glyphs of its old cluster.
+        if let Some(cluster) = self.shaped.0.get_mut(&index) {
+            let (x_offset, y_offset) = cluster.own_offset();
+            *cluster = ShapedCluster {
+                glyphs: vec![ClusterGlyph {
+                    name: glyph_name.clone(),
+                    advance: advance_width,
+                    x_offset,
+                    y_offset,
+                }],
+                own: 0,
+            };
+        }
         true
     }
 
@@ -1000,6 +1161,7 @@ impl TextBuffer {
         self.selection_anchor = None;
         self.active_sort = None;
         self.manual_kerning = None;
+        self.shaped.0.clear();
         self.direction = TextDirection::default();
         self.auto_direction = true;
     }
@@ -1014,6 +1176,7 @@ impl TextBuffer {
     ) {
         self.delete_selected_sorts();
         self.manual_kerning = None;
+        self.shaped.0.clear();
         if let Some(active) = self.active_sort
             && let Some(sort) = self.sorts.get_mut(active)
         {
@@ -1043,6 +1206,7 @@ impl TextBuffer {
     pub fn insert_line_break(&mut self) {
         self.delete_selected_sorts();
         self.manual_kerning = None;
+        self.shaped.0.clear();
         let index = self.cursor;
         self.sorts.insert(self.cursor, TextSort::line_break());
         self.cursor += 1;
@@ -1063,6 +1227,7 @@ impl TextBuffer {
             return None;
         }
         self.manual_kerning = None;
+        self.shaped.0.clear();
         let deleted_index = self.cursor - 1;
         let deleted = self.sorts.remove(deleted_index);
         self.cursor -= 1;
@@ -1080,6 +1245,7 @@ impl TextBuffer {
             return None;
         }
         self.manual_kerning = None;
+        self.shaped.0.clear();
         let deleted = self.sorts.remove(self.cursor);
         self.adjust_active_after_delete(self.cursor);
         Some(deleted)
@@ -1233,6 +1399,7 @@ impl TextBuffer {
             return false;
         }
         self.set_active_sort(Some(index));
+        self.active_cluster_glyph = None;
         true
     }
 
@@ -1248,7 +1415,7 @@ impl TextBuffer {
     ) -> Option<TextSortActivation> {
         let layout = self.layout(line_height);
         let item = self.hit_sort_item_at(x, y, line_height, ascender, descender, &layout)?;
-        self.activate_sort(item.index)
+        self.activate_cluster_glyph(item.index, item.cluster_glyph)
             .then_some(TextSortActivation {
                 index: item.index,
                 x: item.x,
@@ -1260,6 +1427,7 @@ impl TextBuffer {
         if self.active_sort == active {
             return;
         }
+        self.active_cluster_glyph = None;
         if let Some(previous) = self.active_sort
             && Some(previous) != active
             && let Some(sort) = self.sorts.get_mut(previous)
@@ -1289,6 +1457,7 @@ impl TextBuffer {
         advance_width: f64,
     ) -> usize {
         self.manual_kerning = None;
+        self.shaped.0.clear();
         let index = match self.active_sort {
             Some(active) => (active + 1).min(self.sorts.len()),
             None => self.cursor,
@@ -1316,6 +1485,7 @@ impl TextBuffer {
     ) {
         self.delete_selected_sorts();
         self.manual_kerning = None;
+        self.shaped.0.clear();
         let index = self.cursor;
         self.sorts
             .insert(index, TextSort::glyph(name, codepoint, advance_width));
@@ -1352,6 +1522,7 @@ impl TextBuffer {
         let range = self.selection_range()?;
         let first = self.sorts.get(range.start)?.clone();
         self.manual_kerning = None;
+        self.shaped.0.clear();
         if let Some(active) = self.active_sort {
             if range.contains(&active) {
                 self.set_active_sort(None);

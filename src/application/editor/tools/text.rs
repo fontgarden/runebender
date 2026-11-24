@@ -684,14 +684,11 @@ impl TextState {
         // The stored text holds a line break as a line ending, so restore it as one.
         buffer.insert_text(&inputs.initial);
         if let Some((name, codepoint, advance)) = &inputs.active_glyph {
-            let existing = {
-                buffer
-                    .iter()
-                    .position(|sort| sort.glyph_name() == Some(name.as_str()))
-            };
-            match existing {
-                Some(index) => {
-                    buffer.activate_sort(index);
+            // The open glyph can also be another glyph of a sort's cluster, such as the dots
+            // that `ccmp` gives a letter.
+            match buffer.find_glyph(name) {
+                Some((index, cluster_glyph)) => {
+                    buffer.activate_cluster_glyph(index, cluster_glyph);
                 }
                 None if buffer.is_empty() => {
                     // An empty line still needs the open glyph as an edit target.
@@ -881,7 +878,9 @@ impl TextState {
             &display
         };
         let layout = buffer.layout(self.line_height);
-        let active = buffer.active_sort();
+        let active = buffer
+            .active_sort()
+            .map(|index| (index, buffer.active_cluster_glyph()));
         let selection = buffer.selection_range();
         layout
             .items
@@ -891,7 +890,8 @@ impl TextState {
                 if sort.is_absorbed() {
                     return None;
                 }
-                let name = sort.glyph_name()?;
+                // Every glyph of a cluster is drawn, each with its own outline.
+                let name = buffer.item_glyph_name(item)?;
                 let outline = self.outline(name)?;
                 let cluster_end = ((item.index + 1)..buffer.len())
                     .find(|index| !buffer.sort(*index).is_some_and(|sort| sort.is_absorbed()))
@@ -906,7 +906,7 @@ impl TextState {
                     advance: item.advance_width,
                     nominal_width: item.nominal_width,
                     spacing_before: item.spacing_before,
-                    active: active == Some(item.index),
+                    active: active == Some((item.index, item.cluster_glyph)),
                     selected,
                 })
             })
@@ -933,74 +933,84 @@ impl TextState {
         Point::new(layout.cursor_x, layout.cursor_y)
     }
 
-    /// Layout origin of the sort whose glyph is open in the outline editor.
+    /// Layout origin of the glyph that is open in the outline editor: the active sort's own
+    /// glyph, or the glyph of its cluster that is being edited.
     pub(crate) fn active_origin(&self) -> Option<Point> {
         let active = self.buffer.active_sort()?;
+        let cluster_glyph = self.buffer.active_cluster_glyph();
         self.buffer
             .layout(self.line_height)
             .items
             .iter()
-            .find(|item| item.index == active)
+            .find(|item| item.index == active && item.cluster_glyph == cluster_glyph)
             .map(|item| Point::new(item.x, item.y))
+    }
+
+    /// The glyph whose ink is under `at`: its sort and its place in the sort's cluster.
+    /// The glyph drawn last wins, so a mark wins over the base it sits on.
+    fn ink_hit(&self, at: Point) -> Option<(usize, Option<usize>)> {
+        use masonry::kurbo::Shape;
+        let layout = self.buffer.layout(self.line_height);
+        layout.items.iter().rev().find_map(|item| {
+            let name = self.buffer.item_glyph_name(item)?;
+            self.outline(name)
+                .is_some_and(|p| p.winding(Point::new(at.x - item.x, at.y - item.y)) != 0)
+                .then_some((item.index, item.cluster_glyph))
+        })
     }
 
     /// Prefer visible ink where two heavily kerned advance boxes overlap.
     pub(crate) fn kern_hit(&self, at: Point) -> Option<usize> {
-        use masonry::kurbo::Shape;
-        let layout = self.buffer.layout(self.line_height);
-        for item in layout.items.iter().rev() {
-            let Some(name) = self.buffer.sort(item.index).and_then(|s| s.glyph_name()) else {
-                continue;
-            };
-            if self
-                .outline(name)
-                .is_some_and(|p| p.winding(Point::new(at.x - item.x, at.y - item.y)) != 0)
-            {
-                return Some(item.index);
-            }
-        }
-        self.buffer
-            .hit_test(at.x, at.y, self.line_height, self.ascender, self.descender)
-            .active_sort
+        self.ink_hit(at).map(|(index, _)| index).or_else(|| {
+            self.buffer
+                .hit_test(at.x, at.y, self.line_height, self.ascender, self.descender)
+                .active_sort
+        })
     }
 
-    /// A click: put the caret there, and report the sort under it.
-    pub(crate) fn click(&mut self, at: Point) -> Option<usize> {
+    /// A click: put the caret there, and report the sort under it with the glyph of its
+    /// cluster.
+    /// Ink wins over a sort box, so a click on a mark, or on the dots of a letter that `ccmp`
+    /// decomposes, reports that glyph.
+    pub(crate) fn click(&mut self, at: Point) -> Option<(usize, Option<usize>)> {
         let hit = self
             .buffer
             .hit_test(at.x, at.y, self.line_height, self.ascender, self.descender);
+        let ink = self.ink_hit(at);
         self.buffer
             .place_cursor_at(at.x, at.y, self.line_height, self.ascender, self.descender);
-        hit.active_sort
+        ink.or_else(|| Some((hit.active_sort?, hit.cluster_glyph)))
     }
 
     /// Activate the sort box under `at` without moving the text caret.
     pub(crate) fn activate_at(&mut self, at: Point) -> Option<String> {
-        let activation = self.buffer.activate_sort_at(
+        if let Some((index, cluster_glyph)) = self.ink_hit(at) {
+            return self.activate(index, cluster_glyph);
+        }
+        self.buffer.activate_sort_at(
             at.x,
             at.y,
             self.line_height,
             self.ascender,
             self.descender,
         )?;
-        self.buffer
-            .sort(activation.index)
-            .and_then(|sort| sort.glyph_name())
-            .map(str::to_string)
+        self.buffer.active_glyph_name().map(str::to_string)
     }
 
-    /// Make a sort the one being edited, and report its glyph.
-    pub(crate) fn activate(&mut self, index: usize) -> Option<String> {
-        self.buffer.activate_sort(index).then(|| {
-            self.buffer
-                .sort(index)
-                .and_then(|sort| sort.glyph_name())
-                .map(str::to_string)
-        })?
+    /// Make a glyph of a sort's cluster the one being edited, and report its name.
+    /// `None` is the sort's own glyph.
+    pub(crate) fn activate(
+        &mut self,
+        index: usize,
+        cluster_glyph: Option<usize>,
+    ) -> Option<String> {
+        self.buffer
+            .activate_cluster_glyph(index, cluster_glyph)
+            .then(|| self.buffer.active_glyph_name().map(str::to_string))?
     }
 }
 
-/// One sort, ready to draw.
+/// One glyph of a sort, ready to draw.
 pub(crate) struct PlacedSort {
     pub nominal_width: f64,
     pub spacing_before: f64,
@@ -1474,7 +1484,9 @@ mod tests {
             .find(|item| item.index == 2)
             .expect("the lam-alef ligature has one visible item");
         assert_eq!(
-            state.click(Point::new(lam.x + lam.advance_width / 2.0, lam.y)),
+            state
+                .click(Point::new(lam.x + lam.advance_width / 2.0, lam.y))
+                .map(|(index, _)| index),
             Some(2),
             "pointer hit mapping resolves the visible ligature to its logical lam"
         );

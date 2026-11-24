@@ -2,6 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Platform-independent shaping helpers shared by Runebender frontends.
+//!
+//! The script and the joining type of a character come from the Unicode Character Database
+//! through `icu_properties`, the crate that the kerning writer of fontc reads the same data
+//! from, so the text line and the exported font agree on which characters are Arabic.
+
+use icu_properties::CodePointMapData;
+use icu_properties::props::{JoiningType, Script};
+use icu_properties::script::ScriptWithExtensions;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// The contextual form an Arabic letter takes based on its neighbors.
@@ -29,24 +37,27 @@ impl PositionalForm {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-/// How a character joins with its neighbors, after Unicode `Joining_Type`.
+/// How a character joins with its neighbors: the Unicode `Joining_Type` property.
 pub enum ArabicJoiningType {
-    /// Joins on both sides, like `beh`.
+    /// Joins on both sides, like `beh` (`D`).
     Dual,
-    /// Joins to the preceding letter only, like `alef` or `dal`.
+    /// Joins to the preceding letter only, like `alef` or `dal` (`R`).
     Right,
-    /// Never joins, such as a non-Arabic character.
+    /// Joins to the following letter only (`L`), as in Manichaean and Phags-pa.
+    Left,
+    /// Never joins, such as `hamza` or a Latin letter (`U`).
     NonJoining,
-    /// Forces joining on both sides; the tatweel (`U+0640`).
+    /// Forces joining on both sides, like the tatweel (`U+0640`) and the zero width joiner
+    /// (`C`).
     JoinCausing,
-    /// Marks that are skipped when finding the joining neighbors.
+    /// Marks that are skipped when finding the joining neighbors (`T`).
     Transparent,
 }
 
 impl ArabicJoiningType {
     /// Returns `true` when a character of this type connects to the letter after it.
     pub const fn joins_forward(self) -> bool {
-        matches!(self, Self::Dual | Self::JoinCausing)
+        matches!(self, Self::Dual | Self::Left | Self::JoinCausing)
     }
 
     /// Returns `true` when a character of this type connects to the letter before it.
@@ -89,6 +100,7 @@ pub fn arabic_positional_form(chars: &[char], index: usize) -> PositionalForm {
         ArabicJoiningType::Dual if prev_joins => PositionalForm::Final,
         ArabicJoiningType::Dual if next_joins => PositionalForm::Initial,
         ArabicJoiningType::Right if prev_joins => PositionalForm::Final,
+        ArabicJoiningType::Left if next_joins => PositionalForm::Initial,
         _ => PositionalForm::Isolated,
     }
 }
@@ -113,26 +125,45 @@ fn next_joining_type(chars: &[char], index: usize) -> Option<ArabicJoiningType> 
     None
 }
 
-/// Returns `true` when the character is in the Arabic, Arabic Supplement, or Arabic Extended-A blocks.
+/// The Arabic blocks: Arabic, Arabic Supplement, Arabic Extended-B, Arabic Extended-A, and the
+/// Arabic Presentation Forms A and B.
+const ARABIC_BLOCKS: [std::ops::RangeInclusive<u32>; 6] = [
+    0x0600..=0x06FF,
+    0x0750..=0x077F,
+    0x0870..=0x089F,
+    0x08A0..=0x08FF,
+    0xFB50..=0xFDFF,
+    0xFE70..=0xFEFF,
+];
+
+/// Returns `true` for a character of the Arabic blocks, or one whose Unicode
+/// `Script_Extensions` include Arabic.
+///
+/// The blocks are Arabic (U+0600 to U+06FF), Arabic Supplement (U+0750 to U+077F), Arabic
+/// Extended-B (U+0870 to U+089F), Arabic Extended-A (U+08A0 to U+08FF) and the Arabic
+/// Presentation Forms A and B (U+FB50 to U+FDFF and U+FE70 to U+FEFF), with the Quranic marks
+/// and the ornate parentheses U+FD3E and U+FD3F.
+/// Some characters of the blocks, such as the number mark U+0605, belong to the Common script
+/// alone, so the blocks are tested as well as the script.
+/// `Script_Extensions` adds the Arabic characters outside the blocks, such as the Arabic
+/// mathematical letters, and it covers the Common and Inherited characters that Arabic text
+/// uses, such as the tatweel, the harakat, the Arabic comma and the Arabic-Indic digits, so a
+/// shaping run does not break at them.
 pub fn is_arabic(char: char) -> bool {
-    let cp = char as u32;
-    (0x0600..=0x06ff).contains(&cp)
-        || (0x0750..=0x077f).contains(&cp)
-        || (0x08a0..=0x08ff).contains(&cp)
+    let codepoint = u32::from(char);
+    ARABIC_BLOCKS.iter().any(|block| block.contains(&codepoint))
+        || ScriptWithExtensions::new().has_script(char, Script::Arabic)
 }
 
-/// Returns the joining type of an Arabic character; unknown characters are `NonJoining`.
+/// Returns the Unicode `Joining_Type` of a character; characters without one are
+/// `NonJoining`, and marks of every script are `Transparent`.
 pub fn arabic_joining_type(char: char) -> ArabicJoiningType {
-    match char as u32 {
-        0x0622 | 0x0623 | 0x0625 | 0x0627 | 0x0629 | 0x062f | 0x0630 | 0x0631 | 0x0632 | 0x0648
-        | 0x0624 => ArabicJoiningType::Right,
-        0x0628 | 0x062a | 0x062b | 0x062c | 0x062d | 0x062e | 0x0633 | 0x0634 | 0x0635 | 0x0636
-        | 0x0637 | 0x0638 | 0x0639 | 0x063a | 0x0641 | 0x0642 | 0x0643 | 0x0644 | 0x0645
-        | 0x0646 | 0x0647 | 0x064a | 0x0626 | 0x0649 => ArabicJoiningType::Dual,
-        0x0640 => ArabicJoiningType::JoinCausing,
-        0x064b..=0x0652 | 0x0670 | 0x0610..=0x061a | 0x06d6..=0x06ed => {
-            ArabicJoiningType::Transparent
-        }
+    match CodePointMapData::<JoiningType>::new().get(char) {
+        JoiningType::DualJoining => ArabicJoiningType::Dual,
+        JoiningType::RightJoining => ArabicJoiningType::Right,
+        JoiningType::LeftJoining => ArabicJoiningType::Left,
+        JoiningType::JoinCausing => ArabicJoiningType::JoinCausing,
+        JoiningType::Transparent => ArabicJoiningType::Transparent,
         _ => ArabicJoiningType::NonJoining,
     }
 }
@@ -142,7 +173,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn joining_types_match_xilem_subset() {
+    fn joining_types_come_from_the_unicode_data() {
         assert_eq!(arabic_joining_type('\u{0627}'), ArabicJoiningType::Right);
         assert_eq!(arabic_joining_type('\u{0628}'), ArabicJoiningType::Dual);
         assert_eq!(
@@ -157,6 +188,66 @@ mod tests {
             arabic_joining_type('\u{064e}'),
             ArabicJoiningType::Transparent
         );
+        // Letters that the earlier hand-made table did not have.
+        for (char, joining) in [
+            ('\u{066E}', ArabicJoiningType::Dual),        // dotless beh
+            ('\u{06A9}', ArabicJoiningType::Dual),        // keheh
+            ('\u{06CC}', ArabicJoiningType::Dual),        // Farsi yeh
+            ('\u{0688}', ArabicJoiningType::Right),       // ddal
+            ('\u{0671}', ArabicJoiningType::Right),       // alef wasla
+            ('\u{0762}', ArabicJoiningType::Dual),        // keheh with dot above
+            ('\u{0870}', ArabicJoiningType::Right),       // alef with attached fatha
+            ('\u{08A0}', ArabicJoiningType::Dual),        // beh with small v below
+            ('\u{06E1}', ArabicJoiningType::Transparent), // small high dotless head of khah
+            ('\u{08F0}', ArabicJoiningType::Transparent), // open fathatan
+            ('\u{0670}', ArabicJoiningType::Transparent), // superscript alef
+            ('\u{0660}', ArabicJoiningType::NonJoining),  // Arabic-Indic digit zero
+            ('\u{200D}', ArabicJoiningType::JoinCausing), // zero width joiner
+            ('\u{A872}', ArabicJoiningType::Left),        // Phags-pa superfixed letter ra
+        ] {
+            assert_eq!(arabic_joining_type(char), joining, "{:04X}", char as u32);
+        }
+    }
+
+    /// Every assigned character of the Arabic blocks is Arabic.
+    #[test]
+    fn is_arabic_covers_every_assigned_character_of_the_arabic_blocks() {
+        use icu_properties::props::GeneralCategory;
+        let category = CodePointMapData::<GeneralCategory>::new();
+        let mut checked = 0;
+        let mut by_script = 0;
+        for block in ARABIC_BLOCKS {
+            for codepoint in block {
+                let Some(char) = char::from_u32(codepoint) else {
+                    continue;
+                };
+                if matches!(
+                    category.get(char),
+                    GeneralCategory::Unassigned | GeneralCategory::PrivateUse
+                ) {
+                    continue;
+                }
+                // U+FDD0 to U+FDEF are noncharacters, which are unassigned.
+                assert!(is_arabic(char), "U+{codepoint:04X} is Arabic");
+                checked += 1;
+                by_script +=
+                    usize::from(ScriptWithExtensions::new().has_script(char, Script::Arabic));
+            }
+        }
+        assert!(checked > 1000, "{checked}");
+        // Nearly all of them by their script; the blocks add the few Common characters.
+        assert!(checked - by_script < 16, "{checked} {by_script}");
+        for char in [
+            '\u{FDF2}', '\u{FD3E}', '\u{FD3F}', '\u{0640}', '\u{064B}', '\u{060C}', '\u{0660}',
+            '\u{0605}',
+        ] {
+            assert!(is_arabic(char), "{:04X}", char as u32);
+        }
+        // Outside the blocks: an Arabic mathematical letter, by its script.
+        assert!(is_arabic('\u{1EE01}'));
+        for char in ['a', '0', ' ', '\u{05D0}', '\u{0300}'] {
+            assert!(!is_arabic(char), "{:04X}", char as u32);
+        }
     }
 
     #[test]
@@ -176,5 +267,14 @@ mod tests {
         assert_eq!(arabic_positional_form(&chars, 0), PositionalForm::Initial);
         assert_eq!(arabic_positional_form(&chars, 1), PositionalForm::Final);
         assert_eq!(arabic_positional_form(&chars, 2), PositionalForm::Isolated);
+    }
+
+    #[test]
+    fn letters_outside_the_old_table_join() {
+        // keheh, Farsi yeh: medial and final forms in a word.
+        let chars = ['\u{0628}', '\u{06A9}', '\u{06CC}'];
+        assert_eq!(arabic_positional_form(&chars, 0), PositionalForm::Initial);
+        assert_eq!(arabic_positional_form(&chars, 1), PositionalForm::Medial);
+        assert_eq!(arabic_positional_form(&chars, 2), PositionalForm::Final);
     }
 }

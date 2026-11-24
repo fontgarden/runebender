@@ -118,8 +118,8 @@ pub(in super::super) fn press(editor: &mut EditorWidget, ctx: &mut EventCtx<'_>,
     editor.cursor_visible = true;
     ctx.request_anim_frame();
     let design = editor.session.viewport.screen_to_design(at);
-    if let Some(index) = text.click(design)
-        && let Some(glyph) = text.activate(index)
+    if let Some((index, cluster_glyph)) = text.click(design)
+        && let Some(glyph) = text.activate(index, cluster_glyph)
     {
         ctx.submit_action::<EditorEvent>(EditorEvent::EditGlyph {
             name: glyph,

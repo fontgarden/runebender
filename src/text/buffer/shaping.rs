@@ -114,12 +114,12 @@ impl TextBuffer {
     /// features, including the lam-alef ligature, never run.
     pub(super) fn shape_with_font(&mut self) -> Option<bool> {
         let Some(font) = self.shaping_font() else {
-            self.shaped_offsets.0.clear();
+            self.shaped.0.clear();
             return None;
         };
 
         let mut updates: Vec<(usize, String, f64)> = Vec::new();
-        let mut offsets: Vec<(usize, (f64, f64))> = Vec::new();
+        let mut clusters: HashMap<usize, ShapedCluster> = HashMap::new();
         let mut absorbed: Vec<bool> = vec![false; self.sorts.len()];
 
         for line in 0..self.line_count() {
@@ -154,21 +154,28 @@ impl TextBuffer {
                         text.push(char);
                     }
 
+                    // An Arabic run is shaped as Arabic in both directions: the digits of a
+                    // left-to-right run inside an Arabic line belong to the Arabic script,
+                    // where fontc puts their kerning, as a text engine itemizes them.
+                    let script = self.script_override.as_deref().or(arabic.then_some("arab"));
                     let Ok(shaped) = font.shape_with_options(
                         &text,
                         run_rtl,
                         &self.feature_overrides,
-                        self.script_override.as_deref(),
+                        script,
                         self.language_override.as_deref(),
                     ) else {
-                        self.shaped_offsets.0.clear();
+                        self.shaped.0.clear();
                         return None;
                     };
 
                     // Clusters are byte offsets into the run. A ligature
                     // reports the offset of its first character and stands
                     // for every character up to the next cluster.
+                    // A multiple substitution, such as a `ccmp` decomposition, gives one
+                    // cluster several glyphs; the sort keeps them all, in the shaper's order.
                     let mut covered = vec![false; sort_for_offset.len()];
+                    let mut run_clusters: Vec<(usize, Vec<ClusterGlyph>)> = Vec::new();
                     for glyph in &shaped {
                         let Some(&sort_index) = sort_for_offset.get(glyph.cluster as usize) else {
                             continue;
@@ -176,15 +183,34 @@ impl TextBuffer {
                         let Some(name) = font.glyph_name(glyph.glyph_id) else {
                             continue;
                         };
-                        updates.push((sort_index, name.to_string(), glyph.x_advance));
                         // Positioning: a mark sits on its base's anchor
                         // by an offset from the pen, which layout adds.
-                        offsets.push((sort_index, (glyph.x_offset, glyph.y_offset)));
+                        let glyph = ClusterGlyph {
+                            name: name.to_string(),
+                            advance: glyph.x_advance,
+                            x_offset: glyph.x_offset,
+                            y_offset: glyph.y_offset,
+                        };
+                        match run_clusters
+                            .iter_mut()
+                            .find(|(index, _)| *index == sort_index)
+                        {
+                            Some((_, glyphs)) => glyphs.push(glyph),
+                            None => run_clusters.push((sort_index, vec![glyph])),
+                        }
                         for (offset, covered) in covered.iter_mut().enumerate() {
                             if sort_for_offset[offset] == sort_index {
                                 *covered = true;
                             }
                         }
+                    }
+                    for (sort_index, glyphs) in run_clusters {
+                        // The sort's own glyph is the first in logical order. The shaper's
+                        // output is in visual order, so in a right-to-left run that is the
+                        // last glyph of the cluster.
+                        let own = if run_rtl { glyphs.len() - 1 } else { 0 };
+                        updates.push((sort_index, glyphs[own].name.clone(), glyphs[own].advance));
+                        clusters.insert(sort_index, ShapedCluster { glyphs, own });
                     }
 
                     let mut seen_sort: Option<usize> = None;
@@ -205,12 +231,13 @@ impl TextBuffer {
         }
 
         let changed = self.apply_shape_updates(updates);
-        let new_offsets: HashMap<usize, (f64, f64)> = offsets
-            .into_iter()
-            .filter(|(_, (x, y))| *x != 0.0 || *y != 0.0)
-            .collect();
-        let offsets_changed = new_offsets != self.shaped_offsets.0;
-        self.shaped_offsets.0 = new_offsets;
+        // Keep only what layout cannot read from the sort: an offset, or more than one glyph.
+        clusters.retain(|_, cluster| {
+            let (x, y) = cluster.own_offset();
+            cluster.glyphs.len() > 1 || x != 0.0 || y != 0.0
+        });
+        let offsets_changed = clusters != self.shaped.0;
+        self.shaped.0 = clusters;
         let mut absorbed_changed = offsets_changed;
         for (index, sort) in self.sorts.iter_mut().enumerate() {
             let want = absorbed.get(index).copied().unwrap_or(false);
@@ -248,7 +275,7 @@ impl TextBuffer {
             updates.push((index, name.clone(), advance));
         }
         let mut changed = self.apply_shape_updates(updates);
-        self.shaped_offsets.0.clear();
+        self.shaped.0.clear();
         for sort in &mut self.sorts {
             if sort.absorbed {
                 sort.absorbed = false;
@@ -268,7 +295,7 @@ impl TextBuffer {
             return changed;
         }
         // The joining table places nothing; marks sit on the pen.
-        self.shaped_offsets.0.clear();
+        self.shaped.0.clear();
         let chars = self.glyph_chars();
         let mut updates = Vec::new();
 

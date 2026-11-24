@@ -109,7 +109,6 @@ impl TextBuffer {
                         }
                         continue;
                     }
-                    let advance_width = self.sort_advance(index);
                     let glyph_name = self.sort_glyph_name(index);
                     // Kerning pairs are in logical order. Inside an RTL
                     // run the glyph placed just before this one is the
@@ -122,34 +121,40 @@ impl TextBuffer {
                     {
                         x += delta;
                     }
-                    let (dx, dy) = self.shaped_offset(index);
-                    let nominal_width = glyph_name
-                        .and_then(|name| self.glyph_inventory.widths.get(name))
-                        .copied()
-                        .unwrap_or(advance_width);
-                    // Marks can have GPOS offsets independent of pair spacing.
-                    let spacing_before = if nominal_width > 0.0 && dy == 0.0 {
-                        previous_edge.map_or(0.0, |edge: f64| x + dx - edge)
-                    } else {
-                        0.0
-                    };
-                    previous_edge =
-                        (nominal_width > 0.0 && dy == 0.0).then_some(x + dx + nominal_width);
-                    items.push(TextLayoutItem {
-                        index,
-                        nominal_width,
-                        spacing_before,
-                        x: x + dx,
-                        y: y + dy,
-                        advance_width,
-                    });
-                    x += advance_width;
+                    let sort_start = x;
+                    // Each glyph of the sort's cluster, in the shaper's order.
+                    for glyph in self.placed_glyphs(index) {
+                        let nominal_width = self
+                            .glyph_inventory
+                            .widths
+                            .get(glyph.name)
+                            .copied()
+                            .unwrap_or(glyph.advance);
+                        // Marks can have GPOS offsets independent of pair spacing.
+                        let spacing_before = if nominal_width > 0.0 && glyph.dy == 0.0 {
+                            previous_edge.map_or(0.0, |edge: f64| x + glyph.dx - edge)
+                        } else {
+                            0.0
+                        };
+                        previous_edge = (nominal_width > 0.0 && glyph.dy == 0.0)
+                            .then_some(x + glyph.dx + nominal_width);
+                        items.push(TextLayoutItem {
+                            index,
+                            cluster_glyph: glyph.cluster_glyph,
+                            nominal_width,
+                            spacing_before,
+                            x: x + glyph.dx,
+                            y: y + glyph.dy,
+                            advance_width: glyph.advance,
+                        });
+                        x += glyph.advance;
+                    }
                     previous = glyph_name;
 
                     // The caret follows the text, not the screen: after a
                     // sort in an RTL run it sits at that sort's left edge.
                     if self.cursor == index + 1 {
-                        caret_at = Some(if run.rtl { x - advance_width } else { x });
+                        caret_at = Some(if run.rtl { sort_start } else { x });
                         caret_at_line_start = false;
                     }
                 }
@@ -222,7 +227,6 @@ impl TextBuffer {
                     if self.sorts[index].absorbed {
                         continue;
                     }
-                    let advance_width = self.sort_advance(index);
                     let glyph_name = self.sort_glyph_name(index);
                     // Kerning stops at a run edge and at a line break:
                     // two lines are not a kerning context, however they
@@ -240,15 +244,20 @@ impl TextBuffer {
                         _ => 0.0,
                     };
                     x += kern;
-                    items.push(TextLayoutItem {
-                        index,
-                        x,
-                        y: 0.0,
-                        nominal_width: advance_width,
-                        spacing_before: kern,
-                        advance_width,
-                    });
-                    x += advance_width;
+                    // Every glyph of the cluster at its pen position; the strip, like
+                    // before, has no shaping offsets.
+                    for (position, glyph) in self.placed_glyphs(index).enumerate() {
+                        items.push(TextLayoutItem {
+                            index,
+                            cluster_glyph: glyph.cluster_glyph,
+                            x,
+                            y: 0.0,
+                            nominal_width: glyph.advance,
+                            spacing_before: if position == 0 { kern } else { 0.0 },
+                            advance_width: glyph.advance,
+                        });
+                        x += glyph.advance;
+                    }
                     previous = glyph_name.map(|name| (index, name));
                 }
             }
@@ -306,6 +315,7 @@ impl TextBuffer {
             return TextHit {
                 cursor: 0,
                 active_sort: None,
+                cluster_glyph: None,
             };
         }
 
@@ -313,6 +323,7 @@ impl TextBuffer {
             return TextHit {
                 cursor: item.index + 1,
                 active_sort: Some(item.index),
+                cluster_glyph: item.cluster_glyph,
             };
         }
         let target_line = self.line_number_for_y(y, line_height.max(1.0), ascender, descender);
@@ -320,6 +331,7 @@ impl TextBuffer {
         TextHit {
             cursor: self.nearest_cursor_for_line(x, line_start, line_end, layout),
             active_sort: None,
+            cluster_glyph: None,
         }
     }
 
@@ -395,20 +407,6 @@ impl TextBuffer {
         None
     }
 
-    pub(super) fn line_width(&self, start: usize, end: usize) -> f64 {
-        let mut width = 0.0;
-        let mut previous_glyph_name: Option<&str> = None;
-        for index in start..end {
-            let glyph_name = self.sort_glyph_name(index);
-            if let Some((left, right)) = previous_glyph_name.zip(glyph_name) {
-                width += self.lookup_kerning(left, right);
-            }
-            width += self.sort_advance(index);
-            previous_glyph_name = glyph_name;
-        }
-        width
-    }
-
     pub(super) fn nearest_cursor_for_line(
         &self,
         x: f64,
@@ -418,25 +416,20 @@ impl TextBuffer {
     ) -> usize {
         let mut nearest_cursor = line_start;
         let mut nearest_distance = f64::INFINITY;
-        let line_start_x = match self.direction {
-            TextDirection::LeftToRight => self.line_width(line_start, line_end),
-            TextDirection::RightToLeft => self.rtl_line_start_x(),
-        };
+        // The direction of this line, which in automatic mode is its own.
+        let direction = self.resolved_line_direction(self.line_number_for_sort(line_start));
 
         for candidate in line_start..=line_end {
             let cursor_x = if candidate == line_start {
-                match self.direction {
+                match direction {
                     TextDirection::LeftToRight => 0.0,
-                    TextDirection::RightToLeft => line_start_x,
+                    TextDirection::RightToLeft => self.rtl_line_start_x(),
                 }
             } else {
-                layout
-                    .items
-                    .iter()
-                    .find(|item| item.index + 1 == candidate)
-                    .map(|item| match self.direction {
-                        TextDirection::LeftToRight => item.x + item.advance_width,
-                        TextDirection::RightToLeft => item.x,
+                Self::sort_edges(layout, candidate - 1)
+                    .map(|(left, right)| match direction {
+                        TextDirection::LeftToRight => right,
+                        TextDirection::RightToLeft => left,
                     })
                     .unwrap_or(0.0)
             };
@@ -462,13 +455,63 @@ impl TextBuffer {
                     .map(|i| {
                         // Anchor RTL lines using nominal widths. Shaped advances include
                         // kerning, which would move the right edge after a font rebuild.
-                        self.sort_glyph_name(i)
-                            .and_then(|name| self.glyph_inventory.widths.get(name).copied())
-                            .unwrap_or_else(|| self.sort_advance(i))
+                        self.placed_glyphs(i)
+                            .map(|glyph| {
+                                self.glyph_inventory
+                                    .widths
+                                    .get(glyph.name)
+                                    .copied()
+                                    .unwrap_or(glyph.advance)
+                            })
+                            .sum::<f64>()
                     })
                     .sum::<f64>()
             })
             .fold(0.0, f64::max)
+    }
+
+    /// The left and right edges of every item of one sort: the span of its cluster.
+    pub(super) fn sort_edges(layout: &TextLayout, index: usize) -> Option<(f64, f64)> {
+        layout
+            .items
+            .iter()
+            .filter(|item| item.index == index)
+            .map(|item| (item.x, item.x + item.advance_width))
+            .reduce(|(left, right), (x0, x1)| (left.min(x0), right.max(x1)))
+    }
+
+    /// The glyphs one sort draws, in the order of the shaper's output: its own glyph alone at
+    /// its shaped offset, or every glyph of its cluster.
+    pub(super) fn placed_glyphs(&self, index: usize) -> impl Iterator<Item = PlacedGlyph<'_>> {
+        let cluster = self
+            .shaped
+            .0
+            .get(&index)
+            .filter(|cluster| cluster.glyphs.len() > 1);
+        let own = cluster.is_none().then(|| {
+            let (dx, dy) = self.shaped_offset(index);
+            PlacedGlyph {
+                name: self.sort_glyph_name(index).unwrap_or_default(),
+                advance: self.sort_advance(index),
+                dx,
+                dy,
+                cluster_glyph: None,
+            }
+        });
+        let others = cluster.into_iter().flat_map(|cluster| {
+            cluster
+                .glyphs
+                .iter()
+                .enumerate()
+                .map(move |(position, glyph)| PlacedGlyph {
+                    name: &glyph.name,
+                    advance: glyph.advance,
+                    dx: glyph.x_offset,
+                    dy: glyph.y_offset,
+                    cluster_glyph: (position != cluster.own).then_some(position),
+                })
+        });
+        own.into_iter().chain(others)
     }
 
     pub(super) fn sort_advance(&self, index: usize) -> f64 {
@@ -491,4 +534,17 @@ impl TextBuffer {
             TextSortKind::LineBreak => None,
         }
     }
+}
+
+/// One glyph of a sort as layout places it.
+pub(super) struct PlacedGlyph<'a> {
+    /// The glyph name.
+    pub(super) name: &'a str,
+    /// The advance after positioning.
+    pub(super) advance: f64,
+    /// The offset from the pen position.
+    pub(super) dx: f64,
+    pub(super) dy: f64,
+    /// `None` for the sort's own glyph; see [`TextLayoutItem::cluster_glyph`].
+    pub(super) cluster_glyph: Option<usize>,
 }

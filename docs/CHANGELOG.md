@@ -25,6 +25,12 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
 
 ### Changed
 
+- The text line keeps every glyph that shaping gives one character, such as a letter that `ccmp` decomposes into a skeleton and its dots, or a hamza that `ccmp` separates before a lam-alef ligature.
+  Before, only the last glyph of such a cluster was drawn.
+  A click on the ink of one of the glyphs makes that glyph the one being edited, at its place in the line, and the caret and the selection treat the cluster as one character.
+- Every character of the Arabic blocks, and every character that Unicode gives the Arabic script, is shaped in the Arabic run, with the joining type of the Unicode data.
+  Arabic-Indic digits inside an Arabic line are shaped left to right with the Arabic script, so their kerning applies as in the exported font.
+- A click in an Arabic line with automatic direction places the caret at the nearest edge in right-to-left order.
 - The background preview compile no longer fails for the whole font because of one unfinished glyph.
   It removes the contours of a glyph that does not interpolate and an anchor that the default master lacks, and records each change; export still reports the error.
 - At a master, text is shaped with layout tables built from the live advances, anchors, kerning and feature code of that master, in the same step as the edit.

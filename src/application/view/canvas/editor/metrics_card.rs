@@ -56,7 +56,12 @@ impl EditorWidget {
 
     pub(super) fn kern_pair(&self, field: MetricField) -> Option<(&str, &str, f64)> {
         let text = self.text.as_ref()?;
-        let active = text.buffer.sort(text.buffer.active_sort()?)?.glyph_name()?;
+        // Another glyph of a cluster, such as the dots of a decomposed letter, has no pair of
+        // its own: kerning is between sorts.
+        if text.buffer.active_cluster_glyph().is_some() {
+            return None;
+        }
+        let active = text.buffer.active_glyph_name()?;
         if active != self.session.glyph_name || self.session.host.is_some() {
             return None;
         }

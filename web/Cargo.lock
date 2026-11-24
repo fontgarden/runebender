@@ -2321,6 +2321,7 @@ dependencies = [
  "fontir",
  "glyphslib",
  "harfrust",
+ "icu_properties",
  "image",
  "img2bez",
  "kurbo 0.13.1",

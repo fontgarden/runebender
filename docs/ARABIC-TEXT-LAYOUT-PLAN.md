@@ -416,6 +416,8 @@ Defaults chosen where the owner has not decided: `icu_properties` as a direct de
 - `apply_shape_updates` (src/text/buffer/shaping.rs:423) and the cluster loop (shaping.rs:172-187) keep one glyph per character; the last glyph in a cluster wins. Multiple substitution (`ccmp`) loses glyphs. Test with `لأ` in a TextBuffer.
 - `is_arabic` (src/text/joining.rs:117) splits shaping runs (shaping.rs:142); it lacks U+0870-089F, U+FB50-FDFF, U+FE70-FEFF (U+FDF2, U+FD3E/FD3F).
 - `arabic_joining_type` (joining.rs:125) covers only a subset of letters.
+Done 2026-11-24: a sort keeps every glyph of its cluster with its own advance and offsets, through layout, hit testing, drawing, selection and the caret, and any of them can be the glyph being edited.
+Done 2026-11-24: `is_arabic` covers the six Arabic blocks and every character whose `Script_Extensions` include Arabic, and `arabic_joining_type` reads `Joining_Type`, both from `icu_properties`; an Arabic run is shaped with the Arabic script in both directions, so Arabic-Indic digits in a left-to-right run kern as fontc writes them.
 - `LayoutInputs::from_project` drops the include line (layout_tables.rs:179) and include files are rejected (:344): generated code goes inline in features.fea.
 - Proposals hold glyph layers only (src/font/proposal.rs:1-24); feature proposals use the feature draft flow: `generate_features`, Apply/Revert (inspector.rs:1210-1279).
 

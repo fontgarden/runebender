@@ -2316,3 +2316,255 @@ fn active_visual_kern_uses_logical_pair_for_the_neighbor_on_the_left_in_arabic()
         Some(("reh-ar.fina", "teh-ar.init", 0.0))
     );
 }
+
+/// A buffer shaped by the live layout tables of the Regular master of the Arabic fixture.
+fn arabic_fixture_buffer() -> TextBuffer {
+    let project = crate::font::project::Project::load(&crate::testing::fonts::arabic_regular_ufo())
+        .expect("the Arabic fixture loads");
+    buffer_for_project(&project)
+}
+
+/// A buffer shaped by the live layout tables of the first source of `project`.
+fn buffer_for_project(project: &crate::font::project::Project) -> TextBuffer {
+    use crate::text::layout_tables::{LayoutInputs, build_shaping_font};
+    let source = project.document_sources().next().expect("a source").id();
+    let font = build_shaping_font(&LayoutInputs::from_project(project, source).unwrap())
+        .expect("the live tables build");
+    let mut buffer = TextBuffer::new();
+    buffer.set_glyph_inventory(TextGlyphInventory::from_project(project, source).unwrap());
+    buffer.set_kerning_model(TextKerningModel::from_project(project, source).unwrap());
+    buffer.set_compiled_font(Some(Arc::new(font.into_bytes())), Vec::new());
+    buffer
+}
+
+/// Each layout item as (sort, cluster glyph, glyph name, x, y).
+fn placed_names(buffer: &TextBuffer) -> Vec<(usize, Option<usize>, String, f64, f64)> {
+    buffer
+        .layout(1000.0)
+        .items
+        .iter()
+        .map(|item| {
+            (
+                item.index,
+                item.cluster_glyph,
+                buffer.item_glyph_name(item).unwrap_or("?").to_owned(),
+                item.x,
+                item.y,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_ccmp_decomposition_keeps_every_glyph_of_the_cluster() {
+    let mut buffer = arabic_fixture_buffer();
+    assert_eq!(buffer.insert_characters("لأ"), 2);
+    // `ccmp` decomposes alef with hamza, and `rlig` makes the ligature; the hamza stays with
+    // the cluster of the ligature, and the alef is absorbed into it.
+    assert_eq!(buffer.sort_glyph_name(0), Some("lam_alef-ar"));
+    assert!(buffer.sort(1).unwrap().is_absorbed());
+    let names: Vec<&str> = buffer
+        .cluster_glyphs(0)
+        .iter()
+        .map(|glyph| glyph.name.as_str())
+        .collect();
+    assert_eq!(names, ["hamzaabove-ar", "lam_alef-ar"]);
+    assert_eq!(
+        placed_names(&buffer),
+        [
+            (0, Some(0), "hamzaabove-ar".into(), 140.0, 760.0),
+            (0, None, "lam_alef-ar".into(), 0.0, 0.0),
+        ]
+    );
+}
+
+#[test]
+fn one_character_gives_a_skeleton_and_its_dots() {
+    let mut buffer = arabic_fixture_buffer();
+    assert_eq!(buffer.insert_characters("تت"), 2);
+    // Four glyphs from two characters, in the order of the shaper: right to left, the second
+    // teh is drawn first, at the left.
+    assert_eq!(
+        placed_names(&buffer),
+        [
+            (1, Some(0), "twodotshorizontalabove-ar".into(), 270.0, 320.0),
+            (1, None, "behDotless-ar.fina".into(), 0.0, 0.0),
+            (0, Some(0), "twodotshorizontalabove-ar".into(), 600.0, 320.0),
+            (0, None, "behDotless-ar.init".into(), 480.0, 0.0),
+        ]
+    );
+    // Each sort names its skeleton, the first glyph in logical order.
+    assert_eq!(buffer.sort_glyph_name(0), Some("behDotless-ar.init"));
+    assert_eq!(buffer.sort_glyph_name(1), Some("behDotless-ar.fina"));
+    assert_eq!(buffer.shaped_offset(0), (0.0, 0.0));
+
+    // The caret between the two letters sits at the left edge of the first one.
+    buffer.set_cursor(1);
+    assert_eq!(buffer.layout(1000.0).cursor_x, 480.0);
+    buffer.set_cursor(2);
+    assert_eq!(buffer.layout(1000.0).cursor_x, 0.0);
+    // A click inside the skeleton of the first teh hits that sort and its own glyph, and
+    // places the caret at the nearest edge of the cluster.
+    let hit = buffer.hit_test(700.0, 100.0, 1000.0, 900.0, -400.0);
+    assert_eq!(hit.active_sort, Some(0));
+    assert_eq!(hit.cluster_glyph, None);
+    assert_eq!(hit.cursor, 1);
+    assert_eq!(
+        buffer.place_cursor_at(770.0, 100.0, 1000.0, 900.0, -400.0),
+        0
+    );
+    assert_eq!(
+        buffer.place_cursor_at(490.0, 100.0, 1000.0, 900.0, -400.0),
+        1
+    );
+
+    // The dots can be the glyph being edited, and they are found by name.
+    assert_eq!(
+        buffer.find_glyph("twodotshorizontalabove-ar"),
+        Some((0, Some(0)))
+    );
+    assert_eq!(buffer.find_glyph("behDotless-ar.fina"), Some((1, None)));
+    assert!(buffer.activate_cluster_glyph(0, Some(0)));
+    assert_eq!(
+        buffer.active_glyph_name(),
+        Some("twodotshorizontalabove-ar")
+    );
+    assert_eq!(buffer.active_cluster_glyph(), Some(0));
+    assert!(!buffer.activate_cluster_glyph(0, Some(5)));
+    assert!(buffer.activate_sort(0));
+    assert_eq!(buffer.active_glyph_name(), Some("behDotless-ar.init"));
+    // The own glyph is `None`, whatever its position.
+    assert!(buffer.activate_cluster_glyph(1, Some(1)));
+    assert_eq!(buffer.active_cluster_glyph(), None);
+
+    // A typed character before the line clears the clusters until it is shaped again, so
+    // no sort draws the glyphs of another.
+    buffer.set_cursor(0);
+    buffer.insert_line_break();
+    assert!(buffer.cluster_glyphs(1).is_empty());
+    buffer.shape_arabic_if_rtl();
+    assert_eq!(buffer.cluster_glyphs(1).len(), 2);
+
+    // With `ccmp` off, the composites draw one glyph each.
+    let mut buffer = arabic_fixture_buffer();
+    buffer.set_feature_overrides(vec![("ccmp".into(), false)]);
+    buffer.insert_characters("تت");
+    let names: Vec<String> = placed_names(&buffer)
+        .into_iter()
+        .map(|(_, _, name, _, _)| name)
+        .collect();
+    assert_eq!(names, ["teh-ar.fina", "teh-ar.init"]);
+}
+
+#[test]
+fn digits_and_latin_are_left_to_right_runs_in_an_arabic_line() {
+    let mut buffer = arabic_fixture_buffer();
+    assert_eq!(buffer.insert_characters("ب ١٢ AV"), 7);
+    assert_eq!(
+        buffer.resolved_line_direction(0),
+        TextDirection::RightToLeft
+    );
+    let runs: Vec<(bool, Vec<usize>)> = buffer
+        .visual_runs_for_line(0, buffer.len())
+        .iter()
+        .map(|run| (run.rtl, run.sorts.clone()))
+        .collect();
+    // Left to right on the screen: the Latin run, a space, the digits, then the beh.
+    assert_eq!(
+        runs,
+        [
+            (false, vec![5, 6]),
+            (true, vec![4]),
+            (false, vec![2, 3]),
+            (true, vec![0, 1]),
+        ]
+    );
+    // Each left-to-right run is shaped left to right: the digit pair and the Latin pair kern
+    // as left-to-right pairs, on the advance of the first glyph.
+    assert_eq!(buffer.sort_glyph_name(2), Some("one-ar"));
+    assert_eq!(buffer.sort_advance(2), 470.0);
+    assert_eq!(buffer.sort_advance(5), 530.0);
+    let x = |index: usize| item_x(&buffer.layout(1000.0), index);
+    assert!(x(2) < x(3), "one is left of two");
+    assert!(x(5) < x(6), "A is left of V");
+    assert!(x(3) < x(0), "the digits are left of the beh");
+
+    // The pair of reh and a digit has mixed direction, and the font has no record of it.
+    let mut buffer = arabic_fixture_buffer();
+    buffer.insert_characters("ر١");
+    assert_eq!(buffer.sort_advance(0), 360.0);
+}
+
+/// The skeleton generator of item 6.3 and the multi-glyph clusters of the text line together:
+/// empty teh glyphs get a generated `ccmp` decomposition, and the text line shows each teh as
+/// its skeleton and its dots, one unit for the caret and for hit testing.
+#[test]
+fn a_generated_ccmp_decomposition_gives_each_letter_one_multi_glyph_cluster() {
+    use crate::text::arabic_features::generate_project;
+    let mut project =
+        crate::font::project::Project::load(&crate::testing::fonts::arabic_regular_ufo())
+            .expect("the Arabic fixture loads");
+    let source = project.document_sources().next().expect("a source").id();
+    let layer = project.document_source(source).unwrap().default_layer();
+    for name in ["teh-ar", "teh-ar.init", "teh-ar.medi", "teh-ar.fina"] {
+        project
+            .edit_document_layer(name, &layer, |draft| {
+                let components: Vec<_> = draft
+                    .view()
+                    .components()
+                    .map(|component| component.id())
+                    .collect();
+                for component in components {
+                    draft.remove_component(component)?;
+                }
+                draft.clear_contours();
+                Ok(())
+            })
+            .expect("the composite becomes empty");
+    }
+    // Without the hand-written `ccmp`, the generator writes it.
+    let features = project.document_feature_text(source).unwrap().to_owned();
+    let start = features.find("feature ccmp {").unwrap();
+    let end = features.find("} ccmp;").unwrap() + "} ccmp;".len();
+    let features = format!("{}{}", &features[..start], &features[end..]);
+    let block = generate_project(&project, source, &features);
+    let ccmp = block.feature("ccmp").expect("a generated ccmp");
+    assert_eq!(
+        ccmp.rules,
+        ["sub teh-ar by behDotless-ar twodotshorizontalabove-ar;"]
+    );
+    assert!(project.set_feature_text(block.apply_to(&features).unwrap()));
+
+    let mut buffer = buffer_for_project(&project);
+    assert_eq!(buffer.insert_characters("تت"), 2);
+    for (index, skeleton) in [(0, "behDotless-ar.init"), (1, "behDotless-ar.fina")] {
+        assert_eq!(buffer.sort_glyph_name(index), Some(skeleton));
+        let cluster = buffer.cluster_glyphs(index);
+        let names: Vec<&str> = cluster.iter().map(|glyph| glyph.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["twodotshorizontalabove-ar", skeleton],
+            "sort {index}"
+        );
+        let dots = &cluster[0];
+        assert!(dots.x_offset != 0.0 && dots.y_offset != 0.0, "{dots:?}");
+    }
+    let layout = buffer.layout(1000.0);
+    assert_eq!(layout.items.len(), 4);
+    // The caret moves over each letter as one unit: from the right edge, past the first teh
+    // with its dots, to the left edge.
+    let (left, right) = TextBuffer::sort_edges(&layout, 0).unwrap();
+    buffer.set_cursor(0);
+    assert_eq!(buffer.layout(1000.0).cursor_x, right);
+    buffer.move_cursor_visual_left();
+    assert_eq!(buffer.cursor(), 1);
+    assert_eq!(buffer.layout(1000.0).cursor_x, left);
+    // A click anywhere in the box of the first teh, which its dots sit in, hits that letter.
+    let hit = buffer.hit_test((left + right) / 2.0, 400.0, 1000.0, 900.0, -400.0);
+    assert_eq!((hit.active_sort, hit.cursor), (Some(0), 1));
+    // Deleting the letter deletes its skeleton and its dots.
+    assert!(buffer.delete_before_cursor().is_some());
+    buffer.shape_arabic_if_rtl();
+    assert_eq!(buffer.layout(1000.0).items.len(), 2);
+    assert_eq!(buffer.sort_glyph_name(0), Some("behDotless-ar"));
+}
