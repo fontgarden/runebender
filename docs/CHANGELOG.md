@@ -23,6 +23,11 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
 - At a master, text is shaped with layout tables built from the live advances, anchors, kerning and feature code of that master, in the same step as the edit.
   The kerning, mark and cursive attachment lookups come from the feature writers of fontc and go at the `# Automatic Code` comments of the feature file, so their order is that of the exported font.
   No background compile takes part, and a glyph that does not interpolate, or an anchor that one master lacks, does not affect the text.
+- At a master, the text line follows a drag in the same frame: marks follow a dragged anchor on every base in the line, the line follows a dragged advance or sidebearing, and kerning follows a kerning drag.
+  The drag and the commit build the layout with the same function, so the line does not move when the pointer is released.
+- When an edit moves the glyph being edited in the text line, the canvas moves with it, so the glyph stays at the same place on the screen in left-to-right and right-to-left lines.
+- When the feature code does not compile, text keeps the substitutions of the last feature code that compiled, and advances, anchors and kerning still update.
+  The status bar shows the error on one line with its line number.
 - A composite glyph without anchors takes the anchors of its components in the compiled font too, not only in the editor.
   Before, an exported font did not attach marks to such a glyph, for example a kasra under a beh built from a dotless beh and a dot.
 - Between masters, text is shaped the same way, with advances, anchors and kerning interpolated from the live masters, each glyph and each anchor alone.

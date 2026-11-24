@@ -330,10 +330,17 @@ Phases 1 to 4 are the new system; phases 5 to 7 build on it.
       The joining-rules fallback and the post-shaping kerning lookup remain.
 - [ ] 3.3 Rebuild triggers: feature code, glyph set, classes, and layout values of glyphs that the text can produce.
       A point edit rebuilds nothing.
-- [ ] 3.4 A drag step and a commit call the same layout function.
-- [ ] 3.5 View anchoring on the edited glyph for left-to-right and right-to-left lines.
-- [ ] 3.6 Feature code errors: keep the last code that compiled, with live values, and show the error with its line.
-- [ ] 3.7 Tests: a sequence of drag steps gives the same layout as a fresh computation from the final state; an idle editor requests no frame; no layout change after a point edit; a failed feature compile changes no position.
+- [x] 3.4 A drag step and a commit call the same layout function.
+      Done 2026-11-23 at a master: `LayoutTables::build_live` takes the committed inputs and `LayoutOverrides`, the draft values of the gesture.
+      Point, anchor, sidebearing and component drags keep their edit in a session draft until release; the edit canvas reads the draft advance and anchors, and a Text tool kerning drag gives its pair value, on each step.
+      Between masters the kerning drag still moves the pair after shaping, until phase 2.
+- [x] 3.5 View anchoring on the edited glyph for left-to-right and right-to-left lines.
+      Done 2026-11-23: the edit canvas moves its viewport by the screen distance that new layout moved the active sort, after a drag step and after the app supplies new text inputs.
+- [x] 3.6 Feature code errors: keep the last code that compiled, with live values, and show the error with its line.
+      Done 2026-11-23: `build_live` builds from the last feature text that compiled, or from no feature text before one has, and the status bar shows `features.fea line N: message`.
+- [x] 3.7 Tests: a sequence of drag steps gives the same layout as a fresh computation from the final state; an idle editor requests no frame; no layout change after a point edit; a failed feature compile changes no position.
+      Done 2026-11-23 on the Arabic fixture: `src/text/layout_tables.rs`, `src/application/font_model.rs`, `src/application/view/canvas/editor/tests/text_line.rs` and `src/application/view/render.rs`.
+      A contour drag and its commit run no step of a table build, counted by `LayoutTables::build_counts`.
 - [ ] 3.8 Browser build: the same path, no worker thread needed.
 
 ### Phase 4: checker and preview compile
