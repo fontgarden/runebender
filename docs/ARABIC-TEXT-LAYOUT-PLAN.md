@@ -403,7 +403,81 @@ Phases 1 to 4 are the new system; phases 5 to 7 build on it.
 3. The order of phase 6 items.
 4. Anchors from components: decided, in both (section 8).
 
-## 10. Sources
+## 10. Phase 6 implementation plan
+
+Survey of 2026-11-23; line numbers are those of commit `4d1eb56`.
+The packages run one at a time, in the order: fixture step, A, B, D, C.
+Defaults chosen where the owner has not decided: `icu_properties` as a direct dependency for joining type and script, generated feature code in an inline delimited block, kashida as display only, and a kerning drag in a right-to-left line edits the logical previous pair with marks skipped.
+### Shared gaps to fix first
+- `apply_shape_updates` (src/text/buffer/shaping.rs:423) and the cluster loop (shaping.rs:172-187) keep one glyph per character; the last glyph in a cluster wins. Multiple substitution (`ccmp`) loses glyphs. Test with `لأ` in a TextBuffer.
+- `is_arabic` (src/text/joining.rs:117) splits shaping runs (shaping.rs:142); it lacks U+0870-089F, U+FB50-FDFF, U+FE70-FEFF (U+FDF2, U+FD3E/FD3F).
+- `arabic_joining_type` (joining.rs:125) covers only a subset of letters.
+- `LayoutInputs::from_project` drops the include line (layout_tables.rs:179) and include files are rejected (:344): generated code goes inline in features.fea.
+- Proposals hold glyph layers only (src/font/proposal.rs:1-24); feature proposals use the feature draft flow: `generate_features`, Apply/Revert (inspector.rs:1210-1279).
+
+### 6.1 RTL kerning (M)
+- Today: `drag_pair` (src/text/buffer/kerning.rs:54) edits the logical pair (previous, grabbed); in RTL that is the gap on the right of the grabbed glyph. `move_kern` (canvas/editor/tools/text.rs:57) uses `delta = start_x - x`. Metrics card swaps group sides for RTL (metrics_card.rs:80-126).
+- UFO kerning.plist and kern1/kern2 groups are logical order (kern1 is the right-hand glyph in RTL). fontbe kern.rs:1154-1197 splits by script, skips mixed/ambiguous direction pairs, RTL pairs get `<v 0 v 0>`; Arabic-Indic digits count as LTR (properties.rs:91-98). Babelfont merges Glyphs `kerningRTL` (font.rs:273-297, 343-388). Runebender drops `kerningRTL` on import (glyphs_import.rs:26,238) and does not write it (glyphs_export.rs:28).
+- Change: skip marks in `drag_pair`, `active_visual_kern`, `kern_hit` (a drag on alef in `رَا` edits fatha/alef today); warn on the metrics card when fontbe will drop a mixed-direction pair; read/write `kerningRTL` (glyphslib 0.2.7 `kerning_rtl`); decide on `begin/drag_manual_kerning` (tests only, flips sign by line direction).
+- Tests: drag alef in `رَا` gives `public.kern1.reh/public.kern2.alef`; drag preview equals fresh build; digits in an RTL line kern as LTR; Glyphs kerningRTL round trip.
+
+### 6.2 Joining feature generator (M)
+- New `src/text/arabic_features.rs`: `joining_features(names, existing_fea) -> GeneratedBlock` (X.isol/.init/.medi/.fina siblings; `rlig` with IgnoreMarks from `a_b-ar[.fina]` names); `ligature_component_names(name, exists) -> Option<Vec<String>>`. Output is a delimited block in the draft; existing features are kept and reported. UI: "Generate Joining" chip in `features_section` (editor_info.rs:546); `--joining` in cli/font_commands/features.rs.
+- Tests: remove init/medi/fina/rlig from the fixture features and regenerate; README strings shape the same; idempotent.
+
+### 6.3 Skeleton and dots through ccmp (L, needs 6.2)
+- compose.rs makes static composites from `com.runebender.compose` (glyph_metadata.rs:25).
+- New `assets/data/arabic-skeletons.toml` (code point, skeleton, dot marks); `ccmp_decomposition(...)` in arabic_features.rs reading the existing lib key first. Package A adds extra glyphs to `TextSort`; layout emits one item per glyph.
+- Fixture adds `teh-ar`, `behDotless-ar` forms, `twodotsabove-ar`; `تت` shapes to skeletons with dots on `top`, four layout items.
+
+### 6.4 Cursive attachment (M, needs 3.4/3.5)
+- fontbe writes `curs` from `entry`/`exit` (fixture `سسس`). `joining_band` exists (analysis/measure, commands.rs:510).
+- Package C: overlay of exit/entry links with dy labels; "Add Cursive Anchors" at the joining-band center, from a canvas menu item (menu.rs).
+- Tests: linked points coincide; a draft move of the exit anchor changes y offsets in the same frame.
+
+### 6.5 Ligature component anchors (M)
+- Classify with `fontir::ir::AnchorKind::new` (ir.rs:1189): `top_N`, `_N`, `caret_N`. Anchor color per component, lines at carets. "Propose Ligature Anchors" writes a `ligature-anchors` proposal layer from component anchors laid out RTL, using `ligature_component_names`.
+- Test: remove `top_1`/`top_2` from `lam_alef-ar`, propose, install; in `لَاُ` fatha sits on component 1.
+
+### 6.6 Collision overlay (M to L)
+- `TextState::placed()` (editor/tools/text.rs:700) gives outlines and origins; thickness.rs:524-554 has nearest-distance code.
+- New `src/analysis/collisions.rs`: `find_collisions(items, options) -> Vec<Collision>`. Islands are outer contours; dots are Mark components or small islands. Pairs across sorts only; base body vs base body excluded. Sweep and prune on x of expanded boxes, flatten to 0.5 units, segment intersection, containment by winding, minimum segment distance with box pruning. Cache flattened islands by glyph and layer revision. About 0.05-0.2 ms per 20-letter line.
+- UI: `ViewOptions.collisions`, `RUNEBENDER_VIEW=collisions`, toggle in `shaping_section` (sections.rs:318).
+- Tests: synthetic squares; raise the kasra anchor on a copy of the fixture, `بِ` reports a collision.
+
+### 6.7 Context test strings (M)
+- New `src/text/contexts.rs`: `context_text(ch, partner, mark_classes)`, `mark_classes(&LayoutInputs)`, full joining table in joining.rs. Generated sample in `glyph_proof_samples` (review_reading.rs:163); View > Joining Contexts.
+- Tests: beh gives all four forms; reh gives `reh-ar` and `.fina`; output includes top, bottom and the shadda stack.
+
+### 6.8 Quranic sample set (S to M)
+Add to assets/data/proof-samples.toml and fix `is_arabic`:
+basmala; pause marks U+06D6-06DC on a letter; U+06DD with Arabic-Indic and Extended Arabic-Indic digits, U+08E2, U+FD3E/FD3F; U+06DE and U+06E9; small letters U+06DF-06ED, U+06E5/06E6 (`إِنَّهُۥ`), U+0670 (`عَلَىٰ`); alef wasla U+0671, U+0656, U+0657; hamza and madda: precomposed U+0622-0626 beside U+0653-0655 sequences; tanween U+064B-064D and open tanween U+08F0-08F2 with iqlab U+06E2 and U+06ED; stacked marks: shadda with fatha in both orders, shadda with kasra, shadda with dagger alef; ligatures `ٱللَّهِ`, `لِلَّهِ`, `لَآ`, `لِإِ`, `فَلَا`; U+08D3-08FF on beh; tatweel carrying marks.
+
+### 6.9 Kashida and tatweel preview (M)
+- New `src/text/kashida.rs`: `kashida_positions(text)` (by priority, never between lam and alef), `insert_kashida(text, count)`. `Row::Slider` "Kashida" in the Proof section (live_proof.rs), the strip (preview.rs) and the reading proof; display only. Check Joining also checks the tatweel band.
+- Fixture adds `tatweel-ar`; `بـسم` shapes to init, tatweel, medi, fina.
+
+### Work packages (disjoint files)
+Step 0, alone first: fixture commit (generate.py, README): tatweel, skeletons and dots, `caret_1`, U+08F0, U+06E1, Arabic-Indic digits with a pair.
+- A, text line engine: 6.1, multi-glyph clusters, 6.4 draft overlay. Files: src/text/buffer/*, src/text/layout_tables.rs, application/editor/tools/text.rs, canvas/editor/tools/text.rs, metrics_card.rs, font_model.rs, glyphs_import.rs, glyphs_export.rs.
+- B, feature generators: 6.2, 6.3 generator, `ligature_component_names`. Files: arabic_features.rs, arabic-skeletons.toml, inspector.rs, editor_info.rs, cli features.rs.
+- C, canvas overlays: 6.4 drawing, 6.5, 6.6. Files: analysis/collisions.rs, canvas/editor/arabic_overlays.rs (new), paint.rs, view.rs, menu.rs, widgets/context_menu.rs, launch_options.rs, sections.rs, src/font/ligature_anchors.rs (new), UI-DESIGN.md variable row. Waits for B's function signature.
+- D, samples and transforms: 6.7, 6.8, 6.9. Files: joining.rs, contexts.rs, kashida.rs, proof_samples.rs, proof-samples.toml, review_reading.rs, live_proof.rs, preview.rs, commands.rs, actions.rs, app_action.rs.
+Each package only appends to src/*/mod.rs, ARCHITECTURE.md and the plan checkboxes.
+
+Counterpunch features not covered by 6.1-6.9: a place for generated or plug-in `mkmk` code for harakat; dropped incompatible paths (item 4.1).
+
+### Questions for the owner
+1. `icu_properties` (already in Cargo.lock 2.1.2) as a direct dependency for Joining_Type and Script, or a generated table in joining.rs?
+2. 6.2 code in an inline delimited block (include files are excluded from the live layout)?
+3. Naming scheme for skeletons and dots; should the generator create missing skeleton glyphs?
+4. Kashida display only, or also a text edit command? Which priority rules?
+5. RTL groups from Glyphs follow the glyphsLib swap? A real .glyphs file to test?
+6. Default collision clearance; does a mark touching its own base count?
+7. A drag in an RTL line edits the right-hand (logical previous) pair, as today?
+8. Order of phase 6 items.
+
+## 11. Sources
 
 - Fontra: [repository](https://github.com/fontra/fontra), [shaper font builder](https://github.com/fontra/build-shaper-font), [design issue 2381](https://github.com/fontra/fontra/issues/2381), [blog](https://blog.fontra.xyz/blog/opentype-harfbuzz/).
 - Counterpunch: [repository](https://github.com/counterpunchspace/editor), [site](https://counterpunch.space/), [fontc issue 1897](https://github.com/googlefonts/fontc/issues/1897).
