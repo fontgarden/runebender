@@ -10,8 +10,10 @@
 mod arabic_fixture_tests;
 mod hoi_export;
 mod metadata;
+mod preview_tolerance;
 pub use hoi_export::{HoiBakeOptions, HoiBakeReport};
 pub(crate) use metadata::glyph_category_from_values;
+pub use preview_tolerance::{PreviewChange, PreviewException};
 pub mod proof;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod proof_jobs;
@@ -38,6 +40,9 @@ type CompileKey = (
 pub(super) struct CompileCache {
     key: Option<CompileKey>,
     result: Option<Result<Arc<CompiledFont>, String>>,
+    /// What the snapshot of `result` changed so that it compiles; see
+    /// [`Project::preview_exceptions`].
+    exceptions: Arc<[PreviewException]>,
     pending: Option<PreviewJob>,
     /// Set while a pointer gesture is in progress; see [`Project::preview_hold`].
     hold: Arc<std::sync::atomic::AtomicBool>,
@@ -86,6 +91,8 @@ fn canonical_design_location(
 #[derive(Clone, Debug)]
 pub struct PreviewJob {
     finished: Arc<std::sync::Mutex<Option<CompileResult>>>,
+    /// What the snapshot of this job changed so that it compiles.
+    exceptions: Arc<[PreviewException]>,
 }
 
 impl PreviewJob {
@@ -98,9 +105,10 @@ impl PreviewJob {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn start(font: babelfont::Font) -> Self {
+    fn start(font: babelfont::Font, exceptions: Arc<[PreviewException]>) -> Self {
         let job = Self {
             finished: Arc::new(std::sync::Mutex::new(None)),
+            exceptions,
         };
         let output = job.finished.clone();
         std::thread::spawn(move || {
@@ -403,7 +411,7 @@ fn the_layout_revision_ignores_point_moves_and_outline_compatibility() {
             Ok(())
         })
         .unwrap();
-    assert!(project.compiled_preview().is_err());
+    assert!(project.compile().is_err());
     assert_eq!(project.layout_revision(), layout);
 
     // A width edit changes layout.
@@ -733,6 +741,28 @@ impl Project {
         CompiledFont::build(self.babelfont_snapshot()?)
     }
 
+    /// The snapshot of the background preview compile, and what it changed so that it compiles.
+    ///
+    /// This is [`Self::babelfont_snapshot`] with the contours that do not interpolate removed,
+    /// and with each anchor that the default master lacks removed; see the module
+    /// `preview_tolerance`. One unfinished glyph then does not take interpolated outlines,
+    /// proofs and the axes panel from the whole font. Export uses the complete snapshot and
+    /// still reports the precise failure.
+    pub fn preview_snapshot(&self) -> Result<(babelfont::Font, Vec<PreviewException>), String> {
+        let mut font = self.babelfont_snapshot()?;
+        let exceptions = preview_tolerance::make_tolerant(&mut font)?;
+        Ok((font, exceptions))
+    }
+
+    /// The glyphs that the current compiled preview shows differently from their sources, in
+    /// glyph name order.
+    ///
+    /// The list belongs to the result of [`Self::compiled_preview`] or
+    /// [`Self::request_preview`], and it is empty while no preview result is ready.
+    pub fn preview_exceptions(&self) -> Arc<[PreviewException]> {
+        self.compile_cache().exceptions.clone()
+    }
+
     fn compile_key(&self) -> CompileKey {
         (self.variable.revision, self.compiler_structure())
     }
@@ -749,11 +779,14 @@ impl Project {
         let key = self.compile_key();
         let mut cache = self.compile_cache();
         if cache.key.as_ref() != Some(&key) || cache.result.is_none() {
-            cache.result = Some(
-                self.babelfont_snapshot()
-                    .and_then(CompiledFont::build)
-                    .map(Arc::new),
-            );
+            let (result, exceptions) = match self.preview_snapshot() {
+                Ok((font, exceptions)) => {
+                    (CompiledFont::build(font).map(Arc::new), exceptions.into())
+                }
+                Err(error) => (Err(error), Arc::from([])),
+            };
+            cache.result = Some(result);
+            cache.exceptions = exceptions;
             cache.key = Some(key);
             cache.pending = None;
         }
@@ -786,6 +819,7 @@ impl Project {
             let hold = cache.hold.load(std::sync::atomic::Ordering::Relaxed);
             if cache.key.as_ref() != Some(&key) {
                 cache.result = None;
+                cache.exceptions = Arc::from([]);
                 cache.key = Some(key);
                 cache.wanted = Some(std::time::Instant::now());
             }
@@ -801,6 +835,7 @@ impl Project {
                     // A pending debounce means the key changed after this job started,
                     // so its result belongs to an older revision.
                     cache.result = Some(result);
+                    cache.exceptions = job.exceptions;
                 }
             }
             // The snapshot copies the whole font on this thread. Take it only when no
@@ -813,8 +848,10 @@ impl Project {
                     .is_some_and(|since| since.elapsed() >= PREVIEW_DEBOUNCE)
             {
                 cache.wanted = None;
-                match self.babelfont_snapshot() {
-                    Ok(font) => cache.pending = Some(PreviewJob::start(font)),
+                match self.preview_snapshot() {
+                    Ok((font, exceptions)) => {
+                        cache.pending = Some(PreviewJob::start(font, exceptions.into()));
+                    }
                     Err(error) => cache.result = Some(Err(error)),
                 }
             }

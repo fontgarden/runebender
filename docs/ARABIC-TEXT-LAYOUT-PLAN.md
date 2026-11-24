@@ -348,7 +348,8 @@ Phases 1 to 4 are the new system; phases 5 to 7 build on it.
 
 ### Phase 4: checker and preview compile
 
-- [ ] 4.1 Apply `DropIncompatiblePaths` to the background preview compile, and list the glyphs it changed.
+- [x] 4.1 Apply `DropIncompatiblePaths` to the background preview compile, and list the glyphs it changed.
+      Done in `src/font/compiler/preview_tolerance.rs`: the preview also drops anchors that the default master lacks, and `Project::preview_exceptions` lists each change; export still fails.
 - [ ] 4.2 After the background compile, shape the visible text with both fonts and compare glyphs, advances and offsets.
 - [ ] 4.3 Show differences in the status bar and in the proof view; never apply them to the edit canvas.
 - [ ] 4.4 Decide if export uses the generated lookups of the editor or those of fontc, from the result of 0.1.

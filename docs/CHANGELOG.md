@@ -20,6 +20,8 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
 
 ### Changed
 
+- The background preview compile no longer fails for the whole font because of one unfinished glyph.
+  It removes the contours of a glyph that does not interpolate and an anchor that the default master lacks, and records each change; export still reports the error.
 - At a master, text is shaped with layout tables built from the live advances, anchors, kerning and feature code of that master, in the same step as the edit.
   The kerning, mark and cursive attachment lookups come from the feature writers of fontc and go at the `# Automatic Code` comments of the feature file, so their order is that of the exported font.
   No background compile takes part, and a glyph that does not interpolate, or an anchor that one master lacks, does not affect the text.

@@ -181,7 +181,7 @@ Each directory under `src` has one row.
 | `src/automation/agent_graph` | The result types of the live graph tools. |
 | `src/font` | The document model and its services. `src/font/mod.rs` describes the main child modules. |
 | `src/font/babelfont` | The layer adapter: read-only views, the `LayerEditDraft` edit modules, glyph transactions, handle cleanup, curve conversion and the UFO projection. |
-| `src/font/compiler` | In-memory OpenType compilation, proof inputs and the proof job queue. |
+| `src/font/compiler` | In-memory OpenType compilation, the tolerant preview snapshot, proof inputs and the proof job queue. |
 | `src/font/hoi` | Authoring and evaluation of higher-order interpolation. |
 | `src/font/model` | Value types: font info, glyph metadata, designspace data, kerning lookup, entity ids, HOI data and smart components. |
 | `src/font/persistence` | UFO and Designspace import, staged save, the in-memory codec, and source-format preservation. |
