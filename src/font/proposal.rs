@@ -476,6 +476,74 @@ pub fn write_point_moves_project(
     find_project(project, source, task)
 }
 
+/// One glyph's proposed anchors, set by name.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnchorPlacements {
+    /// The glyph.
+    pub glyph: String,
+    /// Anchor names and positions; a name the glyph has moves, another is added.
+    pub anchors: Vec<(String, kurbo::Point)>,
+}
+
+/// Atomically write anchor placements as a guarded proposal layer.
+///
+/// Every glyph must exist in the source's foreground.
+/// Each proposed glyph keeps the foreground's contours, components, other anchors and advance.
+/// The complete layer commits in one document revision and replaces any earlier proposal for
+/// `task`; the foreground and its histories remain unchanged until [`install_project`].
+pub fn write_anchor_proposal_project(
+    project: &mut Project,
+    source: SourceId,
+    task: &str,
+    placements: &[AnchorPlacements],
+    reason: &str,
+) -> Result<ProposalSummary, ProposalError> {
+    validate_task(task)?;
+    if placements.is_empty() {
+        return Err(project_error("no anchors to propose"));
+    }
+    let foreground = project
+        .document_source(source)
+        .ok_or_else(|| project_error("unknown source"))?
+        .default_layer();
+    let target = proposal_layer(source, task);
+    let mut seen = HashSet::new();
+    let mut staged = Vec::with_capacity(placements.len());
+    for item in placements {
+        let name = item.glyph.as_str();
+        if !seen.insert(name) {
+            return Err(project_error(format!("{name}: proposed twice")));
+        }
+        let current = project.document_layer(name, &foreground).ok_or_else(|| {
+            ProposalError::NoSuchGlyph {
+                task: task.into(),
+                glyph: name.into(),
+            }
+        })?;
+        let revision =
+            crate::font::edit_batch::canonical_glyph_revision(current).map_err(project_error)?;
+        let draft = super::babelfont::glyph_transactions::anchor_proposal_layer(
+            current,
+            &target,
+            &item.anchors,
+            &revision,
+            reason,
+        )
+        .map_err(|error| project_error(format!("{name}: {error}")))?;
+        staged.push((name.to_owned(), draft));
+    }
+    if find_project(project, source, task).is_ok() {
+        discard_project(project, source, task)?;
+    }
+    let transaction = project
+        .begin_proposal_transaction(source, &foreground, &target, staged)
+        .map_err(project_error)?;
+    project
+        .commit_proposal_transaction(transaction)
+        .map_err(project_error)?;
+    find_project(project, source, task)
+}
+
 pub(super) fn install_replacement(
     address: &GlyphLayerAddress,
     proposed: LayerView<'_>,

@@ -261,6 +261,50 @@ pub(in crate::font) fn point_move_proposal_layer(
     Ok(draft)
 }
 
+/// A proposal layer that keeps the foreground and sets anchors by name.
+///
+/// A foreground anchor whose name is in `anchors` moves; another name is added.
+/// Contours, components, the other anchors and the advance stay as they are.
+pub(in crate::font) fn anchor_proposal_layer(
+    foreground: LayerView<'_>,
+    id: &LayerId,
+    anchors: &[(String, kurbo::Point)],
+    revision: &str,
+    reason: &str,
+) -> Result<LayerEditDraft, String> {
+    if anchors
+        .iter()
+        .any(|(_, p)| !p.x.is_finite() || !p.y.is_finite())
+    {
+        return Err("proposal geometry must be finite".into());
+    }
+    let (layer, preserved) = clone_layer(
+        foreground.layer,
+        foreground.preserved,
+        id,
+        foreground.glyph_name(),
+        LayerCloneOptions {
+            default: false,
+            clear_codepoints: false,
+        },
+    );
+    let mut draft = LayerEditDraft::new(layer, preserved);
+    for (name, position) in anchors {
+        let existing = draft
+            .view()
+            .anchors()
+            .find(|anchor| anchor.name() == name)
+            .map(|anchor| anchor.id());
+        match existing {
+            Some(anchor) => draft.set_anchor_position(anchor, *position).map(|_| ()),
+            None => draft.add_anchor(name.clone(), *position).map(|_| ()),
+        }
+        .map_err(|error| error.to_string())?;
+    }
+    set_proposal_base(&mut draft, revision, reason);
+    Ok(draft)
+}
+
 /// Read the external foreground revision record directly from canonical layer metadata.
 ///
 /// A malformed record returns an empty revision so callers fail closed, matching the UFO codec.

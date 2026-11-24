@@ -9,6 +9,7 @@
 //! `interpolation` checks and combines each glyph's participating sources.
 //! `composites` places components; `persistence` stages UFO and Designspace I/O
 //! and provides in-memory construction; `compiler` builds detached OpenType and proof inputs.
+//! `ligature_anchors` classifies anchor names and proposes the anchors of ligatures.
 //! `new_font` builds fonts without a filesystem. `model` keeps the kerning lookup, glyph metadata,
 //! and entity ids. `history` is the
 //! one undo pile, and `proposal` is how a model or a tool offers an
@@ -33,6 +34,7 @@ pub mod generated;
 pub mod history;
 pub mod hoi;
 mod interpolation;
+pub mod ligature_anchors;
 pub mod model;
 pub mod new_font;
 pub mod persistence;
