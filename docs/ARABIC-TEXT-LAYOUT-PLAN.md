@@ -387,6 +387,11 @@ Phases 1 to 4 are the new system; phases 5 to 7 build on it.
   In Virtua Grotesk, `beh-ar.init` and `noon-ar.fina` are composites with no anchors of their own, so the exported font does not attach a kasra to them, while the editor showed it attached.
   Decided 2026-11-23, to keep the behavior designers had: the compiler snapshot gives a composite without anchors the anchors of its components, as Glyphs does, and the live tables use the same rule.
   The export and the editor now both attach the kasra.
+- 2026-11-23: the current Virtua Grotesk sources have 267 variable values in the feature file, such as `<anchor (wght=400:360 wght=700:400) 384>`.
+  Without variation information `fea-rs` rejects them, and the live tables fell back to no features on that font.
+  `src/text/layout_variation.rs` now gives `fea-rs` the axes of the font and reads each value at the location of the inputs, with the variation model of fontc.
+  The IR of the fontc writers stays static, the shaping font has no `fvar`, and the GDEF variation store that `fea-rs` writes has no region.
+  All eight masters of those sources build with no error.
 
 ## 9. Decisions for the owner
 

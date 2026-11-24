@@ -10,5 +10,6 @@ pub mod features;
 pub mod generated;
 pub mod joining;
 pub mod layout_tables;
+pub mod layout_variation;
 pub mod proof_samples;
 pub mod shape;

@@ -48,7 +48,7 @@ use std::time::{Duration, Instant};
 
 use fea_rs::{
     DiagnosticSet, GlyphMap, Opts,
-    compile::{FeatureBuilder, FeatureProvider, NopFeatureProvider, NopVariationInfo},
+    compile::{FeatureBuilder, FeatureProvider, NopFeatureProvider},
     parse::SourceLoadError,
 };
 use fontbe::orchestration::{
@@ -69,6 +69,7 @@ use crate::font::model::designspace::CanonicalDesignspace;
 use crate::font::project::Project;
 use crate::font::var_model::{Location, VariationModel, locations_match, squared_distance};
 use crate::font::variable::{GlyphSource, LayerId, SourceId};
+use crate::text::layout_variation::LocationVariationInfo;
 use crate::text::shape::{ShapingFont, ShapingGlyph};
 
 /// The GDEF glyph class of a glyph.
@@ -123,6 +124,22 @@ pub struct LayoutInputs {
     pub kerning: Vec<(String, String, f64)>,
     /// The feature file, without `include` statements.
     pub features: String,
+    /// The axes of the font, for variable values in the feature file such as
+    /// `<anchor (wght=400:360 wght=700:400) 384>`; empty for a static font.
+    pub axes: Vec<fontdrasil::types::Axis>,
+    /// The normalized location of these values, at which variable feature values are read.
+    pub location: NormalizedLocation,
+}
+
+/// The normalized location, by axis tag, of a location by axis name.
+fn tagged_location(project: &Project, location: &Location) -> Result<NormalizedLocation, String> {
+    let mut tagged = NormalizedLocation::new();
+    for axis in &project.axes {
+        let tag = axis.user.fontdrasil_axis()?.tag;
+        let value = location.get(&axis.name).copied().unwrap_or(0.0);
+        tagged.insert(tag, fontdrasil::coords::NormalizedCoord::new(value));
+    }
+    Ok(tagged)
 }
 
 impl LayoutInputs {
@@ -197,7 +214,22 @@ impl LayoutInputs {
             .filter(|line| line.trim() != crate::text::features::INCLUDE_LINE)
             .collect::<Vec<_>>()
             .join("\n");
+        let axes = project
+            .axes
+            .iter()
+            .map(|axis| axis.user.fontdrasil_axis())
+            .collect::<Result<Vec<_>, _>>()?;
+        let location = match project
+            .document_sources()
+            .position(|view| view.id() == source)
+            .and_then(|index| project.master_locations().get(index))
+        {
+            Some(master) => tagged_location(project, master)?,
+            None => NormalizedLocation::new(),
+        };
         Ok(Self {
+            axes,
+            location,
             units_per_em: info.metrics.units_per_em.unwrap_or(1000.0),
             glyphs,
             groups: metadata
@@ -242,6 +274,7 @@ impl LayoutInputs {
         source: SourceId,
     ) -> Result<(Self, Vec<LayoutDiagnostic>), String> {
         let mut inputs = Self::from_project(project, source)?;
+        inputs.location = tagged_location(project, location)?;
         let mut diagnostics = Vec::new();
         let Some(designspace) = project.document_designspace() else {
             return Ok((inputs, diagnostics));
@@ -1143,9 +1176,26 @@ fn hash_glyph_identity(glyph: &LayoutGlyph, hasher: &mut impl Hasher) {
 }
 
 impl LayoutInputs {
+    /// What resolves the variable values of the feature file at the location of these
+    /// inputs; `None` for a static font.
+    ///
+    /// Only `fea-rs` sees the axes: the values are read at the location, so the tables have
+    /// no variation data, and the IR given to the fontc writers stays static.
+    fn variation_info(&self) -> Option<LocationVariationInfo> {
+        (!self.axes.is_empty())
+            .then(|| LocationVariationInfo::new(self.axes.clone(), self.location.clone()))
+    }
+
     fn first_pass_key(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.features.hash(&mut hasher);
+        // Variable feature values are read at the location, so the first pass depends on it.
+        for axis in &self.axes {
+            format!("{axis:?}").hash(&mut hasher);
+        }
+        for (tag, value) in self.location.iter() {
+            (tag, value.to_f64().to_bits()).hash(&mut hasher);
+        }
         for glyph in &self.glyphs {
             glyph.name.hash(&mut hasher);
         }
@@ -1228,15 +1278,16 @@ fn first_pass(inputs: &LayoutInputs, key: u64) -> Result<FirstPass, String> {
     if diagnostics.has_errors() {
         return Err(feature_error(&diagnostics, &inputs.features));
     }
-    let diagnostics = fea_rs::compile::validate::<NopVariationInfo>(&ast, &glyph_map, None);
+    let variation = inputs.variation_info();
+    let diagnostics = fea_rs::compile::validate(&ast, &glyph_map, variation.as_ref());
     if diagnostics.has_errors() {
         return Err(feature_error(&diagnostics, &inputs.features));
     }
     // fontbe compiles GSUB once here for the glyph closure of the mark and kerning writers.
-    let (compilation, _) = fea_rs::compile::compile::<NopVariationInfo, NopFeatureProvider>(
+    let (compilation, _) = fea_rs::compile::compile::<_, NopFeatureProvider>(
         &ast,
         &glyph_map,
-        None,
+        variation.as_ref(),
         None,
         Opts::new().compile_gpos(false),
     )
@@ -1500,10 +1551,11 @@ impl LayoutTables {
             kerning: &self.kerning.as_ref().expect("kerning was built").1,
             marks: &self.marks.as_ref().expect("marks were built").1,
         };
-        let (mut compilation, _) = fea_rs::compile::compile::<NopVariationInfo, _>(
+        let variation = inputs.variation_info();
+        let (mut compilation, _) = fea_rs::compile::compile(
             &pass.output.ast,
             &pass.glyph_map,
-            None,
+            variation.as_ref(),
             Some(&provider),
             Opts::new(),
         )
@@ -2118,6 +2170,98 @@ mod location_tests {
         assert!(stacked[0].3 > stacked[1].3, "{stacked:?}");
         let cursive = rows(&font, "سسس", true);
         assert!(cursive[2].3 < cursive[1].3, "{cursive:?}");
+    }
+
+    /// Variable values in the feature file are read at the location of the inputs, as fontc
+    /// reads them, and the tables stay static.
+    #[test]
+    fn variable_feature_values_are_read_at_the_location() {
+        use skrifa::raw::TableProvider as _;
+        const KASRA: &str = "kasra-ar' <0 -80 0 0>";
+        const VARIABLE_KASRA: &str = "kasra-ar' <0 (wght=400:-80 wght=700:-120) 0 0>";
+        // A cursive attachment in a feature of its own, with a variable exit anchor.
+        const CURSIVE: &str = "\nfeature ss01 {\n    lookup variable_exit {\n        \
+            pos cursive period <anchor 0 0> <anchor (wght=400:0 wght=700:0) \
+            (wght=400:50 wght=700:90)>;\n    } variable_exit;\n} ss01;\n";
+        let project = load();
+        let (regular, _) = sources(&project);
+        let original = project.document_feature_text(regular).unwrap().to_owned();
+        assert!(original.contains(KASRA));
+        let edited = format!("{}{CURSIVE}", original.replace(KASRA, VARIABLE_KASRA));
+
+        let mut finished = load();
+        for name in ["noon-ar", "dal-ar"] {
+            finished.remove_document_glyph(name).unwrap();
+        }
+        assert!(finished.set_feature_text(edited.clone()));
+        let compiled = finished
+            .compile()
+            .expect("the edited font compiles with fontc");
+
+        let ss01 = [("ss01".to_string(), true)];
+        let shaped = |font: &ShapingFont, text: &str, rtl: bool| -> Vec<Row> {
+            font.shape_with_options(text, rtl, &ss01, None, None)
+                .unwrap()
+                .iter()
+                .map(|glyph| {
+                    (
+                        font.glyph_name(glyph.glyph_id).unwrap_or("?").to_string(),
+                        glyph.x_advance,
+                        glyph.x_offset,
+                        glyph.y_offset,
+                    )
+                })
+                .collect()
+        };
+        let mut cursive = Vec::new();
+        for (at, lowered) in [(0.0, -80.0), (1.0, -120.0), (0.5, -100.0)] {
+            let (mut inputs, _) =
+                LayoutInputs::at_location(&project, &weight(at), regular).unwrap();
+            // The baseline lowers the kasra by nothing.
+            inputs.features = original.replace(KASRA, "kasra-ar' <0 0 0 0>");
+            let before = build_shaping_font(&inputs).expect("the baseline features build");
+            inputs.features.clone_from(&edited);
+            let bytes = build_shaping_font(&inputs)
+                .expect("variable feature values build")
+                .into_bytes();
+            let font = skrifa::FontRef::new(&bytes).unwrap();
+            assert!(font.fvar().is_err(), "the shaping font has no axes");
+            // fea-rs gives each variable value a variation index into a GDEF store, but the
+            // values are resolved at the location, so the store holds no region and no delta.
+            if let Some(store) = font.gdef().ok().and_then(|gdef| gdef.item_var_store()) {
+                let store = store.unwrap();
+                let regions = store.variation_region_list().unwrap();
+                assert_eq!(
+                    regions.region_count(),
+                    0,
+                    "the tables have no variation data"
+                );
+            }
+            let live = ShapingFont::from_bytes(bytes).unwrap();
+            let kasra = |font: &ShapingFont| {
+                shaped(font, "يِ", true)
+                    .into_iter()
+                    .find(|row| row.0 == "kasra-ar")
+                    .unwrap()
+                    .3
+            };
+            assert_eq!(kasra(&live) - kasra(&before), lowered, "at {at}");
+            let fontc = ShapingFont::from_bytes(compiled.bytes.to_vec())
+                .unwrap()
+                .at_normalized(vec![at]);
+            for (text, rtl) in STRINGS.iter().copied().chain([("..", false)]) {
+                assert_eq!(
+                    shaped(&live, text, rtl),
+                    shaped(&fontc, text, rtl),
+                    "{text} at {at}"
+                );
+            }
+            cursive.push(shaped(&live, "..", false));
+        }
+        assert_ne!(
+            cursive[0], cursive[1],
+            "the variable anchor moves the attachment"
+        );
     }
 
     /// The live tables between masters equal the fontc variable compile at the same location.

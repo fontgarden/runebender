@@ -30,6 +30,9 @@ glyf = "glyf"
 hmtx = "hmtx"
 # External schemas, Unicode categories, French fixture text, and a recorded commit identity.
 custom_ot_values = "custom_ot_values"
+# The OpenType rounding trait and method of write-fonts.
+OtRound = "OtRound"
+ot_round = "ot_round"
 Nd = "Nd"
 PNGs = "PNGs"
 Exemple = "Exemple"

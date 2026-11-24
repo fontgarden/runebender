@@ -23,6 +23,15 @@ pub struct Axis {
 }
 
 impl Axis {
+    /// The axis as fontc's `fontdrasil` describes it, with the same user-to-normalized
+    /// conversion that the compiler snapshot gives fontc, axis map included.
+    pub fn fontdrasil_axis(&self) -> Result<fontdrasil::types::Axis, String> {
+        let backend = self.backend()?;
+        (&backend)
+            .try_into()
+            .map_err(|error: babelfont::BabelfontError| error.to_string())
+    }
+
     pub(super) fn backend(&self) -> Result<babelfont::Axis, String> {
         let tag: &[u8; 4] = self
             .tag

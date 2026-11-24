@@ -26,6 +26,7 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
 - The text line follows a drag in the same frame, at a master and between masters: marks follow a dragged anchor on every base in the line, including composites that take the anchor from the dragged glyph, the line follows a dragged advance or sidebearing, and kerning follows a kerning drag.
   The drag and the commit build the layout with the same function, so the line does not move when the pointer is released.
 - When an edit moves the glyph being edited in the text line, the canvas moves with it, so the glyph stays at the same place on the screen in left-to-right and right-to-left lines.
+- Variable values in the feature code, such as `<anchor (wght=400:360 wght=700:400) 384>`, are read at the displayed location, so a feature file with them no longer stops the layout of the text.
 - When the feature code does not compile, text keeps the substitutions of the last feature code that compiled, and advances, anchors and kerning still update.
   The status bar shows the error on one line with its line number.
 - A composite glyph without anchors takes the anchors of its components in the compiled font too, not only in the editor.
