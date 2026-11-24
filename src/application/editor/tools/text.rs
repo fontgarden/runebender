@@ -356,10 +356,12 @@ impl TextInputs {
             .collect();
         // An outline nudge invalidates the compiled font. Keep shaping with
         // the previous binary during the rebuild so neighbors keep their origins.
+        // A rebuild that fails, for example on a glyph whose masters do not match,
+        // keeps that binary too; otherwise the line moves after every nudge.
         // At a master the outlines themselves always come from the live source.
         let compiled = match font.preview_font() {
             Ok(Some(compiled)) => Some(compiled),
-            Ok(None) if editing_master => font
+            Ok(None) | Err(_) if editing_master => font
                 .text_location
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
@@ -1069,6 +1071,32 @@ mod tests {
         assert!(
             refreshed.compiled.is_some(),
             "a nudge must retain compiled positioning"
+        );
+        text.refresh(&refreshed);
+        assert_eq!(positions(&text), before);
+
+        // A glyph that no longer interpolates makes every rebuild fail.
+        // The line keeps the last compiled positions instead of falling back to unshaped text.
+        let bold = app
+            .font
+            .project
+            .document_sources()
+            .nth(1)
+            .expect("a second source")
+            .default_layer();
+        app.font
+            .project
+            .edit_document_layer("tet-hb", &bold, |draft| {
+                draft.clear_contours();
+                Ok(())
+            })
+            .unwrap();
+        assert!(app.font.project.compiled_preview().is_err());
+        app.apply_op(|s| s.nudge(8.0, 0.0));
+        let refreshed = TextInputs::for_editor(&app);
+        assert!(
+            refreshed.compiled.is_some(),
+            "a failed rebuild must retain compiled positioning"
         );
         text.refresh(&refreshed);
         assert_eq!(positions(&text), before);

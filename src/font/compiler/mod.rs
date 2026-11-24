@@ -293,7 +293,7 @@ impl CompiledFont {
         font.features = features;
         let source = BabelfontIrSource::new(font, options);
         let bytes = fontc::generate_font(Box::new(source), fontc::Options::default())
-            .map_err(|error| format!("{error:#?}"))?;
+            .map_err(|error| one_line(&error.to_string()))?;
         let bytes = stable_modified_timestamp(bytes)?;
         let shaping = ShapingFont::from_bytes(bytes.clone())?;
         use skrifa::MetadataProvider as _;
@@ -316,6 +316,36 @@ impl CompiledFont {
             glyph_ids,
         })
     }
+}
+
+/// A compiler message on one line, for a panel row or the status bar.
+///
+/// A feature-file error can span several lines; its first line names the fault,
+/// and the count of the other lines tells the reader that more text exists.
+fn one_line(message: &str) -> String {
+    let mut lines = message
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
+    let first = lines.next().unwrap_or("the compiler failed").to_string();
+    match lines.count() {
+        0 => first,
+        more => format!("{first} (and {more} more lines)"),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn a_compiler_message_is_one_line() {
+    assert_eq!(
+        one_line("'tet-hb' has interpolation-incompatible paths"),
+        "'tet-hb' has interpolation-incompatible paths"
+    );
+    assert_eq!(
+        one_line("feature error\n  at line 3\n\n  at line 9\n"),
+        "feature error (and 2 more lines)"
+    );
+    assert_eq!(one_line(""), "the compiler failed");
 }
 
 /// Keep a compiled snapshot independent of the second when fontc finishes.

@@ -218,8 +218,11 @@ pub(crate) fn marks_bar(app: &Workspace) -> impl WidgetView<Workspace, Widget: S
 /// takes the readout's place while it has something to say.
 fn document_readout(app: &Workspace, note: String) -> impl WidgetView<Workspace> + use<> {
     // With `RUNEBENDER_FRAME_TIMES` set, the frame times of the last second take the idle place.
+    // The bar holds one line; a message with line breaks is joined with spaces.
     let note = if note.is_empty() {
         crate::application::platform::frame_times::readout().unwrap_or_default()
+    } else if note.contains('\n') {
+        note.split_whitespace().collect::<Vec<_>>().join(" ")
     } else {
         note
     };

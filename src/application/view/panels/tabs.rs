@@ -493,6 +493,24 @@ where
     ))
 }
 
+/// The longest tab label in characters, before the ellipsis.
+const TAB_LABEL_CHARS: usize = 24;
+
+/// A one-line tab label: the first line of the text, or the glyph name when there is no text.
+/// A label with a line break would make the chip two rows high in the title bar.
+fn tab_label(text: &str, glyph_name: &str) -> String {
+    let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
+    let Some(first) = lines.next() else {
+        return glyph_name.to_string();
+    };
+    let more = lines.next().is_some();
+    let mut label: String = first.chars().take(TAB_LABEL_CHARS).collect();
+    if more || first.chars().count() > TAB_LABEL_CHARS {
+        label.push('…');
+    }
+    label
+}
+
 pub(crate) fn tab_strip(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     let pal = &app.palette;
     let editing = matches!(app.mode, Mode::Editor(_));
@@ -503,13 +521,7 @@ pub(crate) fn tab_strip(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
         .iter()
         .enumerate()
         .map(|(index, tab)| {
-            let mut label = tab.text_context.editor_text.clone();
-            if label.is_empty() {
-                label = tab.session.glyph_name.clone();
-            } else if label.chars().count() > 24 {
-                label = label.chars().take(24).collect();
-                label.push('…');
-            }
+            let label = tab_label(&tab.text_context.editor_text, &tab.session.glyph_name);
             xrow(
                 Region::Inline,
                 (
@@ -789,4 +801,19 @@ fn category_sidebar(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     ))
     .cross_axis_alignment(CrossAxisAlignment::Stretch)
     .gap(Space::None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tab_label;
+
+    #[test]
+    fn a_tab_label_is_one_line() {
+        assert_eq!(tab_label("", "reh-ar.fina"), "reh-ar.fina");
+        assert_eq!(tab_label("Hamburg", "a"), "Hamburg");
+        assert_eq!(tab_label("וירטואה\nفيرتوا", "a"), "וירטואה…");
+        assert_eq!(tab_label("\n  \nHamburg", "a"), "Hamburg");
+        let long = "a".repeat(30);
+        assert_eq!(tab_label(&long, "a"), format!("{}…", "a".repeat(24)));
+    }
 }
