@@ -5,6 +5,7 @@
 //! written from its anchors, the Arabic joining rules, the buffer
 //! behind the Text tool, and the samples of the proof view.
 
+pub mod arabic_features;
 pub mod buffer;
 pub mod features;
 pub mod generated;

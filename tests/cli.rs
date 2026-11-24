@@ -1346,3 +1346,52 @@ fn mcp_install_writes_every_client_config_with_the_binary_path() {
     assert_eq!(again["clients"][0]["changed"], false);
     let _ = std::fs::remove_dir_all(&home);
 }
+
+#[test]
+fn features_joining_writes_one_block_and_a_second_run_changes_nothing() {
+    // A copy, because the test writes `features.fea`.
+    let (_dir, ufo) = scratch_copy(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/arabic/Arabic-Regular.ufo"),
+    );
+    let features = ufo.join("features.fea");
+    let before = std::fs::read_to_string(&features).unwrap();
+    // The fixture defines its own positional features and ligatures, so they are kept.
+    let (code, result) = run(&["features", ufo.to_str().unwrap(), "--joining"]);
+    assert_eq!(code, 0, "{result}");
+    assert_eq!(result["empty"], true, "{result}");
+    assert_eq!(
+        result["kept"],
+        serde_json::json!(["fina", "medi", "init", "rlig"])
+    );
+    assert_eq!(std::fs::read_to_string(&features).unwrap(), before);
+
+    // Without its init and fina features, the block is written once.
+    let mut own = String::new();
+    let mut skipping = false;
+    for line in before.split_inclusive('\n') {
+        if line.starts_with("feature init {") || line.starts_with("feature fina {") {
+            skipping = true;
+        }
+        if !skipping {
+            own.push_str(line);
+        }
+        if line.starts_with("} init;") || line.starts_with("} fina;") {
+            skipping = false;
+        }
+    }
+    std::fs::write(&features, &own).unwrap();
+    let (code, result) = run(&["features", ufo.to_str().unwrap(), "--joining", "--write"]);
+    assert_eq!(code, 0, "{result}");
+    assert_eq!(result["changed"], true, "{result}");
+    assert_eq!(result["kept"], serde_json::json!(["medi", "rlig"]));
+    let once = std::fs::read_to_string(&features).unwrap();
+    assert!(
+        once.contains("feature init {\n    script arab;\n"),
+        "{once}"
+    );
+    assert!(once.contains("        sub beh-ar by beh-ar.init;\n"));
+    let (code, result) = run(&["features", ufo.to_str().unwrap(), "--joining", "--write"]);
+    assert_eq!(code, 0, "{result}");
+    assert_eq!(result["changed"], false, "{result}");
+    assert_eq!(std::fs::read_to_string(&features).unwrap(), once);
+}

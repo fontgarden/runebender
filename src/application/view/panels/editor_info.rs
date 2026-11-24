@@ -541,8 +541,9 @@ pub(crate) fn compare_section(app: &Workspace) -> impl WidgetView<Workspace> + u
     )
 }
 
-/// Features: an editable `features.fea` draft, with explicit Apply/Revert and
-/// generation of mark and mkmk lookups from anchors.
+/// Features: an editable `features.fea` draft, with explicit Apply/Revert,
+/// generation of mark and mkmk lookups from anchors, and generation of the
+/// Arabic joining features from glyph names.
 pub(crate) fn features_section(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     let pal = &app.palette;
     section(
@@ -566,6 +567,9 @@ pub(crate) fn features_section(app: &Workspace) -> impl WidgetView<Workspace> + 
                     (
                         chip(pal, "Generate".into(), |app: &mut Workspace| {
                             app.generate_features();
+                        }),
+                        chip(pal, "Generate Joining".into(), |app: &mut Workspace| {
+                            app.generate_joining_features();
                         }),
                         chip(pal, "Apply".into(), |app: &mut Workspace| {
                             app.apply_features();

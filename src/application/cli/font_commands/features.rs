@@ -15,6 +15,12 @@ pub(in crate::application::cli) struct FeaturesArgs {
     /// text.
     #[arg(long)]
     write: bool,
+    /// Generate the Arabic joining and ligature features of the glyph
+    /// names instead of mark features. They go in the delimited block
+    /// that the generator owns inside `features.fea`; `--write` writes
+    /// that file, and without it the block is printed.
+    #[arg(long)]
+    joining: bool,
 }
 
 /// Report generated mark features or write an include beside `features.fea`.
@@ -29,6 +35,9 @@ pub(in crate::application::cli) fn features(args: &FeaturesArgs) -> CommandResul
         return Err(CliError::usage("features --write requires a UFO source"));
     }
     let (project, source_id) = open_single_source(source, "features")?;
+    if args.joining {
+        return joining_features(&project, source_id, source, write);
+    }
     let generated = features::generate_project(&project, source_id)
         .ok_or_else(|| CliError::failed("the source has no canonical feature inputs"))?;
     let own_mark = features::defines_mark_features(
@@ -70,6 +79,53 @@ pub(in crate::application::cli) fn features(args: &FeaturesArgs) -> CommandResul
         "written": written.as_ref().map(|(p, _)| p),
         "included": written.as_ref().map(|(_, i)| *i),
         "fea": if write { serde_json::Value::Null } else { json!(generated.fea) },
+    });
+    Ok(CommandOutput::new(value, text))
+}
+
+/// Generate the Arabic joining block, and write it into `features.fea` when asked.
+fn joining_features(
+    project: &Project,
+    source_id: runebender::font::variable::SourceId,
+    source: &Path,
+    write: bool,
+) -> CommandResult {
+    use runebender::text::arabic_features;
+    let feature_text = project
+        .document_feature_text(source_id)
+        .expect("the selected source has canonical feature text");
+    let block = arabic_features::generate_project(project, source_id, feature_text);
+    let updated = block.apply_to(feature_text).map_err(CliError::failed)?;
+    let written = if write {
+        let path = source.join("features.fea");
+        std::fs::write(&path, &updated)
+            .map_err(|error| CliError::failed(format!("{}: {error}", path.display())))?;
+        Some(path)
+    } else {
+        None
+    };
+    let mut text = match &written {
+        Some(path) => format!("{}: {}\n", path.display(), block.summary()),
+        None => block.text(),
+    };
+    for note in &block.notes {
+        push_line!(text, "note: {note}");
+    }
+    let features: Vec<serde_json::Value> = block
+        .features
+        .iter()
+        .map(|feature| json!({ "tag": feature.tag, "rules": feature.rules.len() }))
+        .collect();
+    let value = json!({
+        "ok": true,
+        "features": features,
+        "rules": block.rule_count(),
+        "kept": block.kept,
+        "notes": block.notes,
+        "empty": block.is_empty(),
+        "changed": updated != feature_text,
+        "written": written,
+        "fea": if write { serde_json::Value::Null } else { json!(block.text()) },
     });
     Ok(CommandOutput::new(value, text))
 }

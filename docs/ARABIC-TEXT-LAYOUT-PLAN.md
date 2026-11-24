@@ -366,7 +366,8 @@ Phases 1 to 4 are the new system; phases 5 to 7 build on it.
 ### Phase 6: Arabic design features
 
 - [ ] 6.1 Right-to-left kerning: storage, editing in the Text tool, and compile rules equal to fontc.
-- [ ] 6.2 Generator for joining features from glyph names, as a reviewed proposal.
+- [x] 6.2 Generator for joining features from glyph names, as a reviewed proposal.
+      Done 2026-11-24: `src/text/arabic_features.rs` writes `isol`, `fina`, `medi`, `init` and `rlig` into one delimited block of the feature text, through Generate Joining in the Features section and `runebender features --joining`.
 - [ ] 6.3 Letters from a skeleton and dot marks through `ccmp`.
 - [ ] 6.4 Cursive attachment editing: entry and exit anchors, whole-word preview.
 - [ ] 6.5 Ligature component anchors: display and editing.

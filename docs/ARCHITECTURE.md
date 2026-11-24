@@ -224,4 +224,5 @@ The other files in the row are the next ones that the change touches.
 | A CLI subcommand | The `Command` enum in `src/application/cli.rs` | The file of the command group in `src/application/cli`. |
 | The node graph | `src/workflows/graph.rs` for the model | `src/workflows/graph_run.rs` for the disk runner, `src/workflows/graph_session.rs` and `src/application/editor/tools/graph` for the live graph, `src/ui/graph.rs` for layout, `src/application/view/canvas/graph.rs` for the canvas. |
 | Text | `src/text/buffer/mod.rs` for the buffer, `src/text/shape.rs` for shaping | `src/application/editor/tools/text.rs` for the Text tool. |
+| Arabic feature generators | `src/text/arabic_features.rs` | `generate_joining_features` in `src/application/editor/inspector.rs` for the feature draft of the panel, and `src/application/cli/font_commands/features.rs` for `runebender features --joining`. |
 | Headless capture | `src/application/platform/screenshot.rs` | `src/application/launch_options.rs`, which reads the `RUNEBENDER_*` variables, and the list of variables in `docs/UI-DESIGN.md`. |

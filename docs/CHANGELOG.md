@@ -17,6 +17,9 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
 - Proof samples from the project: the proof view reads the `sample` tables of `sources/proof-samples.toml`, the file of the Font.Garden web proof, and offers the samples for the script of the glyph.
   The default samples cover Latin, Hebrew, and Arabic, each with a spacing sample of the glyph in its own script.
 - A Proof section in the editor panel shows the open glyph in a sample of its script, shaped from the live outline as you edit.
+- Generate Joining in the Features section writes the Arabic `isol`, `fina`, `medi`, `init` and `rlig` features from the glyph names, such as `beh-ar.init` and `lam_alef-ar.fina`, into the feature draft for review.
+  The code goes in one delimited block of `features.fea`, which a second run replaces; a feature that the file already defines is kept and named in the status line.
+  `runebender features --joining` does the same from the command line.
 
 ### Changed
 

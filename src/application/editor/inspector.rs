@@ -1238,6 +1238,31 @@ impl Workspace {
         self.features_status = Some("Generated mark and mkmk · review and Apply".into());
     }
 
+    /// Put the Arabic joining and ligature features of the glyph names in the feature draft
+    /// for review, in the delimited block that the generator owns.
+    pub(crate) fn generate_joining_features(&mut self) {
+        use runebender::text::arabic_features;
+        let Some(source) = self.font.project.source_id(self.font.active()) else {
+            self.features_status = Some("The active source is unavailable".into());
+            return;
+        };
+        let block =
+            arabic_features::generate_project(&self.font.project, source, &self.features_buf);
+        let fea = match block.apply_to(&self.features_buf) {
+            Ok(fea) => fea,
+            Err(error) => {
+                self.features_status = Some(format!("Cannot place the generated block: {error}"));
+                return;
+            }
+        };
+        if fea == self.features_buf {
+            self.features_status = Some(format!("{} · no change", block.summary()));
+            return;
+        }
+        self.edit_features(fea);
+        self.features_status = Some(format!("{} · review and Apply", block.summary()));
+    }
+
     fn feature_compile_verdict(&self, features: &str) -> Result<(), String> {
         self.font.project.check_features(features)
     }
@@ -1726,6 +1751,45 @@ mod size_tests {
         assert_eq!(app.features_buf, "languagesystem DFLT dflt;\n");
         assert!(!app.features_edited);
         assert!(!app.modified);
+        std::fs::remove_dir_all(path).expect("remove disposable font");
+    }
+
+    #[test]
+    fn generated_joining_features_are_a_reviewed_draft() {
+        use runebender::text::arabic_features::BLOCK_BEGIN;
+
+        let path = disposable_font("joining-draft");
+        let mut font = norad::Font::new();
+        let mut beh = norad::Glyph::new("beh-ar");
+        beh.codepoints.insert('\u{0628}');
+        font.default_layer_mut().insert_glyph(beh);
+        font.default_layer_mut()
+            .insert_glyph(norad::Glyph::new("beh-ar.init"));
+        font.features = "languagesystem DFLT dflt;\nlanguagesystem arab dflt;\n".into();
+        font.save(&path).expect("save disposable test font");
+        let mut app = Workspace::open(&path).expect("open test font");
+
+        app.generate_joining_features();
+        let generated = app.features_buf.clone();
+        assert!(generated.contains(BLOCK_BEGIN), "{generated}");
+        assert!(generated.contains("sub beh-ar by beh-ar.init;"));
+        assert!(app.features_edited);
+        assert_eq!(app.font.feature_text(), font.features);
+        // A second run on the draft changes nothing.
+        app.generate_joining_features();
+        assert_eq!(app.features_buf, generated);
+        app.revert_features();
+        assert_eq!(app.features_buf, font.features);
+        app.generate_joining_features();
+        app.apply_features();
+        assert_eq!(app.font.feature_text(), generated);
+        assert!(
+            app.features_status
+                .as_deref()
+                .is_some_and(|status| status.contains("compiled clean")),
+            "{:?}",
+            app.features_status
+        );
         std::fs::remove_dir_all(path).expect("remove disposable font");
     }
 
