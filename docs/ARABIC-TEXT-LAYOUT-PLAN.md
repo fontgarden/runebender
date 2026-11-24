@@ -333,7 +333,10 @@ Phases 1 to 4 are the new system; phases 5 to 7 build on it.
 - [x] 3.4 A drag step and a commit call the same layout function.
       Done 2026-11-23 at a master: `LayoutTables::build_live` takes the committed inputs and `LayoutOverrides`, the draft values of the gesture.
       Point, anchor, sidebearing and component drags keep their edit in a session draft until release; the edit canvas reads the draft advance and anchors, and a Text tool kerning drag gives its pair value, on each step.
-      Between masters the kerning drag still moves the pair after shaping, until phase 2.
+      At every location the committed inputs are those of the displayed location, and `OverrideBasis` moves the draft values of the edited master there: each glyph value by the weight of that master in the glyph's interpolation times the change, and kerning interpolated again from every master with the dragged pair in place.
+      Composites without anchors of their own take the dragged anchors of their components during the drag.
+      A committed release keeps the dragged values in the line until the commit arrives, so no frame shows the values from before the gesture.
+      The edit canvas uses the post-shaping kerning preview only for a line that has no live layout tables, which happens only before any build succeeded.
 - [x] 3.5 View anchoring on the edited glyph for left-to-right and right-to-left lines.
       Done 2026-11-23: the edit canvas moves its viewport by the screen distance that new layout moved the active sort, after a drag step and after the app supplies new text inputs.
 - [x] 3.6 Feature code errors: keep the last code that compiled, with live values, and show the error with its line.

@@ -501,6 +501,7 @@ impl<'a> WeightCache<'a> {
 }
 
 /// The kerning of one master, read with the UFO kerning value lookup.
+#[derive(Debug, Clone)]
 struct MasterKerning {
     pairs: HashMap<(String, String), f64>,
     first: HashMap<String, String>,
@@ -730,6 +731,311 @@ impl LayoutInputs {
             }
         }
         Cow::Owned(inputs)
+    }
+}
+
+/// The anchors a composite with no anchors of its own takes from `components`, each base's
+/// anchors given by `base_anchors`, by the rule of
+/// [`effective_document_anchors`](crate::font::composites::effective_document_anchors).
+fn inherited_anchors<'a>(
+    components: &[(String, kurbo::Affine)],
+    mut base_anchors: impl FnMut(&str) -> Option<&'a [(String, f64, f64)]>,
+) -> Vec<(String, f64, f64)> {
+    let mut anchors: Vec<(String, f64, f64)> = Vec::new();
+    for (base, transform) in components {
+        for (name, x, y) in base_anchors(base).unwrap_or_default() {
+            if name.starts_with('_') {
+                continue;
+            }
+            let at = *transform * kurbo::Point::new(*x, *y);
+            anchors.retain(|(candidate, _, _)| candidate != name);
+            anchors.push((name.clone(), at.x, at.y));
+        }
+    }
+    anchors
+}
+
+/// What turns the values of a gesture on one master into overrides of the layout inputs at
+/// the displayed location.
+///
+/// A gesture edits one layer of the active master.
+/// Composites that take their anchors from the edited glyph take the dragged anchors too, as
+/// the commit gives them.
+/// Between masters, each glyph value moves by the weight of the master in that glyph's
+/// interpolation times the change, which equals the interpolation of the edited master
+/// values, and kerning is interpolated again from every master with the dragged pair in
+/// place.
+#[derive(Debug, Clone, Default)]
+pub struct OverrideBasis {
+    /// The committed values of the edited master; `None` when they are the located inputs.
+    master: Option<Arc<LayoutInputs>>,
+    /// The weight of the master in each glyph's values at the location.
+    weights: HashMap<String, f64>,
+    /// The weight of each master's kerning at the location, its kerning, and whether it is
+    /// the edited master.
+    kerning: Vec<(f64, MasterKerning, bool)>,
+    /// Composites of the edited master without anchors of their own, with their components.
+    composites: Vec<(String, Vec<(String, kurbo::Affine)>)>,
+    /// The committed anchors of every glyph that a composite uses, exported or not.
+    bases: HashMap<String, Vec<(String, f64, f64)>>,
+}
+
+impl OverrideBasis {
+    /// The basis at the location of the master `source`.
+    pub fn at_master(project: &Project, source: SourceId) -> Self {
+        let mut basis = Self::default();
+        basis.read_composites(project, source);
+        basis
+    }
+
+    /// The basis at `location`, for a gesture on the master `source`.
+    pub fn at_location(
+        project: &Project,
+        location: &Location,
+        source: SourceId,
+    ) -> Result<Self, String> {
+        let mut basis = Self {
+            master: Some(Arc::new(LayoutInputs::from_project(project, source)?)),
+            ..Self::default()
+        };
+        basis.read_composites(project, source);
+        let master_layer = project
+            .document_source(source)
+            .ok_or("the source is not loaded")?
+            .default_layer();
+        let mut weights = WeightCache::new(location);
+        let names: Vec<String> = basis
+            .master
+            .as_ref()
+            .map(|inputs| inputs.glyphs.iter().map(|g| g.name.clone()).collect())
+            .unwrap_or_default();
+        for name in names {
+            let Ok(sources) = project.glyph_sources(&name) else {
+                continue;
+            };
+            let sources: Vec<&GlyphSource> = sources
+                .iter()
+                .filter(|glyph_source| project.document_layer(&name, &glyph_source.layer).is_some())
+                .collect();
+            let is_master = |glyph_source: &&GlyphSource| glyph_source.layer == master_layer;
+            let weight = if let Some(exact) = sources
+                .iter()
+                .find(|glyph_source| locations_match(&glyph_source.location, location))
+            {
+                if is_master(exact) { 1.0 } else { 0.0 }
+            } else {
+                match weights.get(sources.iter().copied()) {
+                    Ok(found) => sources
+                        .iter()
+                        .zip(found)
+                        .find(|(glyph_source, _)| is_master(glyph_source))
+                        .map_or(0.0, |(_, weight)| weight),
+                    // The nearest master supplies the values.
+                    Err(_) => {
+                        let nearest = sources
+                            .iter()
+                            .min_by(|a, b| {
+                                squared_distance(&a.location, location)
+                                    .total_cmp(&squared_distance(&b.location, location))
+                            })
+                            .is_some_and(is_master);
+                        if nearest { 1.0 } else { 0.0 }
+                    }
+                }
+            };
+            basis.weights.insert(name, weight);
+        }
+        if let Some(designspace) = project.document_designspace() {
+            let masters: Vec<(SourceId, Location)> = designspace
+                .sources()
+                .iter()
+                .map(|descriptor| {
+                    Ok((
+                        descriptor.id(),
+                        descriptor.location.to_normalized(designspace.axes())?,
+                    ))
+                })
+                .collect::<Result<_, String>>()?;
+            let locations: Vec<Location> = masters.iter().map(|(_, at)| at.clone()).collect();
+            let master_weights = match masters
+                .iter()
+                .position(|(_, at)| locations_match(at, location))
+            {
+                Some(index) => (0..masters.len())
+                    .map(|i| if i == index { 1.0 } else { 0.0 })
+                    .collect(),
+                None => VariationModel::new(&locations)?.weights(location)?,
+            };
+            for ((id, _), weight) in masters.iter().zip(master_weights) {
+                let table =
+                    MasterKerning::read(project, *id).ok_or("a source has no kerning metadata")?;
+                basis.kerning.push((weight, table, *id == source));
+            }
+        }
+        Ok(basis)
+    }
+
+    fn read_composites(&mut self, project: &Project, source: SourceId) {
+        let Some(layer) = project
+            .document_source(source)
+            .map(|source| source.default_layer())
+        else {
+            return;
+        };
+        for name in project.glyph_names() {
+            let Some(view) = project.document_layer(name, &layer) else {
+                continue;
+            };
+            if view.anchors().next().is_some() || view.components().next().is_none() {
+                continue;
+            }
+            let components: Vec<(String, kurbo::Affine)> = view
+                .components()
+                .map(|component| (component.reference().to_owned(), component.transform()))
+                .collect();
+            for (base, _) in &components {
+                if !self.bases.contains_key(base)
+                    && let Some(base_view) = project.document_layer(base, &layer)
+                {
+                    let anchors =
+                        crate::font::composites::effective_document_anchors(base_view, |name| {
+                            project.document_layer(name, &layer)
+                        })
+                        .into_iter()
+                        .map(|(name, at)| (name, at.x, at.y))
+                        .collect();
+                    self.bases.insert(base.clone(), anchors);
+                }
+            }
+            self.composites.push((name.to_owned(), components));
+        }
+    }
+
+    /// `overrides`, values of the edited master, as overrides of `located`, the inputs at the
+    /// displayed location, with the composites that inherit dragged anchors added.
+    ///
+    /// Entries that change nothing are left out; see [`LayoutInputs::changes_in`].
+    pub fn locate(&self, located: &LayoutInputs, overrides: &LayoutOverrides) -> LayoutOverrides {
+        if overrides.is_empty() {
+            return LayoutOverrides::default();
+        }
+        let master = self.master.as_deref().unwrap_or(located);
+        let mut glyphs = overrides.glyphs.clone();
+        // Composites follow the anchors of their components, transitively.
+        let mut dragged: HashMap<String, Vec<(String, f64, f64)>> = overrides
+            .glyphs
+            .iter()
+            .filter_map(|glyph| Some((glyph.name.clone(), glyph.anchors.clone()?)))
+            .collect();
+        for _ in 0..8 {
+            let mut changed = false;
+            for (composite, components) in &self.composites {
+                if !components
+                    .iter()
+                    .any(|(base, _)| dragged.contains_key(base))
+                    || overrides
+                        .glyphs
+                        .iter()
+                        .any(|glyph| glyph.name == *composite)
+                {
+                    continue;
+                }
+                let anchors = inherited_anchors(components, |base| {
+                    dragged
+                        .get(base)
+                        .or_else(|| self.bases.get(base))
+                        .map(Vec::as_slice)
+                });
+                if dragged.get(composite) != Some(&anchors) {
+                    dragged.insert(composite.clone(), anchors);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        for (name, anchors) in &dragged {
+            if glyphs.iter().any(|glyph| glyph.name == *name) {
+                continue;
+            }
+            if let Some(glyph) = master.glyphs.iter().find(|glyph| glyph.name == *name) {
+                glyphs.push(GlyphOverride {
+                    name: name.clone(),
+                    advance: glyph.advance,
+                    anchors: Some(anchors.clone()),
+                });
+            }
+        }
+        let mut located_overrides = LayoutOverrides {
+            glyphs,
+            kerning: overrides.kerning.clone(),
+        };
+        if self.master.is_some() {
+            located_overrides.glyphs = located_overrides
+                .glyphs
+                .iter()
+                .filter_map(|edit| self.located_glyph(master, located, edit))
+                .collect();
+            located_overrides.kerning = located_overrides
+                .kerning
+                .iter()
+                .map(|(left, right, value)| {
+                    let value: f64 = self
+                        .kerning
+                        .iter()
+                        .map(|(weight, table, edited)| {
+                            weight
+                                * if *edited {
+                                    value.round()
+                                } else {
+                                    table.value(left, right)
+                                }
+                        })
+                        .sum();
+                    (left.clone(), right.clone(), value.round())
+                })
+                .collect();
+        }
+        located.changes_in(&located_overrides)
+    }
+
+    /// One glyph override of the edited master, moved to the location by the master's weight.
+    fn located_glyph(
+        &self,
+        master: &LayoutInputs,
+        located: &LayoutInputs,
+        edit: &GlyphOverride,
+    ) -> Option<GlyphOverride> {
+        let before = master.glyphs.iter().find(|glyph| glyph.name == edit.name)?;
+        let here = located
+            .glyphs
+            .iter()
+            .find(|glyph| glyph.name == edit.name)?;
+        let weight = self.weights.get(&edit.name).copied().unwrap_or(0.0);
+        let anchors = edit.anchors.as_ref().map(|anchors| {
+            here.anchors
+                .iter()
+                .map(|(name, x, y)| {
+                    let find = |list: &[(String, f64, f64)]| {
+                        list.iter()
+                            .find(|(candidate, _, _)| candidate == name)
+                            .map(|(_, x, y)| (*x, *y))
+                    };
+                    match (find(anchors), find(&before.anchors)) {
+                        (Some((ox, oy)), Some((mx, my))) => {
+                            (name.clone(), x + weight * (ox - mx), y + weight * (oy - my))
+                        }
+                        _ => (name.clone(), *x, *y),
+                    }
+                })
+                .collect()
+        });
+        Some(GlyphOverride {
+            name: edit.name.clone(),
+            advance: here.advance + weight * (edit.advance - before.advance),
+            anchors,
+        })
     }
 }
 

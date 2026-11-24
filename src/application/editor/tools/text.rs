@@ -758,8 +758,8 @@ impl TextState {
         self.overrides = LayoutOverrides::default();
     }
 
-    /// Whether the line is shaped by the live layout of a master, which `follow` can rebuild
-    /// with the values of a gesture.
+    /// Whether the line is shaped by the live layout, which `follow` can rebuild with the
+    /// values of a gesture.
     pub(crate) fn has_live_layout(&self) -> bool {
         self.committed.source.is_some()
     }
@@ -772,7 +772,8 @@ impl TextState {
             .is_some_and(|source| source.reads_layer(layer))
     }
 
-    /// Shape the line with the values of a gesture in progress in place of the committed ones.
+    /// Shape the line with the values of a gesture in progress in place of the committed ones,
+    /// at a master or between masters.
     ///
     /// The shaping font comes from the same builder and the same call as the committed one,
     /// so a drag step and the commit of the same values give the same layout.
@@ -783,7 +784,9 @@ impl TextState {
         let Some(source) = &self.committed.source else {
             return false;
         };
-        let overrides = source.changes_in(overrides);
+        // The values of the edited master, at the displayed location, with the composites that
+        // take dragged anchors.
+        let overrides = source.locate(overrides);
         if overrides == self.overrides {
             return false;
         }

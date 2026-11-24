@@ -290,6 +290,7 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
         _: &mut Workspace,
     ) {
         let mut dirty = false;
+        let session_changed = !Arc::ptr_eq(&self.session, &prev.session);
         if !matches!(
             (&self.preview_hold, &element.widget.preview_hold),
             (Some(new), Some(old)) if Arc::ptr_eq(new, old)
@@ -471,6 +472,7 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
                 // Same tool, new master or edited glyph: keep what has
                 // been typed and re-read the metrics, with the edited glyph kept in place.
                 (Some(inputs), Some(state)) => {
+                    // The post-shaping pair preview of a line without live layout tables.
                     if !matches!(element.widget.drag, Drag::Kern { .. }) {
                         state.buffer.preview_drag_gap(None);
                     }
@@ -490,6 +492,8 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
                 element.widget.refresh_text(inputs);
             }
             element.widget.text_inputs = self.text.clone();
+            dirty = true;
+        } else if session_changed && element.widget.follow_session() {
             dirty = true;
         }
         if dirty {

@@ -12,14 +12,47 @@ use crate::application::editor::tools::text::{TextInputs, TextState};
 use crate::application::font_model::FontModel;
 
 fn arabic_workspace(glyph: &str) -> Workspace {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/arabic/Arabic-Regular.ufo");
-    let project = runebender::font::project::Project::load(&path).expect("the fixture loads");
+    workspace_at(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/arabic/Arabic-Regular.ufo"),
+        glyph,
+    )
+}
+
+fn workspace_at(path: &std::path::Path, glyph: &str) -> Workspace {
+    let project = runebender::font::project::Project::load(path).expect("the fixture loads");
     let mut app =
         Workspace::from_model(FontModel::from_project(project)).expect("the fixture opens");
     let index = app.font.index_of(glyph).expect("the fixture has the glyph");
     app.open_glyph(index);
     app
+}
+
+/// Drag the anchor `name` of the open glyph by `steps` total offsets, a step each.
+fn drag_anchor(editor: &mut EditorWidget, name: &str, steps: &[(f64, f64)]) {
+    let anchor = editor
+        .session
+        .current_layer()
+        .and_then(|layer| layer.anchors().find(|anchor| anchor.name() == name))
+        .expect("the glyph has the anchor")
+        .id();
+    editor.session.press_anchor(anchor, false);
+    editor.session.begin_point_drag();
+    editor.drag = Drag::Points {
+        start: Point::ORIGIN,
+    };
+    for step in steps {
+        assert!(editor.session.drag_points_to(*step, false));
+        assert!(editor.follow_gesture(), "each step reshapes the line");
+    }
+}
+
+/// End a point drag and commit it, as the release and the canvas view do.
+fn release_and_commit(app: &mut Workspace, editor: &mut EditorWidget, text: &str) {
+    editor.session.end_point_drag();
+    editor.drag = Drag::None;
+    editor.end_gesture(false);
+    commit(app, editor, text);
 }
 
 /// An editor widget on the open glyph of `app`, with `text` in its line.
@@ -411,4 +444,240 @@ fn a_contour_drag_rebuilds_no_table() {
             .as_ref()
             .expect("live layout"),
     ));
+}
+
+/// The Arabic designspace with the sliders halfway between Regular and Bold.
+fn between_masters(glyph: &str) -> Workspace {
+    let mut app = workspace_at(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/arabic/Arabic.designspace"),
+        glyph,
+    );
+    let axis = app.font.axes.first().expect("a weight axis").clone();
+    app.set_axis(0, (axis.min + axis.max) / 2.0);
+    assert!(!app.on_active_master());
+    app
+}
+
+#[test]
+fn an_anchor_drag_between_masters_moves_the_marks_by_the_weight_of_the_master() {
+    const TEXT: &str = "بِ بِ";
+    let mut app = between_masters("beh-ar");
+    let mut editor = line_editor(&app, TEXT);
+    let before = line(&editor);
+    drag_anchor(&mut editor, "bottom", &[(20.0, -10.0), (40.0, -20.0)]);
+    let dragged = line(&editor);
+    for kasra in [1, 4] {
+        let moved = origin_of(&dragged, kasra) - origin_of(&before, kasra);
+        assert!(
+            moved.x > 0.0 && moved.x < 40.0 && moved.y < 0.0 && moved.y > -20.0,
+            "the kasra moves by part of the drag: {moved:?}"
+        );
+    }
+    release_and_commit(&mut app, &mut editor, TEXT);
+    assert_eq!(line(&editor), dragged, "the commit does not move the line");
+    assert_eq!(fresh_line(&app, TEXT), dragged);
+}
+
+#[test]
+fn a_kerning_drag_between_masters_shapes_with_the_dragged_value() {
+    const TEXT: &str = "را";
+    let mut app = between_masters("reh-ar");
+    let mut editor = line_editor(&app, TEXT);
+    editor.tool = Tool::Text;
+    let before = line(&editor);
+    let (first, second, boundary, rtl, original) = {
+        let text = editor.text.as_ref().expect("a text line");
+        let (a, b, boundary, rtl, original) = text.buffer.drag_pair(1).expect("a pair");
+        let [ga, gb] = text.buffer.pair_groups(a, b);
+        (
+            ga.expect("reh has a group").to_string(),
+            gb.expect("alef has a group").to_string(),
+            boundary,
+            rtl,
+            original,
+        )
+    };
+    editor.drag = Drag::Kern {
+        grabbed: 1,
+        first,
+        second,
+        boundary,
+        start_x: 0.0,
+        start_offset: editor.session.viewport.offset.x,
+        rtl,
+        original,
+        value: original,
+    };
+    for x in [-20.0, -40.0] {
+        assert!(super::super::tools::text::move_kern(&mut editor, x).is_some());
+    }
+    let dragged = line(&editor);
+    assert_ne!(dragged, before, "the line follows the dragged value");
+    let Some(EditorEvent::KernPair(first, second, value)) =
+        super::super::tools::text::finish_kern(&mut editor, false)
+    else {
+        panic!("the drag commits a pair");
+    };
+    assert_eq!(
+        line(&editor),
+        dragged,
+        "the release keeps the dragged value"
+    );
+    app.kern_first_buf = first;
+    app.kern_second_buf = second;
+    app.kern_value_buf = value.to_string();
+    app.set_kern_pair_from_bufs();
+    refresh(&app, &mut editor, TEXT);
+    assert_eq!(line(&editor), dragged, "the commit does not move the line");
+    assert_eq!(fresh_line(&app, TEXT), dragged);
+}
+
+/// A composite with no anchors of its own takes them from its components, so a drag of an
+/// anchor of the base moves the marks on the composite during the drag.
+#[cfg(feature = "integration-fonts")]
+#[test]
+fn a_base_anchor_drag_moves_the_marks_on_composites_that_use_the_base() {
+    // `beh-ar.init` is `behDotless-ar.init` and a dot below, and has no anchors of its own.
+    const TEXT: &str = "بَب";
+    let path = crate::integration_fonts::dir().join("VirtuaGrotesk.designspace");
+    let mut app = workspace_at(&path, "behDotless-ar.init");
+    let mut editor = line_editor(&app, TEXT);
+    let before = line(&editor);
+    let names: Vec<String> = editor
+        .text
+        .as_ref()
+        .expect("a line")
+        .buffer
+        .iter()
+        .map(|sort| sort.glyph_name().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(names[0], "beh-ar.init");
+    assert!(names[1].starts_with("fatha"), "{names:?}");
+    drag_anchor(&mut editor, "top", &[(15.0, -10.0), (30.0, -20.0)]);
+    let dragged = line(&editor);
+    assert_eq!(
+        origin_of(&dragged, 1) - origin_of(&before, 1),
+        kurbo::Vec2::new(30.0, -20.0),
+        "the fatha on the composite follows the anchor of its base"
+    );
+    release_and_commit(&mut app, &mut editor, TEXT);
+    assert_eq!(line(&editor), dragged, "the commit does not move the line");
+    assert_eq!(fresh_line(&app, TEXT), dragged);
+}
+
+/// The frames around a release, rendered by the whole application: the last drag frame, the
+/// frame after the release and before the commit reaches the app, and the frame after it.
+#[test]
+fn the_frames_around_a_release_show_the_same_layout() {
+    use crate::application::platform::screenshot::Headless;
+    use crate::application::view::render::app_logic;
+    use masonry::core::{PointerButtonEvent, PointerUpdate};
+    use std::time::Duration;
+    use xilem::view::sized_box;
+
+    let mut app = arabic_workspace("beh-ar");
+    app.set_editor_text("بِ بِ".into());
+    let logic = |app: &mut Workspace| sized_box(app_logic(app));
+    let mut headless = Headless::new(app, logic, (1400, 900), 1.0);
+    for _ in 0..2 {
+        headless.rebuild(logic);
+        headless.anim_frame(Duration::from_millis(500));
+        headless.redraw();
+    }
+    // The active beh's origin and the kasra under it, on the screen.
+    let frame = |headless: &Headless<_, _>| {
+        let canvas = headless
+            .find_widget::<EditorWidget>()
+            .expect("the editor canvas is in the tree");
+        let editor = canvas.inner();
+        let viewport = editor.session.viewport.affine();
+        (
+            editor.glyph_affine() * Point::ORIGIN,
+            viewport * origin_of(&line(editor), 1),
+        )
+    };
+    let press = {
+        let canvas = headless
+            .find_widget::<EditorWidget>()
+            .expect("the editor canvas is in the tree");
+        let editor = canvas.inner();
+        let bottom = editor
+            .session
+            .named_anchors()
+            .into_iter()
+            .find(|(name, _)| name == "bottom")
+            .expect("beh has a bottom anchor")
+            .1;
+        canvas.ctx().window_transform() * (editor.glyph_affine() * bottom)
+    };
+    let state = |at: Point, down: bool| {
+        let mut buttons = masonry::ui_events::pointer::PointerButtons::default();
+        if down {
+            buttons.insert(PointerButton::Primary);
+        }
+        PointerState {
+            position: PhysicalPosition::new(at.x, at.y),
+            buttons,
+            ..PointerState::default()
+        }
+    };
+    let start = frame(&headless);
+    headless.pointer(PointerEvent::Move(PointerUpdate {
+        pointer: PRIMARY_MOUSE,
+        current: state(press, false),
+        coalesced: vec![],
+        predicted: vec![],
+    }));
+    headless.pointer(PointerEvent::Down(PointerButtonEvent {
+        pointer: PRIMARY_MOUSE,
+        button: Some(PointerButton::Primary),
+        state: state(press, true),
+    }));
+    let end = press + kurbo::Vec2::new(24.0, 12.0);
+    for step in 1..=4 {
+        let at = press + kurbo::Vec2::new(6.0, 3.0) * f64::from(step);
+        headless.pointer(PointerEvent::Move(PointerUpdate {
+            pointer: PRIMARY_MOUSE,
+            current: state(at, true),
+            coalesced: vec![],
+            predicted: vec![],
+        }));
+        headless.redraw();
+    }
+    let last_drag = frame(&headless);
+    assert_eq!(last_drag.0, start.0, "the active beh stays put");
+    assert_ne!(last_drag.1, start.1, "the kasra follows the anchor");
+
+    headless.pointer(PointerEvent::Up(PointerButtonEvent {
+        pointer: PRIMARY_MOUSE,
+        button: Some(PointerButton::Primary),
+        state: state(end, false),
+    }));
+    headless.redraw();
+    assert_eq!(
+        frame(&headless),
+        last_drag,
+        "the release frame shows the dragged values"
+    );
+
+    // The window delivers the widget's action to the app; do that by hand.
+    let mut session = headless
+        .find_widget::<EditorWidget>()
+        .expect("the editor canvas is in the tree")
+        .inner()
+        .session
+        .clone();
+    assert_eq!(
+        headless.app.sync_session_from(&mut session),
+        SessionSyncOutcome::Changed
+    );
+    headless.app.finish_open_glyph_refresh();
+    headless.rebuild(logic);
+    headless.redraw();
+    assert_eq!(
+        frame(&headless),
+        last_drag,
+        "the commit frame shows the same layout"
+    );
 }

@@ -267,8 +267,7 @@ pub(in super::super) fn release(
                 editor.session.end_point_drag();
             }
             editor.drag = Drag::None;
-            // Back to the committed values; the commit that `emit` starts brings the new ones.
-            editor.follow_gesture();
+            editor.end_gesture(cancelled);
             editor.emit(ctx, !cancelled);
         }
         // A cancelled marquee leaves the selection as it was.
@@ -342,7 +341,7 @@ pub(in super::super) fn release(
                 editor.session.end_metric_drag();
             }
             editor.drag = Drag::None;
-            editor.follow_gesture();
+            editor.end_gesture(cancelled);
             editor.emit(ctx, !cancelled);
         }
         Drag::Enter { .. } => editor.drag = Drag::None,
@@ -353,7 +352,7 @@ pub(in super::super) fn release(
                 editor.session.end_component_drag();
             }
             editor.drag = Drag::None;
-            editor.follow_gesture();
+            editor.end_gesture(cancelled);
             editor.emit(ctx, !cancelled);
         }
         _ => {}

@@ -70,8 +70,9 @@ pub(in super::super) fn move_kern(editor: &mut EditorWidget, x: f64) -> Option<E
         return None;
     }
     let gap = Some((*boundary, *value - *original));
-    // On a master the line is shaped with the dragged value, through the same layout as the
-    // commit. Between masters the layout font is compiled, so the pair is moved after shaping.
+    // With live layout tables, at a master and between masters, the line is shaped with the
+    // dragged value through the same layout as the commit. A line without them, which no
+    // build has given tables, moves the pair after shaping.
     if editor.text.as_ref()?.has_live_layout() {
         editor.follow_gesture();
     } else {
@@ -99,8 +100,7 @@ pub(in super::super) fn finish_kern(
     {
         text.buffer.preview_drag_gap(None);
     }
-    // Back to the committed values; the kerning commit brings the new ones.
-    editor.follow_gesture();
+    editor.end_gesture(cancelled || value == original);
     Some(if !cancelled && value != original {
         EditorEvent::KernPair(first, second, value)
     } else {

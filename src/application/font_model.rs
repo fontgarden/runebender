@@ -291,20 +291,23 @@ impl FontModel {
                 .and_then(|source| self.project.document_source(source))
                 .map(|source| source.default_layer());
             let read = source.and_then(|source| {
-                use runebender::text::layout_tables::LayoutInputs;
+                use runebender::text::layout_tables::{LayoutInputs, OverrideBasis};
                 if self.at_active_master(values) {
-                    LayoutInputs::from_project(&self.project, source)
-                        .map(|inputs| (inputs, Vec::new()))
+                    LayoutInputs::from_project(&self.project, source).map(|inputs| {
+                        let basis = OverrideBasis::at_master(&self.project, source);
+                        (inputs, Vec::new(), basis)
+                    })
                 } else {
-                    LayoutInputs::at_location(
-                        &self.project,
-                        &self.normalized_location(values),
-                        source,
-                    )
+                    let location = self.normalized_location(values);
+                    let (inputs, diagnostics) =
+                        LayoutInputs::at_location(&self.project, &location, source)?;
+                    let basis = OverrideBasis::at_location(&self.project, &location, source)?;
+                    Ok((inputs, diagnostics, basis))
                 }
             });
             match read {
-                Ok((inputs, diagnostics)) => {
+                Ok((inputs, diagnostics, basis)) => {
+                    cache.basis = Arc::new(basis);
                     cache.diagnostics = Arc::new(diagnostics);
                     cache.advances = Arc::new(
                         inputs
@@ -342,6 +345,7 @@ impl FontModel {
             .zip(cache.layer.clone())
             .map(|(inputs, layer)| LiveLayoutSource {
                 inputs,
+                basis: cache.basis.clone(),
                 tables: cache.tables.clone(),
                 layer,
             });
@@ -1639,8 +1643,9 @@ pub(crate) struct LiveLayout {
     pub(crate) source: Option<LiveLayoutSource>,
 }
 
-/// The committed layout inputs of the active master and the builder that turned them into
-/// the live layout font.
+/// The committed layout inputs at the displayed location, what moves the values of a gesture
+/// on the active master there, and the builder that turned the inputs into the live layout
+/// font.
 ///
 /// The edit canvas keeps this with its text line.
 /// During a gesture it builds the shaping font from these inputs with the values of the
@@ -1650,9 +1655,12 @@ pub(crate) struct LiveLayout {
 /// [`LayoutTables::build_live`]: runebender::text::layout_tables::LayoutTables::build_live
 #[derive(Clone, Debug)]
 pub(crate) struct LiveLayoutSource {
+    /// The committed inputs at the displayed location.
     inputs: Arc<runebender::text::layout_tables::LayoutInputs>,
+    /// How the values of a gesture on `layer` reach `inputs`.
+    basis: Arc<runebender::text::layout_tables::OverrideBasis>,
     tables: Arc<std::sync::Mutex<runebender::text::layout_tables::LayoutTables>>,
-    /// The layer whose values `inputs` hold: the default layer of the active master.
+    /// The layer that a gesture edits: the default layer of the active master.
     layer: runebender::font::variable::LayerId,
 }
 
@@ -1668,13 +1676,14 @@ impl LiveLayoutSource {
         self.layer == *layer
     }
 
-    /// The overrides that change a committed value; see
-    /// [`LayoutInputs::changes_in`](runebender::text::layout_tables::LayoutInputs::changes_in).
-    pub(crate) fn changes_in(
+    /// Values of the edited master as the overrides of the inputs at the location that change
+    /// a committed value; see
+    /// [`OverrideBasis::locate`](runebender::text::layout_tables::OverrideBasis::locate).
+    pub(crate) fn locate(
         &self,
         overrides: &runebender::text::layout_tables::LayoutOverrides,
     ) -> runebender::text::layout_tables::LayoutOverrides {
-        self.inputs.changes_in(overrides)
+        self.basis.locate(&self.inputs, overrides)
     }
 
     /// The shaping font of the committed values with `overrides` in place, as bytes.
@@ -1717,6 +1726,8 @@ struct LiveLayoutCache {
     inputs: Option<Arc<runebender::text::layout_tables::LayoutInputs>>,
     /// The layer that `inputs` were read from.
     layer: Option<runebender::font::variable::LayerId>,
+    /// How a gesture on that layer reaches `inputs`.
+    basis: Arc<runebender::text::layout_tables::OverrideBasis>,
     font: Option<Arc<Vec<u8>>>,
     error: Option<String>,
     diagnostics: Arc<Vec<runebender::text::layout_tables::LayoutDiagnostic>>,

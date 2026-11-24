@@ -57,6 +57,27 @@ impl EditorWidget {
         self.change_text_anchored(|text| text.follow(&overrides))
     }
 
+    /// End the gesture in the text line.
+    ///
+    /// A cancelled gesture goes back to the committed values at once.
+    /// A committed one keeps showing its values until the commit hands the widget new inputs,
+    /// so no frame between the release and the commit shows the values before the gesture.
+    /// When the commit changes nothing, the next session from the app restores the committed
+    /// values; see [`Self::follow_session`].
+    pub(super) fn end_gesture(&mut self, cancelled: bool) {
+        if cancelled {
+            self.follow_gesture();
+        }
+    }
+
+    /// After the app supplies a new session without new text inputs, shape the line with the
+    /// values that session holds, so a gesture whose commit changed nothing, or was rejected,
+    /// does not keep its values in the line.
+    /// Returns whether the line changed.
+    pub(super) fn follow_session(&mut self) -> bool {
+        self.follow_gesture()
+    }
+
     /// Give the text line inputs that the app read again, keeping what was typed, and keep
     /// the active sort in place on the screen.
     pub(super) fn refresh_text(&mut self, inputs: &TextInputs) {
