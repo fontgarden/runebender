@@ -2430,6 +2430,30 @@ mod idle_tests {
         settles(app);
     }
 
+    /// A category selection filters the cells on each rebuild. The grid compares its cells by
+    /// pointer, so the filter must return the same list while its inputs are the same.
+    #[test]
+    fn an_idle_overview_with_a_category_selected_requests_no_frame() {
+        use crate::application::workspace::Sel;
+        let mut app = workspace_for_layout();
+        app.back_to_overview();
+        app.sel = Sel::Category(runebender::GlyphCategory::Letter);
+        settles(app);
+    }
+
+    /// Away from a master the editor shows an interpolated outline. The canvas compares it
+    /// by pointer, so the same axis values must give the same outline on each rebuild.
+    #[test]
+    fn an_idle_editor_between_masters_requests_no_frame() {
+        let mut app = workspace_for_layout();
+        let axis = app.font.axes.first().expect("the fixture has an axis");
+        let middle = (axis.min + axis.max) / 2.0 + 1.0;
+        app.set_axis(0, middle);
+        assert!(!app.on_active_master());
+        assert!(app.interp_preview().is_some(), "the glyph interpolates");
+        settles(app);
+    }
+
     fn settles(app: crate::application::workspace::Workspace) {
         let logic = |app: &mut crate::application::workspace::Workspace| sized_box(app_logic(app));
         let mut headless = Headless::new(app, logic, (1400, 900), 1.0);

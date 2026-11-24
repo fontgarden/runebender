@@ -6,7 +6,7 @@
 use crate::application::design;
 use crate::application::font_model as model;
 use crate::application::view::canvas::grid::{Cell, CellMetrics};
-use crate::application::workspace::{Mode, Sel, Sort, Workspace};
+use crate::application::workspace::{FilteredKey, Mode, Sel, Sort, Workspace};
 use runebender::GlyphCategory;
 use runebender::outline::glyph_paths::round_units;
 use std::sync::Arc;
@@ -23,6 +23,21 @@ impl Workspace {
             && self.sort == Sort::Name
         {
             return self.cells.clone();
+        }
+        let key = FilteredKey {
+            cells: self.cells.clone(),
+            revision: self.font.project.document_revision(),
+            filter: self.filter.clone(),
+            sel: self.sel,
+            sort: self.sort,
+            regex: self.search_regex,
+            mode: self.search_mode,
+            case: self.search_case,
+        };
+        if let Some((last, cells)) = self.filtered.borrow().as_ref()
+            && last.cells_are(&key)
+        {
+            return cells.clone();
         }
         let q = if self.search_case {
             self.filter.clone()
@@ -72,7 +87,9 @@ impl Workspace {
                 out.sort_by_key(|c| c.codepoint.map(|cp| cp as u32).unwrap_or(u32::MAX));
             }
         }
-        Arc::new(out)
+        let out = Arc::new(out);
+        *self.filtered.borrow_mut() = Some((key, out.clone()));
+        out
     }
 
     /// Codepoints of a glyph entry (the cache keeps only the first).

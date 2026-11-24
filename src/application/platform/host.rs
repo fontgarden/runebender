@@ -200,6 +200,8 @@ impl Workspace {
             font,
             palette,
             cells,
+            filtered: std::cell::RefCell::new(None),
+            interp_preview_cache: std::cell::RefCell::new(None),
             mode,
             selected: open.or(first),
             multi_selected: Arc::new(std::collections::HashSet::new()),

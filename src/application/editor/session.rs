@@ -3588,9 +3588,31 @@ impl Workspace {
         if self.on_active_master() {
             return None;
         }
-        self.font
+        let axis_values: Vec<u64> = self
+            .axis_values
+            .iter()
+            .map(|value| value.to_bits())
+            .collect();
+        let revision = self.font.project.document_revision();
+        if let Some(last) = self.interp_preview_cache.borrow().as_ref()
+            && last.glyph == self.session.glyph_name
+            && last.axis_values == axis_values
+            && last.revision == revision
+        {
+            return last.outline.clone();
+        }
+        let outline = self
+            .font
             .interpolate_outline(&self.session.glyph_name, &self.axis_location())
-            .map(Arc::new)
+            .map(Arc::new);
+        *self.interp_preview_cache.borrow_mut() =
+            Some(crate::application::workspace::InterpPreview {
+                glyph: self.session.glyph_name.clone(),
+                axis_values,
+                revision,
+                outline: outline.clone(),
+            });
+        outline
     }
 
     /// Status shown under the axis sliders when the location is between masters.

@@ -33,6 +33,42 @@ pub(crate) enum Sel {
     Filter(usize),
 }
 
+/// One interpolated preview outline and the inputs that made it.
+pub(crate) struct InterpPreview {
+    pub(crate) glyph: String,
+    pub(crate) axis_values: Vec<u64>,
+    pub(crate) revision: u64,
+    pub(crate) outline: Option<Arc<kurbo::BezPath>>,
+}
+
+/// Every input of `Workspace::filtered_cells`.
+#[derive(Clone)]
+pub(crate) struct FilteredKey {
+    /// The unfiltered cells; held so that the pointer cannot be reused by a later list.
+    pub(crate) cells: Arc<Vec<Cell>>,
+    pub(crate) revision: u64,
+    pub(crate) filter: String,
+    pub(crate) sel: Sel,
+    pub(crate) sort: Sort,
+    pub(crate) regex: bool,
+    pub(crate) mode: u8,
+    pub(crate) case: bool,
+}
+
+impl FilteredKey {
+    /// Equal inputs, with the cell list compared by identity and not by content.
+    pub(crate) fn cells_are(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.cells, &other.cells)
+            && self.revision == other.revision
+            && self.filter == other.filter
+            && self.sel == other.sel
+            && self.sort == other.sort
+            && self.regex == other.regex
+            && self.mode == other.mode
+            && self.case == other.case
+    }
+}
+
 /// One bounded, session-only UI command receipt for live diagnostics.
 #[derive(serde::Serialize)]
 pub(crate) struct UiActionRecord {
@@ -188,6 +224,12 @@ pub(crate) struct Workspace {
     pub(crate) font: FontModel,
     pub(crate) palette: Arc<Palette>,
     pub(crate) cells: Arc<Vec<Cell>>,
+    /// The last interpolated preview outline with its inputs: glyph, axis values, revision.
+    /// The canvas compares the outline by pointer, so the same inputs must give the same `Arc`.
+    pub(crate) interp_preview_cache: std::cell::RefCell<Option<InterpPreview>>,
+    /// The last result of `filtered_cells` with the inputs that made it.
+    /// The grid compares its cells by pointer, so the same inputs must give the same `Arc`.
+    pub(crate) filtered: std::cell::RefCell<Option<(FilteredKey, Arc<Vec<Cell>>)>>,
     pub(crate) mode: Mode,
     pub(crate) selected: Option<usize>,
     pub(crate) multi_selected: Arc<std::collections::HashSet<usize>>,
