@@ -320,7 +320,13 @@ impl ShapingFont {
                 }
             }
             None => {
-                if right_to_left {
+                // The script comes from the first character that has one, so each script
+                // gets its own shaper and its own `script` rules. Without it a left-to-right
+                // run used the default shaper, and each right-to-left run was Arabic.
+                buffer.guess_segment_properties();
+                // A right-to-left run of neutral characters only, such as a space between
+                // two Arabic words, stays Arabic as before.
+                if right_to_left && buffer.script() == script::UNKNOWN {
                     buffer.set_script(script::ARABIC);
                 }
             }
