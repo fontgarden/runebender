@@ -489,7 +489,41 @@ Counterpunch features not covered by 6.1-6.9: a place for generated or plug-in `
 7. A drag in an RTL line edits the right-hand (logical previous) pair, as today?
 8. Order of phase 6 items.
 
-## 11. Sources
+## 11. Status on 2026-11-24
+
+The editing path uses the live layout tables of phases 1 to 3 at every location.
+Some checkboxes in section 7 are not updated; this section is the current status.
+
+Done:
+
+- The live layout tables, the values between masters, variable feature values, and live drags (phases 0 to 3, except 3.2).
+- The tolerant preview compile (4.1) and the layout benchmarks in `benches/layout_tables.rs`.
+- Right-to-left kerning across marks, and a warning for pairs that the export drops (6.1).
+- The joining feature generator and the skeleton and dot decomposition (6.2, 6.3).
+- The collision and ligature anchor engines (engine parts of 6.5 and 6.6), and the cursive attachment test of 6.4.
+- Joining context strings and View > Joining Contexts (6.7), and the Quranic and regional sample set (6.8).
+
+Deferred:
+
+- 3.2: the joining-rules fallback, `TextKerningModel` and the post-shaping kerning lookup are still in the code.
+- 4.2 and 4.3: the checker that compares the live layout with the export compile.
+- 5.1 to 5.4: speed work for large fonts. An anchor drag step takes about 7 ms on Virtua Grotesk.
+- 6.4, 6.5 and 6.6: the canvas drawing, the view options and the toggles of the overlays.
+- 6.9: kashida and tatweel preview.
+- 6.10 and the `harfrust` upgrade from 0.5.2 (0.13.3 first, 0.15 or later for a debugger).
+
+Known problems:
+
+- A component drag does not move the anchors that a composite takes from its components.
+- A right-to-left run in a script other than Arabic is shaped as Arabic.
+- A pair of glyphs with different directions cannot be dragged.
+- Proposed ligature anchors follow the scaled advances, not the ink.
+- The collision overlay finds dots by area only.
+- The Glyphs import ignores `metricsSource`.
+- When kerning groups differ between masters, the groups of the active source are used.
+- `src/text/joining_data.rs` repeats the Unicode joining data that `joining.rs` reads from `icu_properties`.
+
+## 12. Sources
 
 - Fontra: [repository](https://github.com/fontra/fontra), [shaper font builder](https://github.com/fontra/build-shaper-font), [design issue 2381](https://github.com/fontra/fontra/issues/2381), [blog](https://blog.fontra.xyz/blog/opentype-harfbuzz/).
 - Counterpunch: [repository](https://github.com/counterpunchspace/editor), [site](https://counterpunch.space/), [fontc issue 1897](https://github.com/googlefonts/fontc/issues/1897).

@@ -79,6 +79,7 @@ pub fn joining_forms(letter: char) -> &'static [PositionalForm] {
             &[Isolated, Initial, Medial, Final]
         }
         ArabicJoiningType::Right => &[Isolated, Final],
+        ArabicJoiningType::Left => &[Isolated, Initial],
         ArabicJoiningType::NonJoining | ArabicJoiningType::Transparent => &[Isolated],
     }
 }
