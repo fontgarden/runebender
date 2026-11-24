@@ -221,6 +221,33 @@ impl FontModel {
             CompileMode::Background => self.project.request_preview(),
         }
     }
+
+    /// Whether these user-space axis values are the location of the active master.
+    pub(crate) fn at_active_master(&self, values: &[f64]) -> bool {
+        match self.project.master_locations().get(self.active()) {
+            Some(master) => self.axes.iter().enumerate().all(|(index, axis)| {
+                // Axis values are user coordinates; the engine stores normalized locations.
+                let current =
+                    axis.user_to_normalized(values.get(index).copied().unwrap_or(axis.default));
+                let at = master.get(&axis.name).copied().unwrap_or(0.0);
+                (current - at).abs() < 1e-6
+            }),
+            None => true,
+        }
+    }
+
+    /// The font that shapes text: the document without outlines.
+    ///
+    /// It is rebuilt only after an edit that can change layout, so it stays ready while
+    /// points move, and a glyph whose contours do not interpolate does not stop it.
+    pub(crate) fn layout_font(
+        &self,
+    ) -> Result<Option<Arc<runebender::font::compiler::CompiledFont>>, String> {
+        match self.preview_mode {
+            CompileMode::Blocking => self.project.compiled_layout().map(Some),
+            CompileMode::Background => self.project.request_layout(),
+        }
+    }
     pub(crate) fn open(path: &FsPath) -> Result<Self, String> {
         let project = Project::load(path)?;
         Ok(Self::from_project(project))

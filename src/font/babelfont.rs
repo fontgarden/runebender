@@ -578,6 +578,10 @@ pub(super) struct LayerDelta {
     /// The anchors or components changed: the inputs of generated mark features.
     /// Also counted in `geometry` or `metadata`.
     pub(super) mark_inputs: bool,
+    /// Something text layout reads changed: the advance, code points, anchors, components,
+    /// the glyph name or the glyph lib, where a category can be set.
+    /// Contours, notes, guidelines, images and colors are not layout.
+    pub(super) layout: bool,
 }
 
 impl LayerDelta {

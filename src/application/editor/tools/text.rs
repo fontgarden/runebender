@@ -189,13 +189,15 @@ impl GlyphOutlines {
     }
 }
 
-/// The compiled preview font read at one normalized location: every glyph's outline and
-/// advance, which take a pass over the whole binary to extract.
+/// The compiled layout font read at one normalized location: every glyph's advance, which
+/// takes a pass over the whole binary to extract, and the outlines drawn between masters.
 pub(crate) struct CachedTextLocation {
     kerning: Arc<TextKerningModel>,
+    /// The layout font, which has no outlines; see `Project::layout_snapshot`.
     compiled: Arc<runebender::font::compiler::CompiledFont>,
     normalized: Vec<f64>,
-    outlines: GlyphOutlines,
+    /// The complete preview font and its outlines at `normalized`, used between masters.
+    drawn: Option<(Arc<runebender::font::compiler::CompiledFont>, GlyphOutlines)>,
     advances: std::collections::HashMap<String, f64>,
     /// The inventory these advances were applied to, and the result. Applying them walks every
     /// glyph, so it is done once for a compiled font and inventory, not on every rebuild.
@@ -322,7 +324,7 @@ impl TextInputs {
 
     pub(crate) fn for_editor(app: &crate::application::workspace::Workspace) -> Self {
         let inputs = Self::for_glyph(&app.font, app.session.root_glyph());
-        inputs.located(&app.font, &app.axis_values, app.on_active_master())
+        inputs.located(&app.font, &app.axis_values)
     }
 
     /// Read a master and remember the glyph whose editor tab is open.
@@ -337,12 +339,13 @@ impl TextInputs {
     }
 
     /// Preview the live variable font at the sliders' user coordinates.
-    /// Advances, kerning, substitutions and outlines come from the same binary.
+    /// Advances, kerning and substitutions come from the layout font; outlines come from the
+    /// live source at a master and from the complete preview font between masters.
     pub(crate) fn with_location(self, font: &FontModel, values: &[f64]) -> Self {
-        self.located(font, values, false)
+        self.located(font, values)
     }
 
-    fn located(mut self, font: &FontModel, values: &[f64], editing_master: bool) -> Self {
+    fn located(mut self, font: &FontModel, values: &[f64]) -> Self {
         if font.glyphs.is_empty() {
             return self;
         }
@@ -354,76 +357,86 @@ impl TextInputs {
                 axis.user_to_normalized(values.get(index).copied().unwrap_or(axis.default))
             })
             .collect();
-        // An outline nudge invalidates the compiled font. Keep shaping with
-        // the previous binary during the rebuild so neighbors keep their origins.
-        // A rebuild that fails, for example on a glyph whose masters do not match,
-        // keeps that binary too; otherwise the line moves after every nudge.
-        // At a master the outlines themselves always come from the live source.
-        let compiled = match font.preview_font() {
+        let mut cache = font
+            .text_location
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        // Positions come from the layout font, which has no outlines and is rebuilt only after
+        // an edit that can change layout, so moving a point never moves the line.
+        // While such an edit is compiling, or when it leaves the layout unable to compile,
+        // for example with an error in the feature file, the line keeps the last layout
+        // that compiled; the status bar names the error.
+        let compiled = match font.layout_font() {
             Ok(Some(compiled)) => Some(compiled),
-            Ok(None) | Err(_) if editing_master => font
-                .text_location
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
+            Ok(None) | Err(_) => cache
                 .as_ref()
                 .filter(|c| c.kerning == self.kerning)
                 .map(|c| c.compiled.clone()),
-            _ => None,
         };
-        if let Some(compiled) = compiled {
-            self.normalized = compiled
-                .axis_tags
-                .iter()
-                .map(|tag| {
-                    font.axes
-                        .iter()
-                        .position(|axis| axis.tag == *tag)
-                        .map(|index| self.normalized[index])
-                        .unwrap_or(0.0)
-                })
+        let Some(compiled) = compiled else {
+            return self;
+        };
+        self.normalized = compiled
+            .axis_tags
+            .iter()
+            .map(|tag| {
+                font.axes
+                    .iter()
+                    .position(|axis| axis.tag == *tag)
+                    .map(|index| self.normalized[index])
+                    .unwrap_or(0.0)
+            })
+            .collect();
+        let fresh = cache.as_ref().is_some_and(|c| {
+            Arc::ptr_eq(&c.compiled, &compiled)
+                && c.normalized == self.normalized
+                && Arc::ptr_eq(&c.base_inventory, &self.inventory)
+        });
+        if !fresh {
+            let advances: std::collections::HashMap<String, f64> = compiled
+                .advances(&self.normalized)
+                .unwrap_or_default()
+                .into_iter()
                 .collect();
-            let mut cache = font
-                .text_location
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            let fresh = cache.as_ref().is_some_and(|c| {
-                Arc::ptr_eq(&c.compiled, &compiled)
-                    && c.normalized == self.normalized
-                    && Arc::ptr_eq(&c.base_inventory, &self.inventory)
+            let mut inventory = (*self.inventory).clone();
+            for (name, advance) in &advances {
+                inventory.set_advance(name.clone(), *advance);
+            }
+            *cache = Some(CachedTextLocation {
+                kerning: self.kerning.clone(),
+                compiled: compiled.clone(),
+                normalized: self.normalized.clone(),
+                drawn: None,
+                advances,
+                base_inventory: self.inventory.clone(),
+                inventory: Arc::new(inventory),
             });
-            if !fresh {
-                let outlines = GlyphOutlines::compiled(compiled.clone(), self.normalized.clone());
-                let advances: std::collections::HashMap<String, f64> = compiled
-                    .advances(&self.normalized)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .collect();
-                let mut inventory = (*self.inventory).clone();
-                for (name, advance) in &advances {
-                    inventory.set_advance(name.clone(), *advance);
-                }
-                *cache = Some(CachedTextLocation {
-                    kerning: self.kerning.clone(),
-                    compiled: compiled.clone(),
-                    normalized: self.normalized.clone(),
-                    outlines,
-                    advances,
-                    base_inventory: self.inventory.clone(),
-                    inventory: Arc::new(inventory),
-                });
-            }
-            let located = cache.as_ref().expect("the location was just read");
-            if !editing_master {
-                self.outlines = located.outlines.clone();
-            }
-            self.compiled = Some(compiled.bytes.clone());
-            if let Some((active, _, width)) = &mut self.active_glyph
-                && let Some(advance) = located.advances.get(active.as_str())
-            {
-                *width = *advance;
-            }
-            self.inventory = located.inventory.clone();
         }
+        let located = cache.as_mut().expect("the location was just read");
+        // At a master the outlines come from the live source. Between masters they come from
+        // the complete preview font; until it compiles, the master outlines stand in.
+        if !font.at_active_master(values)
+            && let Ok(Some(preview)) = font.preview_font()
+        {
+            let current = located
+                .drawn
+                .as_ref()
+                .is_some_and(|(drawn, _)| Arc::ptr_eq(drawn, &preview));
+            if !current {
+                let outlines = GlyphOutlines::compiled(preview.clone(), located.normalized.clone());
+                located.drawn = Some((preview, outlines));
+            }
+            if let Some((_, outlines)) = &located.drawn {
+                self.outlines = outlines.clone();
+            }
+        }
+        self.compiled = Some(compiled.bytes.clone());
+        if let Some((active, _, width)) = &mut self.active_glyph
+            && let Some(advance) = located.advances.get(active.as_str())
+        {
+            *width = *advance;
+        }
+        self.inventory = located.inventory.clone();
         self
     }
 
@@ -1075,8 +1088,8 @@ mod tests {
         text.refresh(&refreshed);
         assert_eq!(positions(&text), before);
 
-        // A glyph that no longer interpolates makes every rebuild fail.
-        // The line keeps the last compiled positions instead of falling back to unshaped text.
+        // A glyph whose contours no longer interpolate stops the complete preview, but not the
+        // layout font, which has no outlines.
         let bold = app
             .font
             .project
@@ -1092,12 +1105,27 @@ mod tests {
             })
             .unwrap();
         assert!(app.font.project.compiled_preview().is_err());
-        app.apply_op(|s| s.nudge(8.0, 0.0));
+        let layout = app
+            .font
+            .project
+            .compiled_layout()
+            .expect("the layout compiles");
+        // Moving contour points does not rebuild the layout font.
+        // Anchors are not selected: moving one changes mark positions, which is layout.
+        app.apply_op(|s| {
+            let contour: Vec<_> = s
+                .current_layer()
+                .and_then(|layer| layer.contours().next())
+                .map(|contour| contour.points().map(|point| point.id()).collect())
+                .unwrap_or_default();
+            assert!(!contour.is_empty());
+            s.select_points(contour, false);
+            s.nudge(8.0, 0.0)
+        });
+        let after = app.font.project.compiled_layout().unwrap();
+        assert!(Arc::ptr_eq(&layout, &after));
         let refreshed = TextInputs::for_editor(&app);
-        assert!(
-            refreshed.compiled.is_some(),
-            "a failed rebuild must retain compiled positioning"
-        );
+        assert!(refreshed.compiled.is_some());
         text.refresh(&refreshed);
         assert_eq!(positions(&text), before);
     }

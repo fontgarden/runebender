@@ -3569,16 +3569,7 @@ impl Workspace {
 
     /// True when the sliders sit exactly on the active master's location.
     pub(crate) fn on_active_master(&self) -> bool {
-        match self.font.project.master_locations().get(self.font.active()) {
-            Some(m) => self.font.axes.iter().enumerate().all(|(i, a)| {
-                // Axis values are user coordinates; the engine stores normalized locations.
-                let cur =
-                    a.user_to_normalized(self.axis_values.get(i).copied().unwrap_or(a.default));
-                let mst = m.get(&a.name).copied().unwrap_or(0.0);
-                (cur - mst).abs() < 1e-6
-            }),
-            None => true,
-        }
+        self.font.at_active_master(&self.axis_values)
     }
 
     /// The interpolated instance outline at the current axis location, shown as

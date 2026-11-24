@@ -79,12 +79,19 @@ impl LayerEditDraft {
             || !self.layer.components().eq(layer.components())
             || exact_components(&self.preserved.components)
                 != exact_components(&preserved.components);
+        let codepoints = self.preserved.codepoints != preserved.codepoints;
+        let layout = metrics
+            || codepoints
+            || mark_inputs
+            || self.preserved.name != preserved.name
+            || self.preserved.lib != preserved.lib;
         LayerDelta {
             geometry,
             metrics,
             metadata,
-            codepoints: self.preserved.codepoints != preserved.codepoints,
+            codepoints,
             mark_inputs,
+            layout,
         }
     }
 

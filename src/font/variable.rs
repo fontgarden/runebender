@@ -312,6 +312,12 @@ pub(crate) struct VariableData {
     pub(super) font: babelfont::Font,
     pub(super) revision: u64,
     pub(super) compiled: std::sync::Mutex<super::compiler::CompileCache>,
+    /// The compiled layout font: the same document without outlines; see
+    /// [`Self::layout_revision`].
+    pub(super) layout: std::sync::Mutex<super::compiler::CompileCache>,
+    /// The layout revision as of revision `layout_tracked`; see [`Self::layout_revision`].
+    layout_revision: u64,
+    layout_tracked: u64,
     pub(super) glyphs: BTreeMap<String, VariableGlyph>,
     /// Position of each glyph in `font.glyphs`, which is a plain list that finds a name by
     /// scanning. Kept current by [`Self::push_geometry`] and [`Self::reindex_geometry`].
@@ -351,6 +357,22 @@ impl VariableData {
         &mut self,
         changes: impl IntoIterator<Item = (GlyphLayerAddress, super::babelfont::LayerDelta)>,
     ) {
+        let changes: Vec<_> = changes.into_iter().collect();
+        // A commit that changed nothing text layout reads, such as moved or removed contour
+        // points, leaves the layout revision where it was.
+        // It follows on from the previous revision only when that revision was tracked here too;
+        // any other kind of edit in between starts a new layout revision.
+        let outlines_only = changes.iter().all(|(_, delta)| !delta.layout);
+        let previous = self.revision.wrapping_sub(1);
+        let continues = self.layout_tracked == previous;
+        self.layout_revision = if outlines_only && continues {
+            self.layout_revision
+        } else if outlines_only {
+            previous
+        } else {
+            self.revision
+        };
+        self.layout_tracked = self.revision;
         let changes = changes
             .into_iter()
             .map(|(address, delta)| LayerChange {
@@ -365,6 +387,21 @@ impl VariableData {
             self.layer_changes.pop_front();
         }
         self.layer_changes.push_back((self.revision, changes));
+    }
+
+    /// A revision that changes only when an edit can change text layout.
+    ///
+    /// Text layout reads advances, code points, anchors, components, kerning, groups,
+    /// features and the glyph set, but no contour points.
+    /// A layer commit that changed nothing layout reads keeps the value, so the layout font that
+    /// shapes text is not rebuilt after a point moves.
+    /// Every other change, including undo and redo, gives a new value.
+    pub(super) fn layout_revision(&self) -> u64 {
+        if self.layout_tracked == self.revision {
+            self.layout_revision
+        } else {
+            self.revision
+        }
     }
 
     /// Every layer change between `revision` and the current revision.
@@ -448,6 +485,9 @@ impl Clone for VariableData {
             font: self.font.clone(),
             revision: self.revision,
             compiled: std::sync::Mutex::default(),
+            layout: std::sync::Mutex::default(),
+            layout_revision: self.layout_revision,
+            layout_tracked: self.layout_tracked,
             glyphs: self.glyphs.clone(),
             geometry_index: self.geometry_index.clone(),
             layer_changes: self.layer_changes.clone(),
