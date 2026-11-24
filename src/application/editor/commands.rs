@@ -1157,6 +1157,7 @@ impl Workspace {
                 self.preview_text = SAMPLE_STRINGS[self.sample_index].into();
                 self.note = format!("Sample: {}", self.preview_text);
             }
+            A::JoiningContexts => self.show_joining_contexts(),
             A::NextDraft => self.step_draft(true),
             A::PreviousDraft => self.step_draft(false),
             A::GradeRed => self.grade_draft("red"),

@@ -214,7 +214,10 @@ impl Entry {
             A::RemoveImage => editor && app.session.has_image(),
             A::Reinterpolate => app.selected.is_some() && app.font.master_count() > 1,
             A::NextMaster | A::PreviousMaster => app.font.master_count() > 1,
-            A::ShowAllMasters | A::NextSampleString | A::PreviousSampleString => editor,
+            A::ShowAllMasters
+            | A::NextSampleString
+            | A::PreviousSampleString
+            | A::JoiningContexts => editor,
             // The plain keys 1 to 4 and the brackets grade only on the proof page.
             A::NextDraft
             | A::PreviousDraft
@@ -384,6 +387,7 @@ pub(crate) const ACTIONS: &[Entry] = {
         item("View", "Previous Master", None, A::PreviousMaster),
         item("View", "Next Sample String", None, A::NextSampleString),
         item("View", "Previous Sample String", None, A::PreviousSampleString),
+        item("View", "Joining Contexts", None, A::JoiningContexts),
         item("View", "Dots", None, A::GridDots),
         item("View", "Lines", None, A::GridLines),
         item("View", "Colorize Outline", None, A::MeasureColorize),

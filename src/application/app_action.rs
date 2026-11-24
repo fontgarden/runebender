@@ -84,6 +84,8 @@ pub(crate) enum AppAction {
     PreviousMaster,
     NextSampleString,
     PreviousSampleString,
+    /// Show the open glyph in each joining context, in the Proof section and the reading proof.
+    JoiningContexts,
     /// Go to the next glyph with the purple mark, a draft the designer has not graded.
     NextDraft,
     PreviousDraft,

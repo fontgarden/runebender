@@ -377,10 +377,12 @@ Phases 1 to 4 are the new system; phases 5 to 7 build on it.
       Engine done 2026-11-24: `src/font/ligature_anchors.rs` classifies anchor names as fontc does and writes proposed `name_N`, `_N` and `caret_N` anchors as a `ligature-anchors` proposal layer; the display and the editing in the view are not done.
 - [ ] 6.6 Collision overlay for marks and dots in the text line.
       Engine done 2026-11-24: `find_collisions` and `CollisionCache` in `src/analysis/collisions.rs` report overlaps, containments and gaps below the clearance between marks, dots and neighbors; the overlay and its toggle are not done.
-- [ ] 6.7 Test strings for a glyph in all joining contexts and with all mark classes.
+- [x] 6.7 Test strings for a glyph in all joining contexts and with all mark classes.
+      Done 2026-11-24: `src/text/contexts.rs` writes the contexts and the pair matrix; the proof samples of an Arabic glyph end with both, and View > Joining Contexts shows the contexts.
 - [x] 6.8 Quranic sample set in the proof samples.
       Done 2026-11-24: sixteen samples in `assets/data/proof-samples.toml`, each with the `covers` and `carriers` code points that a test checks against its text.
 - [ ] 6.9 Kashida and tatweel preview.
+      Deferred 2026-11-24: not started in package D, by a change of scope.
 - [ ] 6.10 Shaping debugger, after the `harfrust` decision of 0.3.
 
 ### Phase 7: fixtures, documents, upstream

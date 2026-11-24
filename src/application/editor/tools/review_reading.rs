@@ -8,9 +8,17 @@ use crate::application::launch_options::CompileMode;
 use crate::application::platform::reference_fonts::References;
 use crate::application::workspace::Workspace;
 use runebender::font::compiler::{CompiledFont, proof};
-use runebender::text::proof_samples::{self, ProofSample};
+use runebender::text::contexts::{self, ContextMark};
+use runebender::text::proof_samples::{self, ProofSample, SampleScript};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
+
+/// The key of the generated sample with the joining contexts of the open glyph.
+pub(crate) const JOINING_CONTEXTS_KEY: &str = "joining-contexts";
+/// The collapse key and the title of the Proof section of the editor panel.
+pub(crate) const PROOF_SECTION_KEY: &str = "Proof";
+/// The key of the generated sample with the open glyph beside each basic letter.
+pub(crate) const JOINING_PAIRS_KEY: &str = "joining-pairs";
 
 /// The text of the reading proof.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -158,23 +166,107 @@ impl Workspace {
                 .and_then(|candidate| candidate.codepoint)
         })
     }
-    /// The proof samples for the script of the open glyph, in the order of the sample file.
-    pub(crate) fn glyph_proof_samples(&self) -> Vec<&ProofSample> {
-        proof_samples::matching(&self.proof_samples.samples, self.proof_character()).collect()
+    /// The proof samples for the script of the open glyph, in the order of the sample file,
+    /// followed by the joining contexts and pairs generated for an Arabic letter or mark.
+    pub(crate) fn glyph_proof_samples(&self) -> Vec<ProofSample> {
+        let character = self.proof_character();
+        let mut samples: Vec<ProofSample> =
+            proof_samples::matching(&self.proof_samples.samples, character)
+                .cloned()
+                .collect();
+        if let Some(character) = character {
+            let generated = [
+                (
+                    JOINING_CONTEXTS_KEY,
+                    "Joining contexts",
+                    contexts::context_text(
+                        character,
+                        contexts::DEFAULT_PARTNER,
+                        &self.context_marks(),
+                    ),
+                ),
+                (
+                    JOINING_PAIRS_KEY,
+                    "Joining pairs",
+                    contexts::pair_matrix(character, contexts::PAIR_LETTERS),
+                ),
+            ];
+            samples.extend(
+                generated
+                    .into_iter()
+                    .filter(|(_, _, text)| !text.is_empty())
+                    .map(|(key, label, text)| ProofSample {
+                        key: key.into(),
+                        label: label.into(),
+                        scripts: vec![SampleScript::Arabic],
+                        text,
+                        lang: None,
+                        covers: Vec::new(),
+                        carriers: Vec::new(),
+                    }),
+            );
+        }
+        samples
+    }
+    /// The encoded Arabic marks of the font with the class of each mark anchor, such as `top`
+    /// for `_top`, in the default layer of the active source.
+    pub(crate) fn context_marks(&self) -> Vec<ContextMark> {
+        let Some(layer) = self
+            .font
+            .project
+            .source_id(self.font.active())
+            .and_then(|source| self.font.project.document_source(source))
+            .map(|source| source.default_layer())
+        else {
+            return Vec::new();
+        };
+        let mut marks = Vec::new();
+        for entry in &self.font.glyphs {
+            let Some(character) = entry.codepoint.filter(|c| contexts::is_arabic_mark(*c)) else {
+                continue;
+            };
+            let Some(glyph) = self.font.project.document_layer(&entry.name, &layer) else {
+                continue;
+            };
+            marks.extend(glyph.anchors().filter_map(|anchor| {
+                let class = anchor.name().strip_prefix('_')?;
+                Some(ContextMark::new(character, class))
+            }));
+        }
+        marks
     }
     /// The sample with `key` when it is for the open glyph, else the first sample for it.
-    pub(crate) fn glyph_proof_sample(&self, key: Option<&str>) -> Option<&ProofSample> {
-        let samples = self.glyph_proof_samples();
-        key.and_then(|key| samples.iter().find(|sample| sample.key == key))
-            .or_else(|| samples.first())
-            .copied()
+    pub(crate) fn glyph_proof_sample(&self, key: Option<&str>) -> Option<ProofSample> {
+        let mut samples = self.glyph_proof_samples();
+        let index = key
+            .and_then(|key| samples.iter().position(|sample| sample.key == key))
+            .unwrap_or(0);
+        (index < samples.len()).then(|| samples.swap_remove(index))
+    }
+    /// Show the joining contexts of the open glyph in the Proof section and the reading proof.
+    pub(crate) fn show_joining_contexts(&mut self) {
+        let shown = self
+            .glyph_proof_samples()
+            .iter()
+            .any(|sample| sample.key == JOINING_CONTEXTS_KEY);
+        if !shown {
+            self.note = format!(
+                "Joining contexts: {} is not an Arabic letter or mark",
+                self.session.glyph_name
+            );
+            return;
+        }
+        self.panel_sample = Some(JOINING_CONTEXTS_KEY.into());
+        self.collapsed.remove(PROOF_SECTION_KEY);
+        self.select_review_sample(Sample::Named(JOINING_CONTEXTS_KEY.into()));
+        self.note = format!("Joining contexts of {}", self.session.glyph_name);
     }
     /// The text of a proof sample for the open glyph.
     pub(crate) fn proof_sample_text(&self, sample: &ProofSample) -> String {
         sample.text_for(self.proof_character()).unwrap_or_default()
     }
     /// The proof sample of the reading proof, when it shows one.
-    pub(crate) fn review_proof_sample(&self) -> Option<&ProofSample> {
+    pub(crate) fn review_proof_sample(&self) -> Option<ProofSample> {
         match &self.review.reading.sample {
             Sample::First => self.glyph_proof_sample(None),
             Sample::Named(key) => self.glyph_proof_sample(Some(key)),
@@ -186,7 +278,7 @@ impl Workspace {
             Sample::Glyph => self.proof_character().map(String::from).unwrap_or_default(),
             Sample::First | Sample::Named(_) => self
                 .review_proof_sample()
-                .map(|sample| self.proof_sample_text(sample))
+                .map(|sample| self.proof_sample_text(&sample))
                 .unwrap_or_default(),
             Sample::Alphabet => self
                 .font
@@ -390,13 +482,69 @@ mod tests {
         // A Hebrew sample is not for a Latin glyph: the first Latin sample shows instead.
         app.select_review_sample(Sample::Named("hebrew-words".into()));
         assert_eq!(
-            app.review_proof_sample().map(|s| s.key.as_str()),
+            app.review_proof_sample().map(|s| s.key).as_deref(),
             Some("latin-glyph-spacing")
         );
         app.select_review_sample(Sample::Named("latin-words".into()));
         assert_eq!(app.review_sample_text(), "Hamburgefontsiv");
         app.select_review_sample(Sample::Glyph);
         assert_eq!(app.review_sample_text(), "A");
+    }
+
+    fn arabic_workspace(glyph: &str) -> Workspace {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/arabic/Arabic-Regular.ufo");
+        let project = runebender::font::project::Project::load(&path).expect("the fixture loads");
+        let model = crate::application::font_model::FontModel::from_project(project);
+        let mut app = Workspace::from_model(model).expect("the fixture opens");
+        let index = app.font.index_of(glyph).expect("the fixture has the glyph");
+        app.open_glyph(index);
+        app
+    }
+
+    #[test]
+    fn an_arabic_glyph_gets_joining_contexts_with_the_mark_classes_of_the_font() {
+        let mut app = arabic_workspace("beh-ar.medi");
+        let marks = app.context_marks();
+        assert!(marks.contains(&ContextMark::new('\u{064E}', "top")));
+        assert!(marks.contains(&ContextMark::new('\u{0650}', "bottom")));
+        let samples = app.glyph_proof_samples();
+        let contexts = samples
+            .iter()
+            .find(|sample| sample.key == JOINING_CONTEXTS_KEY)
+            .expect("an Arabic letter has joining contexts");
+        let groups: Vec<&str> = contexts.text.split("  ").collect();
+        assert_eq!(groups[0], "ب بب ببب بب");
+        assert_eq!(
+            groups[1],
+            "\u{0628}\u{064E} \u{0628}\u{064E}\u{0628} \u{0628}\u{0628}\u{064E}\u{0628} \u{0628}\u{0628}\u{064E}"
+        );
+        assert_eq!(
+            groups[2],
+            "\u{0628}\u{0650} \u{0628}\u{0650}\u{0628} \u{0628}\u{0628}\u{0650}\u{0628} \u{0628}\u{0628}\u{0650}"
+        );
+        assert!(contexts.text.contains("\u{0628}\u{0651}\u{064E}"));
+        assert!(contexts.text.contains("\u{0628}\u{0651}\u{0650}"));
+        assert!(samples.iter().any(|sample| sample.key == JOINING_PAIRS_KEY));
+
+        app.show_joining_contexts();
+        assert_eq!(app.panel_sample.as_deref(), Some(JOINING_CONTEXTS_KEY));
+        assert_eq!(app.review_sample_text(), contexts.text);
+    }
+
+    #[test]
+    fn a_latin_glyph_gets_no_joining_contexts() {
+        let mut app = Workspace::untitled().expect("blank font");
+        let index = app.font.index_of("A").expect("blank font has A");
+        app.open_glyph(index);
+        assert!(
+            app.glyph_proof_samples()
+                .iter()
+                .all(|sample| !sample.key.starts_with("joining-"))
+        );
+        app.show_joining_contexts();
+        assert_eq!(app.panel_sample, None);
+        assert!(app.note.contains("not an Arabic letter"), "{}", app.note);
     }
 
     #[test]

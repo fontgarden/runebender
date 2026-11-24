@@ -13,7 +13,7 @@ use crate::application::workspace::Workspace;
 use xilem::WidgetView;
 
 /// The collapse key and the title of the section.
-pub(crate) const KEY: &str = "Proof";
+pub(crate) const KEY: &str = crate::application::editor::tools::review_reading::PROOF_SECTION_KEY;
 
 pub(crate) fn section(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     let samples = app.glyph_proof_samples();
@@ -21,7 +21,7 @@ pub(crate) fn section(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     let mut rows = Vec::new();
     // A folded section shows nothing, so it does not shape the sample or read the font for it.
     let open = !app.collapsed.contains(KEY);
-    if let Some(sample) = shown.filter(|_| open) {
+    if let Some(sample) = shown.as_ref().filter(|_| open) {
         let text = app.proof_sample_text(sample);
         match specimen::live_block(app, &text, app.panel_proof_size) {
             Some((block, ascender, descender)) => rows.push(Row::Specimen {
@@ -44,7 +44,9 @@ pub(crate) fn section(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
             key: "Proof sample list",
             caption: "Sample".into(),
             choices: samples.iter().map(|sample| sample.label.clone()).collect(),
-            chosen: shown.and_then(|shown| keys.iter().position(|key| *key == shown.key)),
+            chosen: shown
+                .as_ref()
+                .and_then(|shown| keys.iter().position(|key| *key == shown.key)),
             on_pick: Arc::new(move |app: &mut Workspace, index| {
                 if let Some(key) = keys.get(index) {
                     app.panel_sample = Some(key.clone());

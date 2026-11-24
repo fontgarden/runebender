@@ -484,6 +484,7 @@ pub(crate) fn command_allowed(action: crate::application::app_action::AppAction)
             | A::PreviousMaster
             | A::NextSampleString
             | A::PreviousSampleString
+            | A::JoiningContexts
             | A::NextDraft
             | A::PreviousDraft
             | A::GradeRed

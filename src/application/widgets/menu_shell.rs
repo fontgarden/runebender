@@ -1345,7 +1345,7 @@ mod tests {
 
         harness.process_text_event(key(Key::Named(NamedKey::F10)));
         harness.process_text_event(key(Key::Named(NamedKey::ArrowLeft)));
-        for _ in 0..10 {
+        for _ in 0..11 {
             harness.process_text_event(key(Key::Named(NamedKey::ArrowDown)));
         }
         harness.process_text_event(key(Key::Named(NamedKey::ArrowRight)));
@@ -1426,7 +1426,7 @@ mod tests {
         harness.mouse_button_press(Some(PointerButton::Primary));
         harness.mouse_button_release(Some(PointerButton::Primary));
 
-        let theme_row = 10.0;
+        let theme_row = 11.0;
         harness.mouse_move(Point::new(
             title_rect(view).x0 + 40.0,
             BAR_HEIGHT + POPUP_PAD + (theme_row + 0.5) * ROW_HEIGHT,

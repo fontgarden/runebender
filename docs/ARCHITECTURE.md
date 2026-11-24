@@ -194,7 +194,7 @@ Each directory under `src` has one row.
 | `src/outline/metaballs` | The fit of metaball boundaries to cubic contours. |
 | `src/outline/path` | The bezier and hyperbezier path types, their points and their segments. |
 | `src/testing` | Fixture font paths for the unit tests of the library: `tests/fixtures/core` and `tests/fixtures/arabic`. |
-| `src/text` | Shaping, feature code, layout tables and their variable feature values, joining rules and proof samples. |
+| `src/text` | Shaping, feature code, layout tables and their variable feature values, joining rules, proof samples and joining context strings. |
 | `src/text/buffer` | The text buffer: bidirectional runs, kerning, layout and shaping. |
 | `src/ui` | One file for each type of interface data. |
 | `src/ui/editing` | The viewport. |
@@ -228,4 +228,5 @@ The other files in the row are the next ones that the change touches.
 | Arabic feature generators | `src/text/arabic_features.rs` | `assets/data/arabic-skeletons.toml` for the skeletons and marks of the letters, `generate_joining_features` in `src/application/editor/inspector.rs` for the feature draft of the panel, and `src/application/cli/font_commands/features.rs` for `runebender features --joining`. |
 | Mark and dot collisions | `find_collisions` in `src/analysis/collisions.rs` | `CollisionCache` there for a line that changes during a drag, and `benches/collisions.rs` for the cost of one line. |
 | Ligature anchors | `propose_ligature_anchors` in `src/font/ligature_anchors.rs` | `classify_anchor` there for the rule of anchor names, `ligature_input_names` in `src/text/arabic_features.rs` for the components, and `write_anchor_proposal_project` in `src/font/proposal.rs` for the proposal layer. |
+| Proof samples and joining contexts | `src/text/proof_samples.rs` and `assets/data/proof-samples.toml` | `src/text/contexts.rs` for the joining context strings, `src/text/joining_data.rs` for their joining table, and `glyph_proof_samples` in `src/application/editor/tools/review_reading.rs` for the samples of the open glyph. |
 | Headless capture | `src/application/platform/screenshot.rs` | `src/application/launch_options.rs`, which reads the `RUNEBENDER_*` variables, and the list of variables in `docs/UI-DESIGN.md`. |

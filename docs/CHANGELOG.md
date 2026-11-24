@@ -25,6 +25,9 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
 - Quranic and Arabic proof samples: the basmala, the pause marks, end of ayah with Arabic-Indic and Extended Arabic-Indic digits, ornate parentheses, rub el hizb and sajdah, the small high and low letters, alef wasla, hamza and madda in precomposed and decomposed spellings, tanween and open tanween with iqlab, stacked marks in both input orders, the Allah and lam-alef ligatures, the marks of U+08D3 to U+08FF, and tatweel with marks.
   Samples for Persian, Urdu and Kurdish letters follow them.
   The optional `covers` and `carriers` keys of a sample list the code points that it tests and the other code points that it uses.
+- Joining contexts: for an Arabic letter or mark, the proof samples end with "Joining contexts", which shows the letter isolated, initial, medial and final, then with one mark of each anchor class of the font and with shadda stacks, and "Joining pairs", which joins it to each basic letter.
+  A right-joining letter shows only its isolated and final forms.
+  View > Joining Contexts shows the contexts in the Proof section and the reading proof.
 
 ### Changed
 
