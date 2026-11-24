@@ -152,6 +152,52 @@ Save now skips masters without edits, writes an unchanged glyph file once, and s
 Open also reads the masters of a designspace in parallel.
 Reading the glyph files of one master on several threads was measured twice and was slower on this machine, so each master is still read on one thread.
 
+## Layout tables
+
+Run the benchmark of the live layout tables of the text line:
+
+```sh
+cargo bench --locked --no-default-features --bench layout_tables
+```
+
+It measures the repository fixtures `tests/fixtures/arabic` and `tests/fixtures/core`.
+Set `RUNEBENDER_TEST_FONTS` to the Virtua Grotesk `sources` folder to measure Virtua Grotesk too.
+Set `RUNEBENDER_AMIRI_DESIGNSPACE` to a designspace of Amiri to measure Amiri too.
+An external font that does not load is reported and skipped.
+The tables are built for one location without axes, so a feature file with variable values does not compile; such a font is measured without its feature file, and the output says so.
+
+The inputs come from the first source of each font.
+Each row has three discarded warmups and fifteen measured samples, and prints the minimum, the median and the nearest-rank 90th percentile.
+
+| Row | Timed work |
+| --- | --- |
+| `LayoutInputs::from_project` | Read the advances, anchors, categories, kerning, groups and feature text of the source. |
+| `cold build` | `LayoutTables::build` on a new builder: the first pass over the feature file, both feature writers, the compile and the shaping font. |
+| `warm, one anchor change` | A rebuild after the first anchor of one glyph moves; the mark writer runs again. |
+| `warm, one kerning change` | A rebuild after the first kerning value changes; the kerning writer runs again. |
+| `warm, no change` | A rebuild with the same inputs; no writer runs, and the feature file is compiled again with the cached lookups. |
+| `shape one line` | Shape one line of the script of the font with the built tables. |
+
+Each change row changes the value by a different amount in each sample, so no build finds its value in the cache.
+Copying the inputs for a change is outside the timer.
+One edit of one line in the editor costs about the sum of `LayoutInputs::from_project`, one warm change row and `shape one line`.
+Item 5.3 of [the Arabic text layout plan](ARABIC-TEXT-LAYOUT-PLAN.md) sets the budgets for that sum: 4 ms at 6,000 glyphs and 1 ms at 1,000 glyphs.
+
+Measured on 2026-11-23 at `4d1eb56` with Rust 1.96.1, macOS arm64, Apple M4 Pro and 48 GiB RAM, medians in milliseconds.
+Builds of other worktrees ran on the same host, so the figures are upper values.
+
+| Row | Arabic fixture, 52 glyphs | Core fixture, 28 glyphs |
+| --- | ---: | ---: |
+| `LayoutInputs::from_project` | 0.015 | 0.006 |
+| `cold build` | 0.496 | 0.101 |
+| `warm, one anchor change` | 0.396 | 0.069 |
+| `warm, one kerning change` | 0.301 | 0.075 |
+| `warm, no change` | 0.195 | 0.039 |
+| `shape one line` | 0.009 | 0.003 |
+
+In the same run, a local Virtua Grotesk checkout with 914 glyphs, measured without its feature file, gave 0.49 ms to read the inputs, 6.9 ms for an anchor change, 3.6 ms for a kerning change and 2.8 ms with no change.
+That is above the 1 ms budget of item 5.3, so items 5.1 and 5.2 are still necessary.
+
 ## Editor responsiveness
 
 Run the optimized native point-drag probe without opening a window:

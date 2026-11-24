@@ -287,7 +287,8 @@ Phases 1 to 4 are the new system; phases 5 to 7 build on it.
       Result: upgrade to 0.13.3 before phase 3; it needs one changed line and adds no `read-fonts` copy.
       Move to 0.15 or later, which has the message callback for the debugger, together with a later move to fontc 2.
       `parley` keeps its own `harfrust` 0.5.2 until it is updated.
-- [ ] 0.4 Put the timing probe into `benches/` so every later phase can be measured.
+- [x] 0.4 Put the timing probe into `benches/` so every later phase can be measured.
+      Done in `benches/layout_tables.rs`; [the benchmark guide](BENCHMARKS.md#layout-tables) gives the rows and the current numbers.
 
 ### Phase 1: layout tables from live values
 
@@ -359,6 +360,7 @@ Phases 1 to 4 are the new system; phases 5 to 7 build on it.
 - [ ] 5.1 Cache the parsed feature code; rebuild only generated lookups after a value edit.
 - [ ] 5.2 Limit generated lookups to the glyphs that the text can produce through GSUB.
 - [ ] 5.3 Budgets, measured in `benches/`: 4 ms for one edit of one line at 6,000 glyphs; 1 ms at 1,000 glyphs.
+      Measured by `benches/layout_tables.rs`; on 2026-11-23 an anchor edit costs 0.4 ms on the Arabic fixture and 6.9 ms on Virtua Grotesk without its feature file, so the 1,000-glyph budget is not met yet.
 - [ ] 5.4 Frame-budget test for an anchor drag in an Arabic line.
 
 ### Phase 6: Arabic design features
