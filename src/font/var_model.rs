@@ -94,6 +94,38 @@ impl VariationModel {
         }
         Ok(result)
     }
+
+    /// The weight of each source at `location`, in source order.
+    ///
+    /// The model is linear, so the value at `location` of any list of source values is the sum
+    /// of each value times its weight, as [`Self::interpolate`] gives it.
+    /// The weights let a caller interpolate many independent values, such as the anchors of
+    /// one glyph, with one model.
+    pub fn weights(&self, location: &Location) -> Result<Vec<f64>, String> {
+        let count = self.locations.len();
+        let identity: Vec<Vec<f64>> = (0..count)
+            .map(|row| (0..count).map(|column| f64::from(row == column)).collect())
+            .collect();
+        self.interpolate(&identity, location)
+    }
+}
+
+/// Whether two normalized locations are the same, with omitted axes at zero.
+pub fn locations_match(a: &Location, b: &Location) -> bool {
+    a.keys().chain(b.keys()).all(|axis| {
+        (a.get(axis).copied().unwrap_or(0.0) - b.get(axis).copied().unwrap_or(0.0)).abs() < 1e-9
+    })
+}
+
+/// The squared Euclidean distance between two normalized locations, with omitted axes at zero.
+pub fn squared_distance(a: &Location, b: &Location) -> f64 {
+    let axes: BTreeSet<&String> = a.keys().chain(b.keys()).collect();
+    axes.into_iter()
+        .map(|axis| {
+            let delta = a.get(axis).copied().unwrap_or(0.0) - b.get(axis).copied().unwrap_or(0.0);
+            delta * delta
+        })
+        .sum()
 }
 
 fn convert_location(
@@ -233,6 +265,27 @@ mod tests {
             .interpolate(&values, &loc(&[("wght", 0.5), ("wdth", 0.5)]))
             .unwrap();
         assert!((mid[0] - 55.0).abs() < 1e-9, "got {mid:?}");
+    }
+
+    #[test]
+    fn weights_give_the_interpolated_values() {
+        let model = VariationModel::new(&[
+            loc(&[("wght", 0.0)]),
+            loc(&[("wght", 1.0)]),
+            loc(&[("wght", 0.5)]),
+        ])
+        .unwrap();
+        let values = vec![vec![0.0], vec![100.0], vec![80.0]];
+        let at = loc(&[("wght", 0.3)]);
+        let weights = model.weights(&at).unwrap();
+        let weighted: f64 = weights
+            .iter()
+            .zip(&values)
+            .map(|(weight, value)| weight * value[0])
+            .sum();
+        let interpolated = model.interpolate(&values, &at).unwrap()[0];
+        assert!((weighted - interpolated).abs() < 1e-9);
+        assert!((weights.iter().sum::<f64>() - 1.0).abs() < 1e-9);
     }
 
     #[test]

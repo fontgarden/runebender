@@ -121,6 +121,83 @@ pub fn round_units(value: f64) -> i64 {
     }
 }
 
+/// Blend drawn outlines with one weight each, point by point.
+///
+/// `None` when the outlines do not have the same sequence of path elements, which is the case
+/// when their contours do not interpolate.
+/// With translations as the only varying part of component transforms, this equals the drawing
+/// of the interpolated layer, because a drawn point is a linear function of the source values.
+/// A hyperbezier contour is blended after its spline solver ran in each source, which is close
+/// to, but not the same as, solving the interpolated points.
+pub fn blend_paths(paths: &[&BezPath], weights: &[f64]) -> Option<BezPath> {
+    use kurbo::PathEl;
+    let first = paths.first()?;
+    if paths.len() != weights.len()
+        || paths
+            .iter()
+            .any(|path| path.elements().len() != first.elements().len())
+    {
+        return None;
+    }
+    let blend = |index: usize, point: usize| -> Point {
+        let mut sum = kurbo::Vec2::ZERO;
+        for (path, weight) in paths.iter().zip(weights) {
+            let at = match path.elements()[index] {
+                PathEl::MoveTo(a) | PathEl::LineTo(a) => [a, a, a],
+                PathEl::QuadTo(a, b) => [a, b, b],
+                PathEl::CurveTo(a, b, c) => [a, b, c],
+                PathEl::ClosePath => [Point::ZERO; 3],
+            };
+            sum += at[point].to_vec2() * *weight;
+        }
+        sum.to_point()
+    };
+    let mut out = BezPath::new();
+    for (index, element) in first.elements().iter().enumerate() {
+        let kind = std::mem::discriminant(element);
+        if paths
+            .iter()
+            .any(|path| std::mem::discriminant(&path.elements()[index]) != kind)
+        {
+            return None;
+        }
+        out.push(match element {
+            PathEl::MoveTo(_) => PathEl::MoveTo(blend(index, 0)),
+            PathEl::LineTo(_) => PathEl::LineTo(blend(index, 0)),
+            PathEl::QuadTo(..) => PathEl::QuadTo(blend(index, 0), blend(index, 1)),
+            PathEl::CurveTo(..) => {
+                PathEl::CurveTo(blend(index, 0), blend(index, 1), blend(index, 2))
+            }
+            PathEl::ClosePath => PathEl::ClosePath,
+        });
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+#[test]
+fn blended_paths_are_weighted_point_by_point() {
+    let mut a = BezPath::new();
+    a.move_to((0.0, 0.0));
+    a.curve_to((10.0, 0.0), (20.0, 10.0), (20.0, 20.0));
+    a.close_path();
+    let mut b = BezPath::new();
+    b.move_to((100.0, 0.0));
+    b.curve_to((110.0, 0.0), (120.0, 30.0), (120.0, 40.0));
+    b.close_path();
+    let mid = blend_paths(&[&a, &b], &[0.5, 0.5]).unwrap();
+    let mut expected = BezPath::new();
+    expected.move_to((50.0, 0.0));
+    expected.curve_to((60.0, 0.0), (70.0, 20.0), (70.0, 30.0));
+    expected.close_path();
+    assert_eq!(mid, expected);
+    let mut other = BezPath::new();
+    other.move_to((0.0, 0.0));
+    other.line_to((1.0, 1.0));
+    other.close_path();
+    assert!(blend_paths(&[&a, &other], &[0.5, 0.5]).is_none());
+}
+
 /// The integer key a point is found by when a rebuilt contour looks
 /// up the flags of the point it came from.
 pub fn point_key(x: f64, y: f64) -> (i64, i64) {

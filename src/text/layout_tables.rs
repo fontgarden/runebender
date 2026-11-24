@@ -23,7 +23,12 @@
 //! An anchor edit therefore runs the mark writer again and not the kerning writer, and a
 //! kerning edit the reverse.
 //!
-//! This is the prototype of item 0.1 in `docs/ARABIC-TEXT-LAYOUT-PLAN.md`.
+//! [`LayoutInputs::from_project`] reads the values of one master, and
+//! [`LayoutInputs::at_location`] interpolates them at any designspace location, each glyph and
+//! each anchor alone, with the variation model of the outlines.
+//! A value that cannot be interpolated comes from the nearest master and is reported as a
+//! [`LayoutDiagnostic`]; only feature code that does not compile stops a build.
+//! See items 0.1 and 2.1 to 2.4 in `docs/ARABIC-TEXT-LAYOUT-PLAN.md`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -49,8 +54,11 @@ use fontir::{
 };
 use write_fonts::tables::{gdef::GlyphClassDef, layout::ClassDef};
 
+use crate::font::LayerView;
+use crate::font::model::designspace::CanonicalDesignspace;
 use crate::font::project::Project;
-use crate::font::variable::SourceId;
+use crate::font::var_model::{Location, VariationModel, locations_match, squared_distance};
+use crate::font::variable::{GlyphSource, LayerId, SourceId};
 use crate::text::shape::{ShapingFont, ShapingGlyph};
 
 /// The GDEF glyph class of a glyph.
@@ -202,6 +210,186 @@ impl LayoutInputs {
         })
     }
 
+    /// Read the layout values of `project` at a normalized designspace location.
+    ///
+    /// The glyph set, code points, categories, kerning groups and feature text are those of
+    /// `source`, as [`Self::from_project`] reads them; the caller passes the active source.
+    /// Advances, anchors and kerning values are interpolated with the variation model of the
+    /// outlines, each glyph alone and each anchor by name alone, so one unfinished glyph
+    /// cannot change another.
+    /// A value that cannot be interpolated, because a master lacks the anchor, has it twice,
+    /// or the glyph has no layer at the default location, takes the value of the master of
+    /// that glyph nearest to `location`, and a [`LayoutDiagnostic`] names it.
+    /// Contour compatibility is not read, so a glyph whose contours do not interpolate keeps
+    /// interpolated layout values.
+    /// A glyph with a layer exactly at `location` takes the values of that layer, so at the
+    /// location of `source` the result equals [`Self::from_project`].
+    /// Kerning values are rounded at each master and after interpolation, as the compiled
+    /// font rounds them.
+    pub fn at_location(
+        project: &Project,
+        location: &Location,
+        source: SourceId,
+    ) -> Result<(Self, Vec<LayoutDiagnostic>), String> {
+        let mut inputs = Self::from_project(project, source)?;
+        let mut diagnostics = Vec::new();
+        let Some(designspace) = project.document_designspace() else {
+            return Ok((inputs, diagnostics));
+        };
+        let mut labels: HashMap<LayerId, String> = HashMap::new();
+        for descriptor in designspace.sources() {
+            labels.insert(
+                descriptor.default_layer.clone(),
+                descriptor.display_name().to_owned(),
+            );
+        }
+        for sparse in designspace.sparse_sources() {
+            labels.insert(sparse.layer.clone(), sparse.layer.name.clone());
+        }
+        let label = |layer: &LayerId| {
+            labels
+                .get(layer)
+                .cloned()
+                .unwrap_or_else(|| layer.name.clone())
+        };
+
+        let mut weights = WeightCache::new(location);
+        for glyph in &mut inputs.glyphs {
+            let Ok(sources) = project.glyph_sources(&glyph.name) else {
+                // `.notdef` without a layer keeps the value `from_project` made for it.
+                continue;
+            };
+            let layers: Vec<(&GlyphSource, LayerView<'_>)> = sources
+                .iter()
+                .filter_map(|glyph_source| {
+                    Some((
+                        glyph_source,
+                        project.document_layer(&glyph.name, &glyph_source.layer)?,
+                    ))
+                })
+                .collect();
+            if layers.is_empty() {
+                continue;
+            }
+            let anchors_of = |layer: LayerView<'_>, at: &LayerId| {
+                crate::font::composites::effective_document_anchors(layer, |name| {
+                    project.document_layer(name, at)
+                })
+            };
+            if let Some((exact, layer)) = layers
+                .iter()
+                .find(|(glyph_source, _)| locations_match(&glyph_source.location, location))
+            {
+                glyph.advance = layer.width();
+                glyph.anchors = anchors_of(*layer, &exact.layer)
+                    .into_iter()
+                    .map(|(name, at)| (name, at.x, at.y))
+                    .collect();
+                continue;
+            }
+            let nearest = nearest_index(&layers, location, source);
+            let nearest_label = label(&layers[nearest].0.layer);
+            let glyph_weights = weights.get(layers.iter().map(|(glyph_source, _)| *glyph_source));
+            let glyph_weights = match glyph_weights {
+                Ok(found) => Some(found),
+                Err(error) => {
+                    diagnostics.push(LayoutDiagnostic {
+                        glyph: glyph.name.clone(),
+                        anchor: None,
+                        reason: format!("{error}; the values of {nearest_label} are used"),
+                    });
+                    None
+                }
+            };
+            let weighted = |values: &[f64]| -> f64 {
+                glyph_weights
+                    .as_ref()
+                    .expect("weights are checked first")
+                    .iter()
+                    .zip(values)
+                    .map(|(weight, value)| weight * value)
+                    .sum()
+            };
+
+            let widths: Vec<f64> = layers.iter().map(|(_, layer)| layer.width()).collect();
+            glyph.advance = match glyph_weights {
+                Some(_) => weighted(&widths),
+                None => widths[nearest],
+            };
+
+            let per_layer: Vec<Vec<(String, kurbo::Point)>> = layers
+                .iter()
+                .map(|(glyph_source, layer)| anchors_of(*layer, &glyph_source.layer))
+                .collect();
+            let mut names: Vec<&str> = Vec::new();
+            for anchors in std::iter::once(&per_layer[nearest]).chain(&per_layer) {
+                for (name, _) in anchors {
+                    if !names.contains(&name.as_str()) {
+                        names.push(name);
+                    }
+                }
+            }
+            let mut anchors = Vec::with_capacity(names.len());
+            for name in names {
+                let found: Vec<Vec<kurbo::Point>> = per_layer
+                    .iter()
+                    .map(|anchors| {
+                        anchors
+                            .iter()
+                            .filter(|(candidate, _)| candidate == name)
+                            .map(|(_, at)| *at)
+                            .collect()
+                    })
+                    .collect();
+                if glyph_weights.is_some() && found.iter().all(|points| points.len() == 1) {
+                    let xs: Vec<f64> = found.iter().map(|points| points[0].x).collect();
+                    let ys: Vec<f64> = found.iter().map(|points| points[0].y).collect();
+                    anchors.push((name.to_owned(), weighted(&xs), weighted(&ys)));
+                    continue;
+                }
+                if glyph_weights.is_some() {
+                    let problem = found
+                        .iter()
+                        .zip(&layers)
+                        .find(|(points, _)| points.len() != 1)
+                        .map(|(points, (glyph_source, _))| {
+                            let master = label(&glyph_source.layer);
+                            if points.is_empty() {
+                                format!("missing in {master}")
+                            } else {
+                                format!("more than once in {master}")
+                            }
+                        })
+                        .unwrap_or_default();
+                    let used = if found[nearest].is_empty() {
+                        format!("{nearest_label} has none, so the glyph has none here")
+                    } else {
+                        format!("the value of {nearest_label} is used")
+                    };
+                    diagnostics.push(LayoutDiagnostic {
+                        glyph: glyph.name.clone(),
+                        anchor: Some(name.to_owned()),
+                        reason: format!("the anchor is {problem}; {used}"),
+                    });
+                }
+                for at in &found[nearest] {
+                    anchors.push((name.to_owned(), at.x, at.y));
+                }
+            }
+            glyph.anchors = anchors;
+        }
+
+        match kerning_at(project, designspace, location, source, &inputs) {
+            Ok(kerning) => inputs.kerning = kerning,
+            Err(error) => diagnostics.push(LayoutDiagnostic {
+                glyph: String::new(),
+                anchor: None,
+                reason: format!("kerning: {error}; the kerning of the active source is used"),
+            }),
+        }
+        Ok((inputs, diagnostics))
+    }
+
     /// Keep only the glyphs for which `keep` is true, with the kerning and group members that
     /// refer to them.
     ///
@@ -222,6 +410,215 @@ impl LayoutInputs {
                 .all(|side| names.contains(*side) || groups.contains_key(*side))
         });
     }
+}
+
+/// A layout value between masters that came from one master instead of the interpolation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayoutDiagnostic {
+    /// The glyph, or an empty string for a value of the whole font such as kerning.
+    pub glyph: String,
+    /// The anchor, when only one anchor of the glyph is affected.
+    pub anchor: Option<String>,
+    /// Why the value could not be interpolated, and which master supplied it.
+    pub reason: String,
+}
+
+impl std::fmt::Display for LayoutDiagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.anchor {
+            Some(anchor) => write!(f, "{} anchor {}: {}", self.glyph, anchor, self.reason),
+            None if self.glyph.is_empty() => write!(f, "{}", self.reason),
+            None => write!(f, "{}: {}", self.glyph, self.reason),
+        }
+    }
+}
+
+/// The layer nearest to `location`; on a tie, a layer of `preferred`, then the first.
+fn nearest_index(
+    layers: &[(&GlyphSource, LayerView<'_>)],
+    location: &Location,
+    preferred: SourceId,
+) -> usize {
+    let mut best = 0;
+    let mut best_key = (f64::INFINITY, true);
+    for (index, (glyph_source, _)) in layers.iter().enumerate() {
+        let key = (
+            squared_distance(&glyph_source.location, location),
+            glyph_source.layer.source != preferred,
+        );
+        let closer = key.0 < best_key.0 - 1e-12;
+        let tie_won = (key.0 - best_key.0).abs() <= 1e-12 && !key.1 && best_key.1;
+        if closer || tie_won {
+            best = index;
+            best_key = key;
+        }
+    }
+    best
+}
+
+/// The weights of each set of glyph layers at one location, computed once per set.
+struct WeightCache<'a> {
+    target: &'a Location,
+    found: HashMap<Vec<LayerId>, Result<Vec<f64>, String>>,
+}
+
+impl<'a> WeightCache<'a> {
+    fn new(target: &'a Location) -> Self {
+        Self {
+            target,
+            found: HashMap::new(),
+        }
+    }
+
+    fn get<'s>(
+        &mut self,
+        sources: impl Iterator<Item = &'s GlyphSource>,
+    ) -> Result<Vec<f64>, String> {
+        let sources: Vec<&GlyphSource> = sources.collect();
+        let key: Vec<LayerId> = sources.iter().map(|source| source.layer.clone()).collect();
+        let target = self.target;
+        self.found
+            .entry(key)
+            .or_insert_with(|| {
+                let locations: Vec<Location> = sources
+                    .iter()
+                    .map(|source| source.location.clone())
+                    .collect();
+                VariationModel::new(&locations)?.weights(target)
+            })
+            .clone()
+    }
+}
+
+/// The kerning of one master, read with the UFO kerning value lookup.
+struct MasterKerning {
+    pairs: HashMap<(String, String), f64>,
+    first: HashMap<String, String>,
+    second: HashMap<String, String>,
+}
+
+impl MasterKerning {
+    fn read(project: &Project, source: SourceId) -> Option<Self> {
+        let metadata = project.document_font_metadata(source)?;
+        let mut first = HashMap::new();
+        let mut second = HashMap::new();
+        for (group, members) in metadata.groups() {
+            let side = if group.starts_with("public.kern1.") {
+                &mut first
+            } else if group.starts_with("public.kern2.") {
+                &mut second
+            } else {
+                continue;
+            };
+            for member in members {
+                side.entry(member.clone()).or_insert_with(|| group.clone());
+            }
+        }
+        Some(Self {
+            pairs: metadata
+                .kerning_pairs()
+                .map(|(left, right, value)| {
+                    (
+                        (
+                            left.as_raw_name().to_owned(),
+                            right.as_raw_name().to_owned(),
+                        ),
+                        value.round(),
+                    )
+                })
+                .collect(),
+            first,
+            second,
+        })
+    }
+
+    /// The value of a pair of glyph or group names: the pair itself, then the groups of its
+    /// glyphs, then zero, as fontc resolves a pair that one master does not define.
+    fn value(&self, left: &str, right: &str) -> f64 {
+        let get = |left: &str, right: &str| {
+            self.pairs
+                .get(&(left.to_owned(), right.to_owned()))
+                .copied()
+        };
+        if let Some(value) = get(left, right) {
+            return value;
+        }
+        let is_group = |side: &str| side.starts_with("public.kern");
+        let first_group = if is_group(left) {
+            Some(left)
+        } else {
+            self.first.get(left).map(String::as_str)
+        };
+        let second_group = if is_group(right) {
+            Some(right)
+        } else {
+            self.second.get(right).map(String::as_str)
+        };
+        let first_glyph = (!is_group(left)).then_some(left);
+        let second_glyph = (!is_group(right)).then_some(right);
+        [
+            (first_glyph, second_group),
+            (first_group, second_glyph),
+            (first_group, second_group),
+        ]
+        .into_iter()
+        .find_map(|(left, right)| get(left?, right?))
+        .unwrap_or(0.0)
+    }
+}
+
+/// The kerning pairs of every master at `location`.
+fn kerning_at(
+    project: &Project,
+    designspace: &CanonicalDesignspace,
+    location: &Location,
+    source: SourceId,
+    inputs: &LayoutInputs,
+) -> Result<Vec<(String, String, f64)>, String> {
+    let masters: Vec<(SourceId, Location)> = designspace
+        .sources()
+        .iter()
+        .map(|descriptor| {
+            Ok((
+                descriptor.id(),
+                descriptor.location.to_normalized(designspace.axes())?,
+            ))
+        })
+        .collect::<Result<_, String>>()?;
+    let tables: Vec<MasterKerning> = masters
+        .iter()
+        .map(|(id, _)| MasterKerning::read(project, *id).ok_or("a source has no kerning metadata"))
+        .collect::<Result<_, _>>()?;
+    if let Some(index) = masters
+        .iter()
+        .position(|(_, at)| locations_match(at, location))
+    {
+        if masters[index].0 == source {
+            return Ok(inputs.kerning.clone());
+        }
+        let mut pairs: Vec<_> = tables[index]
+            .pairs
+            .iter()
+            .map(|((left, right), value)| (left.clone(), right.clone(), *value))
+            .collect();
+        pairs.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+        return Ok(pairs);
+    }
+    let locations: Vec<Location> = masters.iter().map(|(_, at)| at.clone()).collect();
+    let weights = VariationModel::new(&locations)?.weights(location)?;
+    let names: BTreeSet<&(String, String)> =
+        tables.iter().flat_map(|table| table.pairs.keys()).collect();
+    Ok(names
+        .into_iter()
+        .map(|(left, right)| {
+            let value: f64 = tables
+                .iter()
+                .zip(&weights)
+                .map(|(table, weight)| weight * table.value(left, right))
+                .sum();
+            (left.clone(), right.clone(), value.round())
+        })
+        .collect())
 }
 
 /// Time spent in each step of one build.
@@ -683,7 +1080,7 @@ mod tests {
         let inputs = LayoutInputs::from_project(&project, source).unwrap();
         assert!(!inputs.kerning.is_empty());
         let live = build_shaping_font(&inputs).unwrap();
-        let compiled = project.compile_layout().unwrap();
+        let compiled = project.compile().unwrap();
         let fontc = ShapingFont::from_bytes((*compiled.bytes).clone()).unwrap();
 
         for (text, rtl) in SAMPLES {
@@ -871,6 +1268,211 @@ mod tests {
             let source = project.document_sources().next().unwrap().id();
             measure("Amiri", &project, source, None, false);
             measure("Amiri, cut", &project, source, Some(150), false);
+        }
+    }
+}
+
+/// Values between masters, on the repository-owned Arabic fixture.
+#[cfg(test)]
+mod location_tests {
+    use super::*;
+    use crate::testing::fonts;
+
+    /// One shaped glyph: name, advance, x offset and y offset.
+    type Row = (String, f64, f64, f64);
+
+    /// The strings of the fixture README, with their direction.
+    const STRINGS: [(&str, bool); 15] = [
+        ("بسم", true),
+        ("لا", true),
+        ("بلا", true),
+        ("لَاُ", true),
+        ("لأ", true),
+        ("بَّ", true),
+        ("بِ", true),
+        ("يِ", true),
+        ("سسس", true),
+        ("را", true),
+        ("رم", true),
+        ("رَا", true),
+        ("رُه", true),
+        ("AV", false),
+        ("To 012.", false),
+    ];
+
+    fn load() -> Project {
+        Project::load(&fonts::arabic_designspace()).expect("the Arabic fixture loads")
+    }
+
+    fn sources(project: &Project) -> (SourceId, SourceId) {
+        let mut ids = project.document_sources().map(|source| source.id());
+        (ids.next().unwrap(), ids.next().unwrap())
+    }
+
+    fn weight(value: f64) -> Location {
+        [("Weight".to_owned(), value)].into()
+    }
+
+    fn rows(font: &ShapingFont, text: &str, rtl: bool) -> Vec<Row> {
+        font.shape_with_options(text, rtl, &[], None, None)
+            .unwrap()
+            .iter()
+            .map(|glyph| {
+                (
+                    font.glyph_name(glyph.glyph_id).unwrap_or("?").to_string(),
+                    glyph.x_advance,
+                    glyph.x_offset,
+                    glyph.y_offset,
+                )
+            })
+            .collect()
+    }
+
+    fn glyph<'a>(inputs: &'a LayoutInputs, name: &str) -> &'a LayoutGlyph {
+        inputs
+            .glyphs
+            .iter()
+            .find(|glyph| glyph.name == name)
+            .unwrap_or_else(|| panic!("{name} is in the inputs"))
+    }
+
+    #[test]
+    fn at_a_master_the_values_are_those_of_the_master() {
+        let project = load();
+        let (regular, bold) = sources(&project);
+        for (source, location) in [(regular, weight(0.0)), (bold, weight(1.0))] {
+            let (inputs, diagnostics) = LayoutInputs::at_location(&project, &location, source)
+                .expect("the inputs are read");
+            assert_eq!(
+                inputs,
+                LayoutInputs::from_project(&project, source).unwrap()
+            );
+            assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        }
+    }
+
+    #[test]
+    fn at_the_midpoint_each_glyph_is_the_mean_and_one_anchor_is_reported() {
+        let project = load();
+        let (regular, bold) = sources(&project);
+        let low = LayoutInputs::from_project(&project, regular).unwrap();
+        let high = LayoutInputs::from_project(&project, bold).unwrap();
+        let (middle, diagnostics) =
+            LayoutInputs::at_location(&project, &weight(0.5), regular).unwrap();
+
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].glyph, "dal-ar");
+        assert_eq!(diagnostics[0].anchor.as_deref(), Some("top"));
+        assert!(
+            diagnostics[0].reason.contains("Regular"),
+            "{}",
+            diagnostics[0]
+        );
+
+        let mut compared = 0;
+        for glyph in &middle.glyphs {
+            if glyph.name == "dal-ar" || glyph.name == ".notdef" {
+                continue;
+            }
+            let (a, b) = (
+                self::glyph(&low, &glyph.name),
+                self::glyph(&high, &glyph.name),
+            );
+            assert_eq!(
+                glyph.advance,
+                (a.advance + b.advance) / 2.0,
+                "{}",
+                glyph.name
+            );
+            assert_eq!(glyph.anchors.len(), a.anchors.len(), "{}", glyph.name);
+            for (name, x, y) in &glyph.anchors {
+                let from = |inputs: &[(String, f64, f64)]| {
+                    inputs
+                        .iter()
+                        .find(|(candidate, ..)| candidate == name)
+                        .map(|(_, x, y)| (*x, *y))
+                        .unwrap()
+                };
+                let (ax, ay) = from(&a.anchors);
+                let (bx, by) = from(&b.anchors);
+                assert_eq!(
+                    (*x, *y),
+                    ((ax + bx) / 2.0, (ay + by) / 2.0),
+                    "{}",
+                    glyph.name
+                );
+            }
+            compared += 1;
+        }
+        assert!(compared > 40);
+        // The contours of noon do not interpolate, but its layout values do.
+        let noon = glyph(&middle, "noon-ar");
+        assert_eq!(
+            noon.advance,
+            (glyph(&low, "noon-ar").advance + glyph(&high, "noon-ar").advance) / 2.0
+        );
+        // The anchor that only Bold has takes the value of the nearest master: on the tie at
+        // the midpoint, the source passed in, Regular, which has no `top`.
+        let dal = glyph(&middle, "dal-ar");
+        assert!(dal.anchors.iter().all(|(name, ..)| name != "top"));
+        let (nearer_bold, _) = LayoutInputs::at_location(&project, &weight(0.75), regular).unwrap();
+        assert!(
+            glyph(&nearer_bold, "dal-ar")
+                .anchors
+                .iter()
+                .any(|(name, x, y)| name == "top" && (*x, *y) == (300.0, 400.0))
+        );
+        assert_eq!(middle.kerning.len(), low.kerning.len());
+
+        // The tables build, and the strings of the README keep their attached marks.
+        let font = build_shaping_font(&middle).expect("the midpoint builds");
+        let fatha = rows(&font, "لَاُ", true);
+        assert_eq!(fatha[1].0, "fatha-ar");
+        assert!(fatha[1].2 > 0.0 && fatha[1].3 > 0.0, "{fatha:?}");
+        let kasra = rows(&font, "بِ", true);
+        assert_eq!(kasra[0].0, "kasra-ar");
+        assert!(kasra[0].3 < 0.0, "{kasra:?}");
+        let stacked = rows(&font, "بَّ", true);
+        assert!(stacked[0].3 > stacked[1].3, "{stacked:?}");
+        let cursive = rows(&font, "سسس", true);
+        assert!(cursive[2].3 < cursive[1].3, "{cursive:?}");
+    }
+
+    /// The live tables between masters equal the fontc variable compile at the same location.
+    ///
+    /// The values are rounded in different places: the live path interpolates the source
+    /// values and rounds the result, while the compiled font rounds the values of each master
+    /// and the deltas, and the shaper rounds the result at the location.
+    /// So a difference of one unit is allowed; on this fixture, at the three locations, there
+    /// is no difference.
+    #[test]
+    fn between_masters_the_tables_match_the_fontc_variable_compile() {
+        let project = load();
+        let (regular, _) = sources(&project);
+        let mut finished = load();
+        for name in ["noon-ar", "dal-ar"] {
+            finished.remove_document_glyph(name).unwrap();
+        }
+        let compiled = finished.compile().expect("the finished glyphs compile");
+        for at in [0.3, 0.5, 0.77] {
+            let fontc = ShapingFont::from_bytes(compiled.bytes.to_vec())
+                .unwrap()
+                .at_normalized(vec![at]);
+            let (inputs, _) = LayoutInputs::at_location(&project, &weight(at), regular).unwrap();
+            let live = build_shaping_font(&inputs).unwrap();
+            for (text, rtl) in STRINGS {
+                let (live, fontc) = (rows(&live, text, rtl), rows(&fontc, text, rtl));
+                assert_eq!(live.len(), fontc.len(), "{text} at {at}");
+                for (a, b) in live.iter().zip(&fontc) {
+                    assert_eq!(a.0, b.0, "{text} at {at}");
+                    for (x, y) in [(a.1, b.1), (a.2, b.2), (a.3, b.3)] {
+                        assert!(
+                            (x - y).abs() <= 1.0,
+                            "{text} at {at}: live {live:?}, fontc {fontc:?}"
+                        );
+                    }
+                }
+            }
         }
     }
 }
