@@ -1285,7 +1285,7 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        assert!(app.font.project.compiled_preview().is_err());
+        assert!(app.font.project.compile().is_err());
         let layout = app.font.project.layout_revision();
         let live_before = app.font.live_layout(&app.axis_values).font;
         // Moving contour points does not rebuild the layout tables.

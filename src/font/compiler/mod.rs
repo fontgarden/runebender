@@ -92,6 +92,13 @@ fn canonical_design_location(
 pub struct PreviewJob {
     finished: Arc<std::sync::Mutex<Option<CompileResult>>>,
     /// What the snapshot of this job changed so that it compiles.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "the browser compiles on the calling thread and starts no job"
+        )
+    )]
     exceptions: Arc<[PreviewException]>,
 }
 
