@@ -93,7 +93,10 @@ fn unfinished_masters_stop_the_complete_compile() {
         .compile()
         .expect_err("the incompatible contour stops the compile");
     assert!(error.contains(INCOMPATIBLE_GLYPH), "{error}");
-    assert!(error.contains("interpolation-incompatible paths"), "{error}");
+    assert!(
+        error.contains("interpolation-incompatible paths"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -185,4 +188,54 @@ fn right_to_left_and_latin_kerning() {
 fn regular_source_has_the_feature_file() {
     assert!(fonts::arabic_dir().join("generate.py").is_file());
     assert!(fonts::arabic_regular_ufo().join("features.fea").is_file());
+}
+
+/// The layout tables built from live values give the same text as the complete compile,
+/// and the unfinished glyphs do not stop them.
+#[test]
+fn live_layout_tables_equal_the_complete_compile_with_unfinished_glyphs_present() {
+    use crate::text::layout_tables::{LayoutInputs, build_shaping_font};
+
+    let project = load();
+    assert!(
+        project.compile().is_err(),
+        "the unfinished glyphs are present"
+    );
+    let source = project.document_sources().next().unwrap().id();
+    let live = build_shaping_font(&LayoutInputs::from_project(&project, source).unwrap()).unwrap();
+    let compiled = finished_font();
+
+    let rows = |font: &ShapingFont, text: &str, rtl: bool| -> Vec<(String, f64, f64, f64)> {
+        font.shape_with_options(text, rtl, &[], None, None)
+            .unwrap()
+            .iter()
+            .map(|glyph| {
+                (
+                    font.glyph_name(glyph.glyph_id).unwrap_or("?").to_string(),
+                    glyph.x_advance,
+                    glyph.x_offset,
+                    glyph.y_offset,
+                )
+            })
+            .collect()
+    };
+    for (text, rtl) in [
+        ("بسم", true),
+        ("لا", true),
+        ("بلا", true),
+        ("لَاُ", true),
+        ("لأ", true),
+        ("بَّ", true),
+        ("بِ", true),
+        ("يِ", true),
+        ("سسس", true),
+        ("را", true),
+        ("رم", true),
+        ("رَا", true),
+        ("رُه", true),
+        ("AV", false),
+        ("To 012.", false),
+    ] {
+        assert_eq!(rows(&live, text, rtl), rows(&compiled, text, rtl), "{text}");
+    }
 }

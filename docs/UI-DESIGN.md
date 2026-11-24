@@ -326,6 +326,7 @@ A test checks that this section and the previous one name every `RUNEBENDER_*` v
 | `RUNEBENDER_WHISPER_SERVER=<path>` | The `whisper-server` executable. |
 | `RUNEBENDER_WHISPER_MODEL=<file>` | The speech model for voice input. |
 | `RUNEBENDER_TEST_FONTS=<dir>` | Tests: the Virtua Grotesk `sources` folder for the full-font tests. |
+| `RUNEBENDER_AMIRI_DESIGNSPACE=<file>` | Tests: a designspace of Amiri for the ignored timing test of the layout tables. |
 | `RUNEBENDER_BENCH_FONT=<path>` | Frame probe: the designspace or UFO to measure. |
 | `RUNEBENDER_BENCH_GLYPH=<name>` | Frame probe: the glyph to open; the default is `a`. |
 | `RUNEBENDER_BENCH_OVERVIEW=1` | Frame probe: measure the overview grid instead of a point drag. |
