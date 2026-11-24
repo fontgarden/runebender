@@ -16,7 +16,8 @@ pub(in crate::application::cli) struct FeaturesArgs {
     #[arg(long)]
     write: bool,
     /// Generate the Arabic joining and ligature features of the glyph
-    /// names instead of mark features. They go in the delimited block
+    /// names, and the `ccmp` decompositions of empty letters into a
+    /// skeleton and marks, instead of mark features. They go in the delimited block
     /// that the generator owns inside `features.fea`; `--write` writes
     /// that file, and without it the block is printed.
     #[arg(long)]

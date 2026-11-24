@@ -32,11 +32,25 @@
 //! The lookups are registered under `script arab` with every Arabic language system that the
 //! feature text declares, or under all its language systems when it declares none for Arabic.
 //!
-//! See item 6.2 in `docs/ARABIC-TEXT-LAYOUT-PLAN.md`.
+//! [`ccmp_decomposition`] writes `ccmp` multiple substitutions into the same block, for letters
+//! that a font composes from a skeleton and dot or hamza marks.
+//! When the glyph of a letter such as `teh-ar` is empty and the font has its skeleton
+//! `behDotless-ar` and its mark `twodotshorizontalabove-ar`, `teh-ar` becomes the skeleton and
+//! the mark before the positional features run, so the skeleton takes its positional form and
+//! the mark attaches to it through the anchors of the font.
+//! The parts come from the `com.runebender.compose` recipe of the glyph when it has one, and
+//! otherwise from `assets/data/arabic-skeletons.toml`.
+//! No mark class or anchor is written here: the mark features come from the anchors.
+//!
+//! See items 6.2 and 6.3 in `docs/ARABIC-TEXT-LAYOUT-PLAN.md`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
+use std::sync::OnceLock;
 
+use serde::Deserialize;
+
+use crate::font::compose::recipe_parts;
 use crate::font::project::Project;
 use crate::font::variable::SourceId;
 
@@ -168,7 +182,10 @@ impl GeneratedBlock {
         let mut out = String::new();
         out.push_str(BLOCK_BEGIN);
         out.push('\n');
-        out.push_str("# Positional forms and ligatures come from the glyph names.\n");
+        out.push_str(
+            "# Positional forms and ligatures come from the glyph names, and decompositions \
+             from the skeleton table.\n",
+        );
         for feature in &self.features {
             let tag = &feature.tag;
             out.push('\n');
@@ -454,11 +471,7 @@ fn is_arabic_name(name: &str) -> bool {
                 .filter(|hex| (4..=6).contains(&hex.len()))
         });
     hex.and_then(|hex| u32::from_str_radix(hex, 16).ok())
-        .is_some_and(|codepoint| {
-            ARABIC_RANGES
-                .iter()
-                .any(|(first, last)| (*first..=*last).contains(&codepoint))
-        })
+        .is_some_and(is_arabic_codepoint)
 }
 
 /// What the feature text outside the generated block declares.
@@ -608,11 +621,209 @@ pub fn exported_glyph_names(project: &Project, source: SourceId) -> Vec<&str> {
         .collect()
 }
 
-/// The Arabic features of one source, generated for `feature_text`.
+/// The skeleton table, `assets/data/arabic-skeletons.toml`.
+pub const SKELETON_TABLE: &str = include_str!("../../assets/data/arabic-skeletons.toml");
+
+/// One Arabic letter as a skeleton and marks, from the skeleton table.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkeletonLetter {
+    /// The code point of the letter.
+    pub codepoint: u32,
+    /// The glyph name of the letter in the Glyphs convention.
+    pub name: String,
+    /// The glyph name of the skeleton: the body of the letter without dots.
+    pub skeleton: String,
+    /// The glyph names of the dot and hamza marks, in the order of the rule.
+    pub marks: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct SkeletonTable {
+    letter: Vec<SkeletonLetter>,
+}
+
+/// The letters of the skeleton table, in the order of the file.
+pub fn skeleton_letters() -> &'static [SkeletonLetter] {
+    static LETTERS: OnceLock<Vec<SkeletonLetter>> = OnceLock::new();
+    LETTERS.get_or_init(|| {
+        toml::from_str::<SkeletonTable>(SKELETON_TABLE)
+            .expect("the skeleton table is valid; a unit test parses it")
+            .letter
+    })
+}
+
+/// One glyph as [`ccmp_decomposition`] reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecompositionGlyph {
+    /// The glyph name.
+    pub name: String,
+    /// The code points that map to the glyph.
+    pub codepoints: Vec<u32>,
+    /// True when the glyph has no contours and no components.
+    pub empty: bool,
+    /// The `com.runebender.compose` recipe of the glyph, such as `"behDotless-ar + dotbelow-ar"`.
+    pub recipe: Option<String>,
+}
+
+/// Write `ccmp` multiple substitutions for the empty letters of a font that has their parts.
+///
+/// A glyph gets a rule when it is empty, has an Arabic code point, and its parts are glyphs
+/// of the font.
+/// The parts are those of its `com.runebender.compose` recipe when it has one, and otherwise
+/// the skeleton and marks of its code point in `letters`.
+/// A letter whose positional form exists while the same form of the skeleton does not gets no
+/// rule and a note, because after `ccmp` the shaper looks for the form of the skeleton.
+/// A letter of `letters` whose parts exist but that no glyph encodes gets a note: the shaper
+/// needs an encoded glyph to decompose.
+/// `existing_fea` decides the language systems and whether `ccmp` is kept, as in
+/// [`joining_features`].
+pub fn ccmp_decomposition(
+    glyphs: &[DecompositionGlyph],
+    letters: &[SkeletonLetter],
+    existing_fea: &str,
+) -> GeneratedBlock {
+    let context = FeatureContext::read(existing_fea);
+    let mut block = GeneratedBlock::new(&context);
+    let names: BTreeSet<&str> = glyphs.iter().map(|glyph| glyph.name.as_str()).collect();
+    let exists = |name: &str| names.contains(name);
+    let by_codepoint: HashMap<u32, &SkeletonLetter> = letters
+        .iter()
+        .map(|letter| (letter.codepoint, letter))
+        .collect();
+    let mut encoded: BTreeSet<u32> = BTreeSet::new();
+    let mut rules: BTreeMap<&str, String> = BTreeMap::new();
+    for glyph in glyphs {
+        encoded.extend(glyph.codepoints.iter().copied());
+        if !glyph.empty || !glyph.codepoints.iter().copied().any(is_arabic_codepoint) {
+            continue;
+        }
+        let parts = match &glyph.recipe {
+            Some(recipe) => {
+                let parts = recipe_parts(recipe);
+                if parts.len() < 2 || !parts.iter().all(|part| exists(part)) {
+                    block.notes.push(format!(
+                        "{}: the compose recipe \"{recipe}\" names a glyph that is not in the \
+                         font, so no ccmp rule",
+                        glyph.name
+                    ));
+                    continue;
+                }
+                parts
+            }
+            None => {
+                let Some(letter) = glyph
+                    .codepoints
+                    .iter()
+                    .find_map(|codepoint| by_codepoint.get(codepoint))
+                else {
+                    continue;
+                };
+                let parts: Vec<String> = std::iter::once(&letter.skeleton)
+                    .chain(&letter.marks)
+                    .cloned()
+                    .collect();
+                let missing: Vec<&str> = parts
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|part| !exists(part))
+                    .collect();
+                if !missing.is_empty() {
+                    block.notes.push(format!(
+                        "{}: empty, and {} not in the font, so no ccmp rule",
+                        glyph.name,
+                        missing.join(" and ")
+                    ));
+                    continue;
+                }
+                parts
+            }
+        };
+        let skeleton = &parts[0];
+        let lost: Vec<&str> = FORMS
+            .iter()
+            .map(|(_, suffix)| *suffix)
+            .filter(|suffix| {
+                exists(&format!("{}{suffix}", glyph.name))
+                    && !exists(&format!("{skeleton}{suffix}"))
+            })
+            .collect();
+        if !lost.is_empty() {
+            block.notes.push(format!(
+                "{}: the font has {} forms of it but not of {skeleton}, so no ccmp rule",
+                glyph.name,
+                lost.join(" ")
+            ));
+            continue;
+        }
+        rules.insert(
+            glyph.name.as_str(),
+            format!("sub {} by {};", glyph.name, parts.join(" ")),
+        );
+    }
+    for letter in letters {
+        let parts_exist = exists(&letter.skeleton) && letter.marks.iter().all(|mark| exists(mark));
+        if parts_exist && !encoded.contains(&letter.codepoint) {
+            block.notes.push(format!(
+                "U+{:04X} {}: no glyph has this code point; an empty glyph with it would be \
+                 composed from {} and {}",
+                letter.codepoint,
+                letter.name,
+                letter.skeleton,
+                letter.marks.join(" and ")
+            ));
+        }
+    }
+    block.push(&context, "ccmp", false, rules.into_values().collect());
+    block
+}
+
+/// Whether a code point is in the Arabic script.
+fn is_arabic_codepoint(codepoint: u32) -> bool {
+    ARABIC_RANGES
+        .iter()
+        .any(|(first, last)| (*first..=*last).contains(&codepoint))
+}
+
+/// The glyphs of one source as [`ccmp_decomposition`] reads them, for the glyphs the export
+/// writes.
+pub fn decomposition_glyphs(project: &Project, source: SourceId) -> Vec<DecompositionGlyph> {
+    let Some(layer) = project
+        .document_source(source)
+        .map(|source| source.default_layer())
+    else {
+        return Vec::new();
+    };
+    exported_glyph_names(project, source)
+        .into_iter()
+        .filter_map(|name| {
+            let view = project.document_layer(name, &layer)?;
+            Some(DecompositionGlyph {
+                name: name.to_owned(),
+                codepoints: view.codepoints().map(u32::from).collect(),
+                empty: view.contours().next().is_none() && view.components().next().is_none(),
+                // A recipe that is not a string is not a recipe; compose reports it.
+                recipe: view
+                    .composition_recipe_source()
+                    .ok()
+                    .flatten()
+                    .map(str::to_owned),
+            })
+        })
+        .collect()
+}
+
+/// The Arabic features of one source, generated for `feature_text`: the joining features of
+/// [`joining_features`] and the decompositions of [`ccmp_decomposition`].
 ///
 /// Glyphs that the export leaves out give no rules, since the compiled font has no such glyph.
 pub fn generate_project(project: &Project, source: SourceId, feature_text: &str) -> GeneratedBlock {
-    joining_features(exported_glyph_names(project, source), feature_text)
+    let mut block = joining_features(exported_glyph_names(project, source), feature_text);
+    block.merge(ccmp_decomposition(
+        &decomposition_glyphs(project, source),
+        skeleton_letters(),
+        feature_text,
+    ));
+    block
 }
 
 #[cfg(test)]
@@ -953,5 +1164,246 @@ mod tests {
         assert!(block.apply_to(&close).is_err());
         let two = format!("{}{}", block.text(), block.text());
         assert!(block.apply_to(&two).is_err());
+    }
+
+    fn decomposition_glyph(
+        name: &str,
+        codepoint: Option<u32>,
+        empty: bool,
+        recipe: Option<&str>,
+    ) -> DecompositionGlyph {
+        DecompositionGlyph {
+            name: name.to_owned(),
+            codepoints: codepoint.into_iter().collect(),
+            empty,
+            recipe: recipe.map(str::to_owned),
+        }
+    }
+
+    /// An empty `teh-ar`, its skeleton and its mark.
+    fn teh_parts() -> Vec<DecompositionGlyph> {
+        vec![
+            decomposition_glyph("teh-ar", Some(0x062A), true, None),
+            decomposition_glyph("behDotless-ar", Some(0x066E), false, None),
+            decomposition_glyph("twodotshorizontalabove-ar", None, false, None),
+        ]
+    }
+
+    #[test]
+    fn the_skeleton_table_is_complete_and_named_in_the_glyphs_convention() {
+        let letters = skeleton_letters();
+        assert!(letters.len() >= 30, "{}", letters.len());
+        let mut codepoints = BTreeSet::new();
+        for letter in letters {
+            assert!(
+                codepoints.insert(letter.codepoint),
+                "{:04X}",
+                letter.codepoint
+            );
+            assert!(
+                is_arabic_codepoint(letter.codepoint),
+                "{:04X}",
+                letter.codepoint
+            );
+            assert!(!letter.marks.is_empty(), "{}", letter.name);
+            assert_ne!(letter.name, letter.skeleton);
+            for name in std::iter::once(&letter.name)
+                .chain(std::iter::once(&letter.skeleton))
+                .chain(&letter.marks)
+            {
+                assert!(name.ends_with("-ar"), "{name}");
+                assert!(!name.contains('.') && !name.contains('_'), "{name}");
+            }
+        }
+        // Every letter of the basic alphabet with dots or hamza is in the table.
+        for codepoint in [
+            0x0622, 0x0623, 0x0624, 0x0625, 0x0626, 0x0628, 0x0629, 0x062A, 0x062B, 0x062C, 0x062E,
+            0x0630, 0x0632, 0x0634, 0x0636, 0x0638, 0x063A, 0x0641, 0x0642, 0x0646, 0x064A, 0x067E,
+            0x0686, 0x0698,
+        ] {
+            assert!(codepoints.contains(&codepoint), "U+{codepoint:04X}");
+        }
+        // A letter with a canonical decomposition keeps the base of that decomposition,
+        // except for yeh with hamza, whose letterform has no dots.
+        for letter in letters {
+            let Some(character) = char::from_u32(letter.codepoint) else {
+                continue;
+            };
+            let mut parts = Vec::new();
+            unicode_normalization::char::decompose_canonical(character, |c| parts.push(c));
+            if parts.len() == 2 && letter.codepoint != 0x0626 {
+                let base = letters
+                    .iter()
+                    .find(|other| other.codepoint == parts[0] as u32);
+                assert!(
+                    base.is_none(),
+                    "{}: its base {:04X} has dots of its own",
+                    letter.name,
+                    parts[0] as u32
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_empty_letter_with_its_parts_decomposes() {
+        let block = ccmp_decomposition(&teh_parts(), skeleton_letters(), "");
+        assert_eq!(
+            block.feature("ccmp").unwrap().rules,
+            ["sub teh-ar by behDotless-ar twodotshorizontalabove-ar;"]
+        );
+        assert!(block.notes.is_empty(), "{:?}", block.notes);
+    }
+
+    #[test]
+    fn a_drawn_letter_or_missing_parts_give_no_rule() {
+        let mut drawn = teh_parts();
+        drawn[0].empty = false;
+        assert!(ccmp_decomposition(&drawn, skeleton_letters(), "").is_empty());
+
+        let mut no_mark = teh_parts();
+        no_mark.pop();
+        let block = ccmp_decomposition(&no_mark, skeleton_letters(), "");
+        assert!(block.is_empty());
+        assert_eq!(block.notes.len(), 1);
+        assert!(block.notes[0].contains("twodotshorizontalabove-ar"));
+
+        // A Latin glyph with a recipe is not an Arabic letter.
+        let latin = vec![
+            decomposition_glyph("Aacute", Some(0xC1), true, Some("A + acutecomb")),
+            decomposition_glyph("A", Some(0x41), false, None),
+            decomposition_glyph("acutecomb", Some(0x301), false, None),
+        ];
+        assert!(ccmp_decomposition(&latin, skeleton_letters(), "").is_empty());
+    }
+
+    #[test]
+    fn the_compose_recipe_comes_before_the_table() {
+        let mut glyphs = teh_parts();
+        glyphs[0].recipe = Some("behDotless-ar + dotabove-ar + dotabove-ar".into());
+        glyphs.push(decomposition_glyph("dotabove-ar", None, false, None));
+        let block = ccmp_decomposition(&glyphs, skeleton_letters(), "");
+        assert_eq!(
+            block.feature("ccmp").unwrap().rules,
+            ["sub teh-ar by behDotless-ar dotabove-ar dotabove-ar;"]
+        );
+        glyphs[0].recipe = Some("behDotless-ar + ringabove-ar".into());
+        let block = ccmp_decomposition(&glyphs, skeleton_letters(), "");
+        assert!(block.is_empty());
+        assert!(
+            block.notes[0].contains("compose recipe"),
+            "{:?}",
+            block.notes
+        );
+    }
+
+    #[test]
+    fn a_positional_form_without_a_skeleton_form_gives_a_note() {
+        let mut glyphs = teh_parts();
+        glyphs.push(decomposition_glyph("teh-ar.init", None, false, None));
+        let block = ccmp_decomposition(&glyphs, skeleton_letters(), "");
+        assert!(block.is_empty());
+        assert!(block.notes[0].contains(".init"), "{:?}", block.notes);
+        glyphs.push(decomposition_glyph("behDotless-ar.init", None, false, None));
+        let block = ccmp_decomposition(&glyphs, skeleton_letters(), "");
+        assert_eq!(block.rule_count(), 1);
+    }
+
+    #[test]
+    fn an_unencoded_letter_and_an_own_ccmp_are_reported() {
+        let mut glyphs = teh_parts();
+        glyphs.remove(0);
+        let block = ccmp_decomposition(&glyphs, skeleton_letters(), "");
+        assert!(block.is_empty());
+        assert_eq!(block.notes.len(), 1);
+        assert!(
+            block.notes[0].starts_with("U+062A teh-ar:"),
+            "{:?}",
+            block.notes
+        );
+
+        let own = "feature ccmp {\n    sub teh-ar by teh-ar;\n} ccmp;\n";
+        let block = ccmp_decomposition(&teh_parts(), skeleton_letters(), own);
+        assert!(block.is_empty());
+        assert_eq!(block.kept, ["ccmp"]);
+    }
+
+    #[test]
+    fn joining_and_decomposition_share_one_block_in_shaper_order() {
+        let names = ["behDotless-ar", "behDotless-ar.init", "teh-ar"];
+        let mut block = joining_features(names, "");
+        block.merge(ccmp_decomposition(&teh_parts(), skeleton_letters(), ""));
+        let tags: Vec<&str> = block.features.iter().map(|f| f.tag.as_str()).collect();
+        assert_eq!(tags, ["ccmp", "init"]);
+        assert_eq!(block.text().matches(BEGIN_PREFIX).count(), 1);
+    }
+
+    #[test]
+    fn a_decomposed_letter_shapes_to_the_skeleton_with_the_dots_attached() {
+        let glyph = |name: &str,
+                     codepoint: Option<u32>,
+                     anchors: &[(&str, f64, f64)],
+                     category: LayoutCategory| LayoutGlyph {
+            name: name.to_owned(),
+            codepoints: codepoint.into_iter().collect(),
+            advance: if category == LayoutCategory::Mark {
+                0.0
+            } else {
+                500.0
+            },
+            anchors: anchors
+                .iter()
+                .map(|(name, x, y)| ((*name).to_owned(), *x, *y))
+                .collect(),
+            category: Some(category),
+        };
+        let base = "languagesystem DFLT dflt;\nlanguagesystem arab dflt;\n";
+        let block = ccmp_decomposition(&teh_parts(), skeleton_letters(), base);
+        let inputs = |features: String| LayoutInputs {
+            units_per_em: 1000.0,
+            glyphs: vec![
+                glyph(".notdef", None, &[], LayoutCategory::Base),
+                glyph(
+                    "behDotless-ar",
+                    Some(0x066E),
+                    &[("top", 250.0, 600.0)],
+                    LayoutCategory::Base,
+                ),
+                glyph("teh-ar", Some(0x062A), &[], LayoutCategory::Base),
+                glyph(
+                    "twodotshorizontalabove-ar",
+                    None,
+                    &[("_top", 100.0, 500.0)],
+                    LayoutCategory::Mark,
+                ),
+            ],
+            groups: BTreeMap::new(),
+            kerning: Vec::new(),
+            features,
+            axes: Vec::new(),
+            location: fontdrasil::coords::NormalizedLocation::new(),
+        };
+        let generated = build_shaping_font(&inputs(block.apply_to(base).unwrap()))
+            .expect("the generated ccmp builds");
+        let shaped = rows(&generated, "ت", true);
+        let mut names: Vec<&str> = shaped.iter().map(|row| row.0.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["behDotless-ar", "twodotshorizontalabove-ar"]);
+        let dots = shaped
+            .iter()
+            .find(|row| row.0 == "twodotshorizontalabove-ar")
+            .unwrap();
+        assert_eq!(dots.1, 0.0, "the mark has no advance");
+        assert_eq!(
+            dots.3, 100.0,
+            "the dots sit on the top anchor of the skeleton"
+        );
+        // The same as a hand-written decomposition.
+        let hand = format!(
+            "{base}feature ccmp {{\n    sub teh-ar by behDotless-ar twodotshorizontalabove-ar;\n\
+             }} ccmp;\n"
+        );
+        let hand = build_shaping_font(&inputs(hand)).unwrap();
+        assert_eq!(rows(&hand, "ت", true), shaped);
     }
 }

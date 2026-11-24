@@ -1238,8 +1238,9 @@ impl Workspace {
         self.features_status = Some("Generated mark and mkmk · review and Apply".into());
     }
 
-    /// Put the Arabic joining and ligature features of the glyph names in the feature draft
-    /// for review, in the delimited block that the generator owns.
+    /// Put the Arabic joining and ligature features of the glyph names, and the `ccmp`
+    /// decompositions of empty letters, in the feature draft for review, in the delimited
+    /// block that the generator owns.
     pub(crate) fn generate_joining_features(&mut self) {
         use runebender::text::arabic_features;
         let Some(source) = self.font.project.source_id(self.font.active()) else {

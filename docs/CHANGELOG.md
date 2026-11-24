@@ -20,6 +20,8 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
 - Generate Joining in the Features section writes the Arabic `isol`, `fina`, `medi`, `init` and `rlig` features from the glyph names, such as `beh-ar.init` and `lam_alef-ar.fina`, into the feature draft for review.
   The code goes in one delimited block of `features.fea`, which a second run replaces; a feature that the file already defines is kept and named in the status line.
   `runebender features --joining` does the same from the command line.
+- The same block holds `ccmp` decompositions for Arabic letters whose glyph is empty while the font has their skeleton and marks, such as `teh-ar` from `behDotless-ar` and `twodotshorizontalabove-ar`.
+  The parts come from the `com.runebender.compose` recipe of the glyph, or from a table of the Arabic, Persian and Urdu letters in `assets/data/arabic-skeletons.toml`, and the marks attach through the anchors of the font.
 
 ### Changed
 

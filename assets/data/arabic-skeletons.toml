@@ -1,0 +1,257 @@
+# Arabic letters as a skeleton and marks, for the `ccmp` decomposition
+# that `src/text/arabic_features.rs` writes.
+#
+# Each `[[letter]]` table gives one letter by its code point, the glyph
+# name of the letter, the glyph name of its skeleton, and the glyph names
+# of its dot or hamza marks, in the order of the output of the rule.
+# A font whose letter glyph is empty, and that has the skeleton and the
+# marks, gets `sub letter by skeleton mark ...;` in `ccmp`, and the marks
+# then attach to the skeleton through the anchors of the font.
+#
+# Names follow the glyph data of Glyphs, which glyphsLib and fontc also
+# use: the letter name with the script suffix `-ar`, such as `teh-ar` for
+# U+062A, and for unencoded marks the name of the mark in that data, such
+# as `twodotshorizontalabove-ar`.
+# The table itself is written for Runebender from the structure of each
+# letter: the Unicode canonical decomposition where the letter has one
+# (U+0622 to U+0626, U+06C0, U+06C2, U+06D3), and otherwise the dotless
+# letter that carries the same body and the dots that the Unicode name
+# of the letter describes.
+#
+# Choices:
+# - The skeleton of a letter is the letter of the same body without
+#   dots: `behDotless-ar` (U+066E) for beh, teh, theh, tteh and peh,
+#   `fehDotless-ar` (U+06A1) for feh and veh, `qafDotless-ar` (U+066F)
+#   for qaf, `noonghunna-ar` (U+06BA) for noon, and the plain letter for
+#   letters that have a dotless counterpart in the basic alphabet, such
+#   as `hah-ar` for jeem and khah.
+# - Yeh and the letters with a yeh body use `alefMaksura-ar` (U+0649),
+#   the dotless form of yeh.
+#   U+0626 decomposes canonically to U+064A U+0654, but its letterform
+#   has no dots, so its skeleton is `alefMaksura-ar`.
+# - The dots of jeem and tcheh are inside the bowl of hah, not below the
+#   letter, so they use the `center` marks of the glyph data, which
+#   attach by a `center` anchor.
+# - Farsi yeh (U+06CC) is not in the table: its initial and medial forms
+#   have two dots below and its isolated and final forms have none, and
+#   `ccmp` runs before the positional features.
+# - Letters without dots or hamza, such as alef, dal, reh, seen, lam and
+#   meem, are skeletons themselves and are not in the table.
+
+# Hamza and madda letters, from their canonical decompositions.
+
+[[letter]]
+codepoint = 0x0622
+name = "alefMadda-ar"
+skeleton = "alef-ar"
+marks = ["madda-ar"]
+
+[[letter]]
+codepoint = 0x0623
+name = "alefHamzaabove-ar"
+skeleton = "alef-ar"
+marks = ["hamzaabove-ar"]
+
+[[letter]]
+codepoint = 0x0624
+name = "wawHamzaabove-ar"
+skeleton = "waw-ar"
+marks = ["hamzaabove-ar"]
+
+[[letter]]
+codepoint = 0x0625
+name = "alefHamzabelow-ar"
+skeleton = "alef-ar"
+marks = ["hamzabelow-ar"]
+
+[[letter]]
+codepoint = 0x0626
+name = "yehHamzaabove-ar"
+skeleton = "alefMaksura-ar"
+marks = ["hamzaabove-ar"]
+
+# The letters of the basic alphabet with dots.
+
+[[letter]]
+codepoint = 0x0628
+name = "beh-ar"
+skeleton = "behDotless-ar"
+marks = ["dotbelow-ar"]
+
+[[letter]]
+codepoint = 0x0629
+name = "tehMarbuta-ar"
+skeleton = "heh-ar"
+marks = ["twodotshorizontalabove-ar"]
+
+[[letter]]
+codepoint = 0x062A
+name = "teh-ar"
+skeleton = "behDotless-ar"
+marks = ["twodotshorizontalabove-ar"]
+
+[[letter]]
+codepoint = 0x062B
+name = "theh-ar"
+skeleton = "behDotless-ar"
+marks = ["threedotsupabove-ar"]
+
+[[letter]]
+codepoint = 0x062C
+name = "jeem-ar"
+skeleton = "hah-ar"
+marks = ["dotcenter-ar"]
+
+[[letter]]
+codepoint = 0x062E
+name = "khah-ar"
+skeleton = "hah-ar"
+marks = ["dotabove-ar"]
+
+[[letter]]
+codepoint = 0x0630
+name = "thal-ar"
+skeleton = "dal-ar"
+marks = ["dotabove-ar"]
+
+[[letter]]
+codepoint = 0x0632
+name = "zain-ar"
+skeleton = "reh-ar"
+marks = ["dotabove-ar"]
+
+[[letter]]
+codepoint = 0x0634
+name = "sheen-ar"
+skeleton = "seen-ar"
+marks = ["threedotsupabove-ar"]
+
+[[letter]]
+codepoint = 0x0636
+name = "dad-ar"
+skeleton = "sad-ar"
+marks = ["dotabove-ar"]
+
+[[letter]]
+codepoint = 0x0638
+name = "zah-ar"
+skeleton = "tah-ar"
+marks = ["dotabove-ar"]
+
+[[letter]]
+codepoint = 0x063A
+name = "ghain-ar"
+skeleton = "ain-ar"
+marks = ["dotabove-ar"]
+
+[[letter]]
+codepoint = 0x0641
+name = "feh-ar"
+skeleton = "fehDotless-ar"
+marks = ["dotabove-ar"]
+
+[[letter]]
+codepoint = 0x0642
+name = "qaf-ar"
+skeleton = "qafDotless-ar"
+marks = ["twodotshorizontalabove-ar"]
+
+[[letter]]
+codepoint = 0x0646
+name = "noon-ar"
+skeleton = "noonghunna-ar"
+marks = ["dotabove-ar"]
+
+[[letter]]
+codepoint = 0x064A
+name = "yeh-ar"
+skeleton = "alefMaksura-ar"
+marks = ["twodotshorizontalbelow-ar"]
+
+# Alef with wasla and wavy hamza.
+
+[[letter]]
+codepoint = 0x0671
+name = "alefWasla-ar"
+skeleton = "alef-ar"
+marks = ["wasla-ar"]
+
+[[letter]]
+codepoint = 0x0672
+name = "alefWavyhamzaabove-ar"
+skeleton = "alef-ar"
+marks = ["wavyhamzaabove-ar"]
+
+[[letter]]
+codepoint = 0x0673
+name = "alefWavyhamzabelow-ar"
+skeleton = "alef-ar"
+marks = ["wavyhamzabelow-ar"]
+
+# Persian and Urdu letters.
+
+[[letter]]
+codepoint = 0x0679
+name = "tteh-ar"
+skeleton = "behDotless-ar"
+marks = ["tahabove-ar"]
+
+[[letter]]
+codepoint = 0x067E
+name = "peh-ar"
+skeleton = "behDotless-ar"
+marks = ["threedotsdownbelow-ar"]
+
+[[letter]]
+codepoint = 0x0686
+name = "tcheh-ar"
+skeleton = "hah-ar"
+marks = ["threedotsdowncenter-ar"]
+
+[[letter]]
+codepoint = 0x0688
+name = "ddal-ar"
+skeleton = "dal-ar"
+marks = ["tahabove-ar"]
+
+[[letter]]
+codepoint = 0x0691
+name = "rreh-ar"
+skeleton = "reh-ar"
+marks = ["tahabove-ar"]
+
+[[letter]]
+codepoint = 0x0698
+name = "jeh-ar"
+skeleton = "reh-ar"
+marks = ["threedotsupabove-ar"]
+
+[[letter]]
+codepoint = 0x06A4
+name = "veh-ar"
+skeleton = "fehDotless-ar"
+marks = ["threedotsupabove-ar"]
+
+[[letter]]
+codepoint = 0x06C0
+name = "hehHamzaabove-ar"
+skeleton = "ae-ar"
+marks = ["hamzaabove-ar"]
+
+[[letter]]
+codepoint = 0x06C2
+name = "hehgoalHamzaabove-ar"
+skeleton = "hehgoal-ar"
+marks = ["hamzaabove-ar"]
+
+[[letter]]
+codepoint = 0x06C3
+name = "tehMarbutagoal-ar"
+skeleton = "hehgoal-ar"
+marks = ["twodotshorizontalabove-ar"]
+
+[[letter]]
+codepoint = 0x06D3
+name = "yehbarreeHamzaabove-ar"
+skeleton = "yehbarree-ar"
+marks = ["hamzaabove-ar"]

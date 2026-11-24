@@ -209,12 +209,7 @@ fn recipe_with_map(font: &Font, map: &HashMap<u32, String>, glyph: &Glyph) -> Op
     }
     // 2. The lib key.
     if let Some(text) = glyph.lib.get(LIB_KEY).and_then(|v| v.as_string()) {
-        let parts: Vec<String> = text
-            .split(['+', ' '])
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(String::from)
-            .collect();
+        let parts = recipe_parts(text);
         if parts.len() >= 2 && parts.iter().all(|p| font.get_glyph(p.as_str()).is_some()) {
             return Some(Recipe {
                 base: parts[0].clone(),
@@ -479,13 +474,17 @@ fn document_by_codepoint(layers: &[(String, LayerView<'_>)]) -> HashMap<u32, Str
     map
 }
 
-fn explicit_recipe(text: Option<&str>, layers: &HashMap<String, LayerView<'_>>) -> Option<Recipe> {
-    let parts: Vec<String> = text?
-        .split(['+', ' '])
+/// The glyph names of a [`LIB_KEY`] recipe, base first: `"base + mark + mark"` gives three.
+pub fn recipe_parts(text: &str) -> Vec<String> {
+    text.split(['+', ' '])
         .map(str::trim)
         .filter(|part| !part.is_empty())
         .map(String::from)
-        .collect();
+        .collect()
+}
+
+fn explicit_recipe(text: Option<&str>, layers: &HashMap<String, LayerView<'_>>) -> Option<Recipe> {
+    let parts = recipe_parts(text?);
     if parts.len() < 2 || parts.iter().any(|part| !layers.contains_key(part)) {
         return None;
     }
