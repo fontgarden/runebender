@@ -28,8 +28,18 @@
 //! each anchor alone, with the variation model of the outlines.
 //! A value that cannot be interpolated comes from the nearest master and is reported as a
 //! [`LayoutDiagnostic`]; only feature code that does not compile stops a build.
-//! See items 0.1 and 2.1 to 2.4 in `docs/ARABIC-TEXT-LAYOUT-PLAN.md`.
+//!
+//! [`LayoutTables::build_live`] is the one function that the editor shapes its text line with.
+//! A drag step calls it with the committed inputs and [`LayoutOverrides`], the values of the
+//! gesture that are not committed yet; the commit calls it with the committed inputs alone.
+//! Identical values give identical inputs, so the line cannot move at the moment of commit
+//! (rule 4 of section 5.2 in `docs/ARABIC-TEXT-LAYOUT-PLAN.md`).
+//! When the feature text does not compile, `build_live` builds from the last feature text that
+//! compiled, with the current values, and reports the error with its line (rule 7).
+//!
+//! See items 0.1, 2.1 to 2.4 and 3.4 to 3.7 in `docs/ARABIC-TEXT-LAYOUT-PLAN.md`.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -37,7 +47,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use fea_rs::{
-    GlyphMap, Opts,
+    DiagnosticSet, GlyphMap, Opts,
     compile::{FeatureBuilder, FeatureProvider, NopFeatureProvider, NopVariationInfo},
     parse::SourceLoadError,
 };
@@ -621,6 +631,131 @@ fn kerning_at(
         .collect())
 }
 
+/// The layout values that an unfinished edit gives one glyph, in place of its committed ones.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GlyphOverride {
+    /// The glyph name.
+    pub name: String,
+    /// Advance width in font units.
+    pub advance: f64,
+    /// The glyph's own anchors: name, x, y.
+    /// `None` keeps the committed anchors, which a composite can take from its components.
+    pub anchors: Option<Vec<(String, f64, f64)>>,
+}
+
+/// Values of a gesture in progress that replace committed layout values.
+///
+/// A gesture stages its edit in a draft that the project receives only at the end of the
+/// gesture.
+/// The text line applies the draft through these overrides, so it follows the pointer in the
+/// same frame and shows the same layout that the commit gives.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LayoutOverrides {
+    /// Glyph values, by glyph name.
+    pub glyphs: Vec<GlyphOverride>,
+    /// Kerning pairs by UFO glyph or group name, in logical order, in font units.
+    /// A pair that the inputs do not have is added.
+    pub kerning: Vec<(String, String, f64)>,
+}
+
+impl LayoutOverrides {
+    /// Whether no value is replaced.
+    pub fn is_empty(&self) -> bool {
+        self.glyphs.is_empty() && self.kerning.is_empty()
+    }
+}
+
+impl LayoutInputs {
+    /// The overrides that change a value of these inputs.
+    ///
+    /// Entries equal to the committed values, and glyphs that the inputs do not have, are left
+    /// out, so a drag of contour points alone gives empty overrides and builds nothing.
+    pub fn changes_in(&self, overrides: &LayoutOverrides) -> LayoutOverrides {
+        let glyphs = overrides
+            .glyphs
+            .iter()
+            .filter(|edit| {
+                self.glyphs.iter().any(|glyph| {
+                    glyph.name == edit.name
+                        && (glyph.advance != edit.advance
+                            || edit
+                                .anchors
+                                .as_ref()
+                                .is_some_and(|anchors| *anchors != glyph.anchors))
+                })
+            })
+            .cloned()
+            .collect();
+        let kerning = overrides
+            .kerning
+            .iter()
+            .filter(|(left, right, value)| {
+                let value = value.round();
+                !self
+                    .kerning
+                    .iter()
+                    .any(|(l, r, v)| l == left && r == right && *v == value)
+            })
+            .cloned()
+            .collect();
+        LayoutOverrides { glyphs, kerning }
+    }
+
+    /// These inputs with `overrides` in place of the committed values.
+    ///
+    /// Kerning values are rounded as [`Self::from_project`] rounds them, so an override and
+    /// the commit of the same value give equal inputs.
+    pub fn with_overrides(&self, overrides: &LayoutOverrides) -> Cow<'_, Self> {
+        if overrides.is_empty() {
+            return Cow::Borrowed(self);
+        }
+        let mut inputs = self.clone();
+        for edit in &overrides.glyphs {
+            if let Some(glyph) = inputs.glyphs.iter_mut().find(|g| g.name == edit.name) {
+                glyph.advance = edit.advance;
+                if let Some(anchors) = &edit.anchors {
+                    glyph.anchors.clone_from(anchors);
+                }
+            }
+        }
+        for (left, right, value) in &overrides.kerning {
+            let value = value.round();
+            match inputs
+                .kerning
+                .iter_mut()
+                .find(|(l, r, _)| l == left && r == right)
+            {
+                Some(pair) => pair.2 = value,
+                None => inputs.kerning.push((left.clone(), right.clone(), value)),
+            }
+        }
+        Cow::Owned(inputs)
+    }
+}
+
+/// What [`LayoutTables::build_live`] built.
+#[derive(Debug)]
+pub struct LiveBuild {
+    /// The shaping font.
+    pub font: ShapingFont,
+    /// Why the current feature text does not compile, on one line with its line number.
+    /// When this is set, `font` was built from the last feature text that compiled.
+    pub feature_error: Option<String>,
+}
+
+/// How many times each step of a build ran, since the builder was made.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LayoutBuildCounts {
+    /// First passes over a feature text.
+    pub first_passes: u64,
+    /// Runs of the mark writer.
+    pub marks: u64,
+    /// Runs of the kerning writer.
+    pub kerning: u64,
+    /// Compiles of the feature text with the generated lookups.
+    pub compiles: u64,
+}
+
 /// Time spent in each step of one build.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LayoutTimings {
@@ -658,6 +793,12 @@ pub struct LayoutTables {
     first_pass: Option<FirstPass>,
     marks: Option<(u64, Arc<FeaRsMarks>)>,
     kerning: Option<(u64, Arc<FeaRsKerns>)>,
+    /// The first-pass key and error of a feature text that did not compile, so a drag with
+    /// broken features does not parse them again on every step.
+    failed: Option<(u64, String)>,
+    /// The last feature text that compiled; see [`Self::build_live`].
+    good_features: Option<String>,
+    counts: LayoutBuildCounts,
 }
 
 impl std::fmt::Debug for LayoutTables {
@@ -666,6 +807,12 @@ impl std::fmt::Debug for LayoutTables {
             .field("first_pass", &self.first_pass.as_ref().map(|pass| pass.key))
             .field("marks", &self.marks.as_ref().map(|(key, _)| *key))
             .field("kerning", &self.kerning.as_ref().map(|(key, _)| *key))
+            .field("failed", &self.failed)
+            .field(
+                "good_features",
+                &self.good_features.as_ref().map(String::len),
+            )
+            .field("counts", &self.counts)
             .finish()
     }
 }
@@ -729,6 +876,21 @@ impl LayoutInputs {
 
 const FEA_ROOT: &str = "features.fea";
 
+/// The first error of `diagnostics` on one line, with its line in `text`.
+fn feature_error(diagnostics: &DiagnosticSet, text: &str) -> String {
+    let Some(error) = diagnostics.diagnostics().iter().find(|d| d.is_error()) else {
+        return format!("{FEA_ROOT}: the feature text does not compile");
+    };
+    // The feature text has no include, so every span is an offset into `text`.
+    let offset = error.span().start.min(text.len());
+    let line = 1 + text.as_bytes()[..offset]
+        .iter()
+        .filter(|byte| **byte == b'\n')
+        .count();
+    let message = error.text().lines().next().unwrap_or_default();
+    format!("{FEA_ROOT} line {line}: {message}")
+}
+
 fn first_pass(inputs: &LayoutInputs, key: u64) -> Result<FirstPass, String> {
     let glyph_map = GlyphMap::new(inputs.glyphs.iter().map(|glyph| glyph.name.as_str()))
         .map_err(|error| format!("glyph order: {error}"))?;
@@ -756,13 +918,13 @@ fn first_pass(inputs: &LayoutInputs, key: u64) -> Result<FirstPass, String> {
         Some(&glyph_map),
         Box::new(resolver),
     )
-    .map_err(|error| format!("features.fea: {error}"))?;
+    .map_err(|error| format!("{FEA_ROOT}: {error}"))?;
     if diagnostics.has_errors() {
-        return Err(format!("features.fea: {}", diagnostics.display()));
+        return Err(feature_error(&diagnostics, &inputs.features));
     }
     let diagnostics = fea_rs::compile::validate::<NopVariationInfo>(&ast, &glyph_map, None);
     if diagnostics.has_errors() {
-        return Err(format!("features.fea: {}", diagnostics.display()));
+        return Err(feature_error(&diagnostics, &inputs.features));
     }
     // fontbe compiles GSUB once here for the glyph closure of the mark and kerning writers.
     let (compilation, _) = fea_rs::compile::compile::<NopVariationInfo, NopFeatureProvider>(
@@ -772,7 +934,7 @@ fn first_pass(inputs: &LayoutInputs, key: u64) -> Result<FirstPass, String> {
         None,
         Opts::new().compile_gpos(false),
     )
-    .map_err(|diagnostics| format!("features.fea: {}", diagnostics.display()))?;
+    .map_err(|diagnostics| feature_error(&diagnostics, &inputs.features))?;
     let output = FeaFirstPassOutput::new(ast, compilation).map_err(|error| error.to_string())?;
     Ok(FirstPass {
         key,
@@ -902,6 +1064,50 @@ impl LayoutTables {
         Self::default()
     }
 
+    /// How many times each step has run; tests use it to prove that an edit rebuilt nothing.
+    pub fn build_counts(&self) -> LayoutBuildCounts {
+        self.counts
+    }
+
+    /// Build the shaping font of the text line from `committed` with `overrides` in place.
+    ///
+    /// This is the one layout function of the editor: a drag step passes the values of the
+    /// gesture as `overrides`, and the commit passes none.
+    /// When the feature text does not compile, the font is built from the last feature text
+    /// that compiled, or from no feature text before one has, with the current values, so
+    /// advances, anchors and kerning still update; `feature_error` says why.
+    pub fn build_live(
+        &mut self,
+        committed: &LayoutInputs,
+        overrides: &LayoutOverrides,
+    ) -> Result<LiveBuild, String> {
+        let inputs = committed.with_overrides(overrides);
+        match self.build(&inputs) {
+            Ok(font) => {
+                if self.good_features.as_deref() != Some(inputs.features.as_str()) {
+                    self.good_features = Some(inputs.features.clone());
+                }
+                Ok(LiveBuild {
+                    font,
+                    feature_error: None,
+                })
+            }
+            Err(error) => {
+                let good = self.good_features.clone().unwrap_or_default();
+                if good == inputs.features {
+                    return Err(error);
+                }
+                let mut retry = inputs.into_owned();
+                retry.features = good;
+                let font = self.build(&retry)?;
+                Ok(LiveBuild {
+                    font,
+                    feature_error: Some(error),
+                })
+            }
+        }
+    }
+
     /// Build a shaping font from `inputs`, reusing what the previous build computed from the
     /// same values.
     pub fn build(&mut self, inputs: &LayoutInputs) -> Result<ShapingFont, String> {
@@ -925,10 +1131,20 @@ impl LayoutTables {
             .as_ref()
             .is_none_or(|pass| pass.key != first_key)
         {
-            self.first_pass = None;
+            if let Some((key, error)) = &self.failed
+                && *key == first_key
+            {
+                return Err(error.clone());
+            }
+            // The cached results stay until a new first pass succeeds, so a feature text that
+            // does not compile leaves those of the last one that did.
+            let pass = first_pass(inputs, first_key).inspect_err(|error| {
+                self.failed = Some((first_key, error.clone()));
+            })?;
+            self.first_pass = Some(pass);
             self.marks = None;
             self.kerning = None;
-            self.first_pass = Some(first_pass(inputs, first_key)?);
+            self.counts.first_passes += 1;
             timings.first_pass = start.elapsed();
         }
         let pass = self
@@ -956,6 +1172,7 @@ impl LayoutTables {
                 let start = Instant::now();
                 run(fontbe::features::create_mark_work(), &be)?;
                 self.marks = Some((mark_key, be.fea_rs_marks.get()));
+                self.counts.marks += 1;
                 timings.marks = start.elapsed();
             }
             if kerning_stale {
@@ -967,6 +1184,7 @@ impl LayoutTables {
                 }
                 run(fontbe::features::create_kerns_work(), &be)?;
                 self.kerning = Some((kerning_key, be.fea_rs_kerns.get()));
+                self.counts.kerning += 1;
                 timings.kerning = start.elapsed();
             }
         }
@@ -983,7 +1201,8 @@ impl LayoutTables {
             Some(&provider),
             Opts::new(),
         )
-        .map_err(|diagnostics| format!("features.fea: {}", diagnostics.display()))?;
+        .map_err(|diagnostics| feature_error(&diagnostics, &inputs.features))?;
+        self.counts.compiles += 1;
         // As fontbe's feature compilation: without a GlyphClassDef in the feature file, GDEF
         // takes the glyph classes from the categories of the source.
         if compilation.gdef_classes.is_none() {
@@ -1022,6 +1241,163 @@ impl LayoutTables {
 /// Build a shaping font from `inputs` with nothing cached.
 pub fn build_shaping_font(inputs: &LayoutInputs) -> Result<ShapingFont, String> {
     LayoutTables::new().build(inputs)
+}
+
+#[cfg(test)]
+mod live_tests {
+    //! [`LayoutTables::build_live`] on the repository-owned Arabic fixture.
+
+    use super::*;
+
+    type Row = (String, f64, f64, f64);
+
+    fn rows(font: &ShapingFont, text: &str, rtl: bool) -> Vec<Row> {
+        font.shape(text, rtl)
+            .unwrap()
+            .iter()
+            .map(|glyph| {
+                (
+                    font.glyph_name(glyph.glyph_id).unwrap_or("?").to_string(),
+                    glyph.x_advance,
+                    glyph.x_offset,
+                    glyph.y_offset,
+                )
+            })
+            .collect()
+    }
+
+    fn arabic() -> LayoutInputs {
+        let project = Project::load(&crate::testing::fonts::arabic_regular_ufo()).unwrap();
+        let source = project.document_sources().next().unwrap().id();
+        LayoutInputs::from_project(&project, source).unwrap()
+    }
+
+    /// The overrides of a drag of the `bottom` anchor and the advance of `beh-ar`, and of the
+    /// reh and alef group pair.
+    fn drag(inputs: &LayoutInputs, step: f64) -> LayoutOverrides {
+        let beh = inputs.glyphs.iter().find(|g| g.name == "beh-ar").unwrap();
+        let anchors = beh
+            .anchors
+            .iter()
+            .map(|(name, x, y)| {
+                let dy = if name == "bottom" { -step } else { 0.0 };
+                (name.clone(), *x + step, *y + dy)
+            })
+            .collect();
+        LayoutOverrides {
+            glyphs: vec![GlyphOverride {
+                name: "beh-ar".into(),
+                advance: beh.advance + step,
+                anchors: Some(anchors),
+            }],
+            kerning: vec![(
+                "public.kern1.reh".into(),
+                "public.kern2.alef".into(),
+                -60.0 - step,
+            )],
+        }
+    }
+
+    const LINES: [&str; 3] = ["بِ بِ", "را", "بلا"];
+
+    #[test]
+    fn drag_steps_equal_a_fresh_build_of_the_committed_values() {
+        let committed = arabic();
+        let mut tables = LayoutTables::new();
+        tables
+            .build_live(&committed, &LayoutOverrides::default())
+            .unwrap();
+        let mut last = None;
+        for step in 1..=5 {
+            let overrides = drag(&committed, f64::from(step) * 7.0);
+            last = Some(tables.build_live(&committed, &overrides).unwrap().font);
+        }
+        let last = last.unwrap();
+        // The commit of the last step's values, built with nothing cached.
+        let edited = committed
+            .with_overrides(&drag(&committed, 35.0))
+            .into_owned();
+        let fresh = build_shaping_font(&edited).unwrap();
+        // The commit, built by the same builder as the drag steps with no overrides.
+        let commit = tables
+            .build_live(&edited, &LayoutOverrides::default())
+            .unwrap()
+            .font;
+        for text in LINES {
+            assert_eq!(rows(&last, text, true), rows(&fresh, text, true), "{text}");
+            assert_eq!(rows(&commit, text, true), rows(&last, text, true), "{text}");
+        }
+        let before = build_shaping_font(&committed).unwrap();
+        assert_ne!(
+            rows(&before, LINES[0], true),
+            rows(&last, LINES[0], true),
+            "the kasras follow the dragged anchor"
+        );
+        assert_ne!(rows(&before, "را", true), rows(&last, "را", true));
+    }
+
+    #[test]
+    fn overrides_equal_to_the_committed_values_change_nothing() {
+        let committed = arabic();
+        assert!(committed.changes_in(&drag(&committed, 0.0)).is_empty());
+        assert_eq!(committed.changes_in(&drag(&committed, 3.0)).glyphs.len(), 1);
+        let mut tables = LayoutTables::new();
+        tables
+            .build_live(&committed, &LayoutOverrides::default())
+            .unwrap();
+        let counts = tables.build_counts();
+        // An advance alone runs neither writer: the kerning writer reads only zero widths.
+        let mut advance = drag(&committed, 4.0);
+        advance.glyphs[0].anchors = None;
+        advance.kerning.clear();
+        tables.build_live(&committed, &advance).unwrap();
+        let after = tables.build_counts();
+        assert_eq!(after.first_passes, counts.first_passes);
+        assert_eq!(after.marks, counts.marks);
+        assert_eq!(after.kerning, counts.kerning);
+        assert_eq!(after.compiles, counts.compiles + 1);
+    }
+
+    #[test]
+    fn a_feature_error_keeps_the_last_features_with_the_current_values() {
+        let committed = arabic();
+        let mut tables = LayoutTables::new();
+        let good = tables
+            .build_live(&committed, &LayoutOverrides::default())
+            .unwrap();
+        assert!(good.feature_error.is_none());
+        assert_eq!(rows(&good.font, "لا", true)[0].0, "lam_alef-ar");
+
+        // Line 3 of the feature text no longer parses.
+        let mut broken = committed.clone();
+        let mut lines: Vec<&str> = broken.features.lines().collect();
+        lines.insert(2, "feature broken { sub ; } broken;");
+        broken.features = lines.join("\n");
+        let built = tables.build_live(&broken, &drag(&broken, 20.0)).unwrap();
+        let error = built.feature_error.expect("the error is reported");
+        assert!(error.starts_with("features.fea line 3:"), "{error}");
+        assert!(!error.contains('\n'), "{error}");
+        // Substitutions are those of the last features that compiled.
+        assert_eq!(rows(&built.font, "لا", true)[0].0, "lam_alef-ar");
+        // Anchors, advances and kerning are the current values.
+        let edited = committed
+            .with_overrides(&drag(&committed, 20.0))
+            .into_owned();
+        let expected = build_shaping_font(&edited).unwrap();
+        for text in LINES {
+            assert_eq!(rows(&built.font, text, true), rows(&expected, text, true));
+        }
+        // The broken text is parsed once, not on every drag step.
+        let counts = tables.build_counts();
+        tables.build_live(&broken, &drag(&broken, 21.0)).unwrap();
+        assert_eq!(tables.build_counts().first_passes, counts.first_passes);
+
+        // Fixing the text clears the error.
+        let fixed = tables
+            .build_live(&committed, &LayoutOverrides::default())
+            .unwrap();
+        assert!(fixed.feature_error.is_none());
+    }
 }
 
 #[cfg(all(test, feature = "integration-fonts"))]

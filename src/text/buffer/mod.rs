@@ -262,6 +262,11 @@ impl TextGlyphInventory {
         self.widths.insert(name, advance);
     }
 
+    /// The advance width of a glyph, when the inventory has it.
+    pub fn advance(&self, name: &str) -> Option<f64> {
+        self.widths.get(name).copied()
+    }
+
     fn has_glyph(&self, name: &str) -> bool {
         self.widths.contains_key(name) || self.outlines.contains_key(name)
     }
