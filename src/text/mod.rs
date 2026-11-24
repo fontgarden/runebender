@@ -9,5 +9,6 @@ pub mod buffer;
 pub mod features;
 pub mod generated;
 pub mod joining;
+pub mod layout_tables;
 pub mod proof_samples;
 pub mod shape;

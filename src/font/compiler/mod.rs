@@ -11,6 +11,7 @@ mod arabic_fixture_tests;
 mod hoi_export;
 mod metadata;
 pub use hoi_export::{HoiBakeOptions, HoiBakeReport};
+pub(crate) use metadata::glyph_category_from_values;
 pub mod proof;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod proof_jobs;
@@ -678,7 +679,7 @@ impl Project {
                 glyph.codepoints = layer.codepoints().map(u32::from).collect();
                 let explicit_category =
                     source_glyph_metadata.and_then(|metadata| metadata.category());
-                glyph.category = metadata::glyph_category_from_values(
+                glyph.category = glyph_category_from_values(
                     &glyph.name,
                     explicit_category,
                     layer.codepoints(),

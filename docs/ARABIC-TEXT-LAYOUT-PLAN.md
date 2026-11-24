@@ -274,6 +274,12 @@ Phases 1 to 4 are the new system; phases 5 to 7 build on it.
       `fontir` and `fontbe` contexts and the IR types have public constructors; `FeaRsKerns` and `FeaRsMarks` implement `FeatureProvider`.
       Open: the cost of one edit, because the writers rebuild every group and the GSUB closure each time.
       A measured test decides between reuse, port, and reuse for marks with a port for kerning.
+      Result, 2026-11-23: reuse.
+      `src/text/layout_tables.rs` runs the mark work and the three kerning works of `fontbe` 1.0.0 on the IR of one location with no axes.
+      On Virtua Grotesk, glyphs, advances and offsets equal the fontc compile with kerning on, for Arabic, Hebrew, Latin and a mixed line.
+      With the first pass and the result of the other writer cached, one anchor edit costs 5 ms and one kerning edit 4 ms on Virtua Grotesk, and an anchor edit costs 32 ms on Amiri.
+      With about 150 glyphs, an anchor edit costs 1 to 2 ms on both fonts.
+      The cost on Amiri is in the mark writer (16 ms), so item 5.2 is necessary.
 - [x] 0.2 Prove marker insertion: a `FeatureProvider` that adds one generated lookup at `# Automatic Code` in `mark`, compiled by `fea-rs` 1.0.0, shaped by `harfrust`.
       Verify with Virtua Grotesk that marks get the same offsets as with fontc.
       Done in `src/text/generated.rs`: glyphs, advances and mark offsets equal the fontc compile for Arabic, Hebrew and Latin samples.

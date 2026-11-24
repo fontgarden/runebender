@@ -82,6 +82,9 @@ nufo = { path = "crates/nufo" }
 babelfont = { git = "https://github.com/simoncozens/babelfont-rs", rev = "29bdedbbfa7d3150b651dbd7c94fce6b79677ca4", default-features = false, features = ["types", "glyphs", "fontir"] }
 fontdrasil = "=1.0.0"
 fontc = { version = "=1.0.0", default-features = false }
+# The kerning and mark writers of fontc, run directly for the layout tables of the text line.
+fontbe = "=1.0.0"
+fontir = "=1.0.0"
 kurbo = "0.13"
 linesweeper = "0.4"
 # The NeuralType engine, to draw a trained font in the proof strip. Pinned to a commit of

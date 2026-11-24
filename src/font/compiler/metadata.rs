@@ -116,7 +116,7 @@ pub(super) fn apply_kerning(
 }
 
 /// Resolve a compiler category from canonical explicit data or inferred layer values.
-pub(super) fn glyph_category_from_values<'a>(
+pub(crate) fn glyph_category_from_values<'a>(
     glyph_name: &str,
     explicit: Option<&OpenTypeGlyphCategory>,
     codepoints: impl IntoIterator<Item = char>,

@@ -167,19 +167,7 @@ impl ShapingFont {
         if source.glyphs.is_empty() {
             return Err("no glyphs to shape with".into());
         }
-        let upem = source.units_per_em;
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "the range check above keeps it inside u16"
-        )]
-        let upem_u16 = if (16.0..=16384.0).contains(&upem) {
-            upem as u16
-        } else {
-            1000
-        };
-
-        let names: Vec<String> = source.glyphs.iter().map(|g| g.name.clone()).collect();
-        let glyph_map = GlyphMap::new(names.iter().map(String::as_str))
+        let glyph_map = GlyphMap::new(source.glyphs.iter().map(|g| g.name.as_str()))
             .map_err(|error| format!("glyph order: {error}"))?;
 
         let compilation = Compiler::<_, NopVariationInfo>::new(FEA_ROOT, &glyph_map)
@@ -190,6 +178,32 @@ impl ShapingFont {
             })
             .compile()
             .map_err(|e| format!("features.fea: {e}"))?;
+        Self::from_tables(source.units_per_em, &source.glyphs, &compilation)
+    }
+
+    /// Build a shaping font from layout tables that `fea-rs` has already compiled.
+    ///
+    /// `glyphs` gives the glyph order, advances and code points; `compilation` gives GSUB, GPOS
+    /// and GDEF for the same glyph order.
+    pub fn from_tables(
+        units_per_em: f64,
+        glyphs: &[ShapingGlyph],
+        compilation: &fea_rs::compile::Compilation,
+    ) -> Result<Self, String> {
+        if glyphs.is_empty() {
+            return Err("no glyphs to shape with".into());
+        }
+        let upem = units_per_em;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the range check above keeps it inside u16"
+        )]
+        let upem_u16 = if (16.0..=16384.0).contains(&upem) {
+            upem as u16
+        } else {
+            1000
+        };
+        let names: Vec<String> = glyphs.iter().map(|g| g.name.clone()).collect();
 
         let mut builder = FontBuilder::new();
 
@@ -203,13 +217,12 @@ impl ShapingFont {
         builder.add_table(&head).map_err(|e| e.to_string())?;
 
         let glyph_count =
-            u16::try_from(source.glyphs.len()).map_err(|_| "more than 65535 glyphs".to_string())?;
+            u16::try_from(glyphs.len()).map_err(|_| "more than 65535 glyphs".to_string())?;
         builder
             .add_table(&Maxp::new(glyph_count))
             .map_err(|e| e.to_string())?;
 
-        let metrics: Vec<LongMetric> = source
-            .glyphs
+        let metrics: Vec<LongMetric> = glyphs
             .iter()
             .map(|glyph| LongMetric {
                 advance: u16::try_from(round_units(glyph.advance.clamp(0.0, f64::from(u16::MAX))))
@@ -229,8 +242,7 @@ impl ShapingFont {
             .add_table(&Hmtx::new(metrics, Vec::new()))
             .map_err(|e| e.to_string())?;
 
-        let mappings: Vec<(char, GlyphId)> = source
-            .glyphs
+        let mappings: Vec<(char, GlyphId)> = glyphs
             .iter()
             .enumerate()
             .flat_map(|(gid, glyph)| {
