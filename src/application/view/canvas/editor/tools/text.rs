@@ -32,6 +32,7 @@ pub(in super::super) fn begin_kern(editor: &mut EditorWidget, at: Point) -> bool
         second: if scope[1] { gb.unwrap_or(b) } else { b }.into(),
         boundary,
         start_x: at.x,
+        start_offset: editor.session.viewport.offset.x,
         rtl,
         original,
         value: original,
@@ -40,10 +41,13 @@ pub(in super::super) fn begin_kern(editor: &mut EditorWidget, at: Point) -> bool
     true
 }
 
+/// Follow the pointer at design `x` in the current view with the kerning value of the drag.
 pub(in super::super) fn move_kern(editor: &mut EditorWidget, x: f64) -> Option<EditorEvent> {
+    let viewport = editor.session.viewport.clone();
     let Drag::Kern {
         boundary,
         start_x,
+        start_offset,
         rtl,
         original,
         value,
@@ -52,6 +56,8 @@ pub(in super::super) fn move_kern(editor: &mut EditorWidget, x: f64) -> Option<E
     else {
         return None;
     };
+    // The same pointer in the view of the press: the anchored view moves under the pointer.
+    let x = x + (viewport.offset.x - *start_offset) / viewport.zoom;
     let previous = *value;
     let step = runebender::outline::point_ops::DOT_GRID_SPACING;
     let delta = if *rtl { *start_x - x } else { x - *start_x };
@@ -64,7 +70,13 @@ pub(in super::super) fn move_kern(editor: &mut EditorWidget, x: f64) -> Option<E
         return None;
     }
     let gap = Some((*boundary, *value - *original));
-    editor.text.as_mut()?.buffer.preview_drag_gap(gap);
+    // On a master the line is shaped with the dragged value, through the same layout as the
+    // commit. Between masters the layout font is compiled, so the pair is moved after shaping.
+    if editor.text.as_ref()?.has_live_layout() {
+        editor.follow_gesture();
+    } else {
+        editor.text.as_mut()?.buffer.preview_drag_gap(gap);
+    }
     Some(EditorEvent::PreviewKern(gap))
 }
 
@@ -87,6 +99,8 @@ pub(in super::super) fn finish_kern(
     {
         text.buffer.preview_drag_gap(None);
     }
+    // Back to the committed values; the kerning commit brings the new ones.
+    editor.follow_gesture();
     Some(if !cancelled && value != original {
         EditorEvent::KernPair(first, second, value)
     } else {

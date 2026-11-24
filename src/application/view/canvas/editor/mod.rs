@@ -18,6 +18,7 @@ mod menu;
 mod metrics_card;
 mod paint;
 mod pointer;
+mod text_line;
 mod thickness;
 mod tools;
 mod view;
@@ -154,6 +155,9 @@ enum Drag {
         second: String,
         boundary: usize,
         start_x: f64,
+        /// The horizontal viewport offset at the press. The view moves to keep the edited
+        /// glyph in place as the kerning changes, so the pointer is measured in this view.
+        start_offset: f64,
         rtl: bool,
         original: f64,
         value: f64,

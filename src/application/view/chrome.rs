@@ -334,9 +334,11 @@ pub(crate) fn status(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
         && let Some(status) = {
             let live = app.font.live_layout(&app.axis_values);
             match (live.error, live.diagnostics.first()) {
-                (Some(error), _) => {
-                    Some(format!("Layout from the last features that compiled: {error}"))
-                }
+                // One line: the error names the line of the feature text that does not compile.
+                (Some(error), _) => Some(format!(
+                    "Layout from the last features that compiled: {}",
+                    error.lines().next().unwrap_or_default()
+                )),
                 (None, Some(first)) => Some(match live.diagnostics.len() {
                     1 => format!("Layout from the nearest master for {first}"),
                     more => format!(

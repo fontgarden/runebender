@@ -439,6 +439,7 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
         // only replaces it when the app supplies a different one: a new
         // master, a reopened glyph, or the tool being picked up.
         if self.text != element.widget.text_inputs {
+            let mut refresh = None;
             match (&self.text, element.widget.text.as_mut()) {
                 // A document/tab switch restores that tab's parked text rather
                 // than carrying the previous widget-owned buffer across.
@@ -468,12 +469,12 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
                     element.ctx.request_layout();
                 }
                 // Same tool, new master or edited glyph: keep what has
-                // been typed and re-read the metrics.
+                // been typed and re-read the metrics, with the edited glyph kept in place.
                 (Some(inputs), Some(state)) => {
                     if !matches!(element.widget.drag, Drag::Kern { .. }) {
                         state.buffer.preview_drag_gap(None);
                     }
-                    state.refresh(inputs);
+                    refresh = Some(inputs);
                 }
                 (Some(inputs), None) => {
                     element.widget.text = Some(
@@ -484,6 +485,9 @@ impl<F: Fn(&mut Workspace, EditorEvent) + 'static> View<Workspace, (), ViewCtx> 
                 }
                 // Park the buffer between tool changes; only Text handles typing.
                 (None, _) => {}
+            }
+            if let Some(inputs) = refresh {
+                element.widget.refresh_text(inputs);
             }
             element.widget.text_inputs = self.text.clone();
             dirty = true;

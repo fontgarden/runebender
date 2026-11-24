@@ -645,6 +645,52 @@ impl Session {
             .or(self.canonical_base.as_ref())
     }
 
+    /// The layout values of the layer that a pointer gesture is changing, before the gesture
+    /// ends and the workspace commits them: the layer, and the glyph's advance and own
+    /// anchors (`None` when it has none of its own).
+    ///
+    /// A point, anchor, sidebearing or component drag stages its edit in a draft that only
+    /// the end of the gesture hands to the project, so the text line reads these values to
+    /// follow the drag in the same frame.
+    pub(crate) fn gesture_layout_values(
+        &self,
+    ) -> Option<(
+        &runebender::font::variable::LayerId,
+        runebender::text::layout_tables::GlyphOverride,
+    )> {
+        let transaction = self
+            .active_point_drag
+            .as_ref()
+            .map(|drag| &drag.transaction)
+            .or_else(|| {
+                self.active_metric_drag
+                    .as_ref()
+                    .map(|drag| &drag.transaction)
+            })
+            .or_else(|| {
+                self.active_component_drag
+                    .as_ref()
+                    .map(|drag| &drag.gesture.transaction)
+            })?;
+        let layer = transaction.draft().view();
+        // With no resolver this is the layer's own anchors, in the order the committed
+        // layout inputs read them.
+        let anchors: Vec<(String, f64, f64)> =
+            runebender::font::composites::effective_document_anchors(layer, |_| None)
+                .into_iter()
+                .map(|(name, at)| (name, at.x, at.y))
+                .collect();
+        let address = transaction.address();
+        Some((
+            &address.layer,
+            runebender::text::layout_tables::GlyphOverride {
+                name: address.glyph.clone(),
+                advance: layer.width(),
+                anchors: (!anchors.is_empty()).then_some(anchors),
+            },
+        ))
+    }
+
     /// Stable canonical target of this session, including an in-progress edit draft.
     pub(crate) fn canonical_address(
         &self,

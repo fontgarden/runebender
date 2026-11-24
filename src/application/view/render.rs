@@ -2458,6 +2458,16 @@ mod idle_tests {
         settles(app);
     }
 
+    /// The text line compares its inputs on every rebuild, live layout source included, so an
+    /// editor with a line and no change in state must not render again.
+    #[test]
+    fn an_idle_editor_with_a_text_line_requests_no_frame() {
+        let mut app = workspace_for_layout();
+        app.set_editor_text("AAA".into());
+        assert!(app.has_text_session);
+        settles(app);
+    }
+
     fn settles(app: crate::application::workspace::Workspace) {
         let logic = |app: &mut crate::application::workspace::Workspace| sized_box(app_logic(app));
         let mut headless = Headless::new(app, logic, (1400, 900), 1.0);

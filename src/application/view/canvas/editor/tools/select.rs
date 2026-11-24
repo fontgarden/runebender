@@ -200,6 +200,7 @@ pub(in super::super) fn drag(
         Drag::AdvanceLine => {
             let d = glyph_design;
             editor.session.drag_advance(d.x.round());
+            editor.follow_gesture();
             ctx.request_render();
         }
         Drag::LeftLine { last_x } => {
@@ -210,6 +211,7 @@ pub(in super::super) fn drag(
             if dx != 0.0 {
                 *last_x += dx * zoom;
                 editor.session.shift_glyph(dx);
+                editor.follow_gesture();
                 ctx.request_render();
             }
         }
@@ -218,6 +220,7 @@ pub(in super::super) fn drag(
             let delta = design - *last;
             *last = design;
             if editor.session.drag_component_by(delta.x, delta.y) {
+                editor.follow_gesture();
                 ctx.request_render();
             }
         }
@@ -230,6 +233,8 @@ pub(in super::super) fn drag(
             // Option moves on-curve points without their handles.
             let independent = current.modifiers.alt();
             if editor.session.drag_points_to(total, independent) {
+                // Selected anchors move with the points, and marks in the line follow them.
+                editor.follow_gesture();
                 ctx.request_render();
             }
         }
@@ -262,6 +267,8 @@ pub(in super::super) fn release(
                 editor.session.end_point_drag();
             }
             editor.drag = Drag::None;
+            // Back to the committed values; the commit that `emit` starts brings the new ones.
+            editor.follow_gesture();
             editor.emit(ctx, !cancelled);
         }
         // A cancelled marquee leaves the selection as it was.
@@ -335,6 +342,7 @@ pub(in super::super) fn release(
                 editor.session.end_metric_drag();
             }
             editor.drag = Drag::None;
+            editor.follow_gesture();
             editor.emit(ctx, !cancelled);
         }
         Drag::Enter { .. } => editor.drag = Drag::None,
@@ -345,6 +353,7 @@ pub(in super::super) fn release(
                 editor.session.end_component_drag();
             }
             editor.drag = Drag::None;
+            editor.follow_gesture();
             editor.emit(ctx, !cancelled);
         }
         _ => {}

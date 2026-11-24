@@ -263,8 +263,11 @@ impl FontModel {
     /// master and is listed in `diagnostics`.
     /// The tables are rebuilt only when the layout revision, the active master or the location
     /// changes; moving contour points changes none of them.
-    /// When the feature code does not compile, `font` is the last one that did and `error`
-    /// says why; see `docs/ARABIC-TEXT-LAYOUT-PLAN.md`.
+    /// When the feature code does not compile, `font` is built from the last feature code that
+    /// compiled with the current values, and `error` says why on one line; see
+    /// `docs/ARABIC-TEXT-LAYOUT-PLAN.md`.
+    /// `source` lets the edit canvas build the same font with the values of a gesture that is
+    /// not committed yet; see [`LiveLayoutSource`].
     pub(crate) fn live_layout(&self, values: &[f64]) -> LiveLayout {
         let normalized = self.normalized_values(values);
         let key = (
@@ -278,23 +281,28 @@ impl FontModel {
             .unwrap_or_else(|error| error.into_inner());
         if cache.key.as_ref() != Some(&key) {
             cache.key = Some(key);
-            let read = self
+            let source = self
                 .project
                 .source_id(self.active())
-                .ok_or_else(|| "the active source is not loaded".to_string())
-                .and_then(|source| {
-                    use runebender::text::layout_tables::LayoutInputs;
-                    if self.at_active_master(values) {
-                        LayoutInputs::from_project(&self.project, source)
-                            .map(|inputs| (inputs, Vec::new()))
-                    } else {
-                        LayoutInputs::at_location(
-                            &self.project,
-                            &self.normalized_location(values),
-                            source,
-                        )
-                    }
-                });
+                .ok_or_else(|| "the active source is not loaded".to_string());
+            cache.layer = source
+                .clone()
+                .ok()
+                .and_then(|source| self.project.document_source(source))
+                .map(|source| source.default_layer());
+            let read = source.and_then(|source| {
+                use runebender::text::layout_tables::LayoutInputs;
+                if self.at_active_master(values) {
+                    LayoutInputs::from_project(&self.project, source)
+                        .map(|inputs| (inputs, Vec::new()))
+                } else {
+                    LayoutInputs::at_location(
+                        &self.project,
+                        &self.normalized_location(values),
+                        source,
+                    )
+                }
+            });
             match read {
                 Ok((inputs, diagnostics)) => {
                     cache.diagnostics = Arc::new(diagnostics);
@@ -305,22 +313,44 @@ impl FontModel {
                             .map(|glyph| (glyph.name.clone(), glyph.advance))
                             .collect(),
                     );
-                    match cache.tables.build(&inputs) {
-                        Ok(font) => {
-                            cache.font = Some(Arc::new(font.into_bytes()));
-                            cache.error = None;
+                    let inputs = Arc::new(inputs);
+                    let built = lock_tables(&cache.tables).build_live(
+                        &inputs,
+                        &runebender::text::layout_tables::LayoutOverrides::default(),
+                    );
+                    match built {
+                        Ok(built) => {
+                            cache.font = Some(Arc::new(built.font.into_bytes()));
+                            cache.error = built.feature_error;
+                            cache.inputs = Some(inputs);
                         }
-                        Err(error) => cache.error = Some(error),
+                        Err(error) => {
+                            cache.error = Some(error);
+                            cache.inputs = None;
+                        }
                     }
                 }
-                Err(error) => cache.error = Some(error),
+                Err(error) => {
+                    cache.error = Some(error);
+                    cache.inputs = None;
+                }
             }
         }
+        let source = cache
+            .inputs
+            .clone()
+            .zip(cache.layer.clone())
+            .map(|(inputs, layer)| LiveLayoutSource {
+                inputs,
+                tables: cache.tables.clone(),
+                layer,
+            });
         LiveLayout {
             font: cache.font.clone(),
             error: cache.error.clone(),
             diagnostics: cache.diagnostics.clone(),
             advances: cache.advances.clone(),
+            source,
         }
     }
 
@@ -1183,6 +1213,96 @@ mod tests {
     use runebender::font::canonical_metadata::KerningParticipant;
     use runebender::font::project::SourceInput;
 
+    /// Glyph name, advance and offsets of each shaped glyph of `text`, right to left.
+    fn live_rows(font: &FontModel, text: &str) -> Vec<(String, f64, f64, f64)> {
+        let bytes = font.live_layout(&[]).font.expect("a live layout font");
+        let shaping = runebender::text::shape::ShapingFont::from_bytes((*bytes).clone())
+            .expect("the live layout font loads");
+        shaping
+            .shape(text, true)
+            .expect("the text shapes")
+            .iter()
+            .map(|glyph| {
+                (
+                    shaping
+                        .glyph_name(glyph.glyph_id)
+                        .unwrap_or("?")
+                        .to_string(),
+                    glyph.x_advance,
+                    glyph.x_offset,
+                    glyph.y_offset,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_feature_error_keeps_the_last_features_with_the_live_values() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/arabic/Arabic-Regular.ufo");
+        let mut font = FontModel::open(&path).expect("the fixture opens");
+        assert!(font.live_layout(&[]).error.is_none());
+        assert_eq!(live_rows(&font, "لا")[0].0, "lam_alef-ar");
+        let kasra_before = live_rows(&font, "بِ");
+
+        let good = font.feature_text().to_string();
+        let mut lines: Vec<&str> = good.lines().collect();
+        lines.insert(2, "feature broken { sub ; } broken;");
+        assert!(font.project.set_feature_text(lines.join("\n")));
+        let error = font.live_layout(&[]).error.expect("the error is reported");
+        assert!(error.starts_with("features.fea line 3:"), "{error}");
+
+        // An advance and an anchor edit still reach the line.
+        let layer = font
+            .project
+            .document_sources()
+            .next()
+            .expect("a source")
+            .default_layer();
+        font.project
+            .edit_document_layer("beh-ar", &layer, |draft| {
+                let width = draft.view().width();
+                draft.set_width(width + 30.0)?;
+                let bottom = draft
+                    .view()
+                    .anchors()
+                    .find(|anchor| anchor.name() == "bottom")
+                    .expect("beh has a bottom anchor");
+                let to = bottom.position() + kurbo::Vec2::new(25.0, -15.0);
+                draft.set_anchor_position(bottom.id(), to)?;
+                Ok(())
+            })
+            .expect("the edit commits");
+        let live = font.live_layout(&[]);
+        assert_eq!(live.error.as_deref(), Some(error.as_str()));
+        assert_eq!(
+            live_rows(&font, "لا")[0].0,
+            "lam_alef-ar",
+            "substitutions are those of the last features that compiled"
+        );
+        let kasra_after = live_rows(&font, "بِ");
+        let beh = |rows: &[(String, f64, f64, f64)]| {
+            rows.iter()
+                .find(|row| row.0 == "beh-ar")
+                .cloned()
+                .expect("beh")
+        };
+        let kasra = |rows: &[(String, f64, f64, f64)]| {
+            rows.iter()
+                .find(|row| row.0 == "kasra-ar")
+                .cloned()
+                .expect("kasra")
+        };
+        assert_eq!(beh(&kasra_after).1, beh(&kasra_before).1 + 30.0);
+        assert_eq!(kasra(&kasra_after).3, kasra(&kasra_before).3 - 15.0);
+
+        assert!(font.project.set_feature_text(good));
+        assert!(
+            font.live_layout(&[]).error.is_none(),
+            "fixing the text clears it"
+        );
+    }
+
     fn two_master_model() -> (PathBuf, FontModel) {
         let dir = std::env::temp_dir().join(format!(
             "runebender-xilem-glyph-commands-{}-{}",
@@ -1515,6 +1635,73 @@ pub(crate) struct LiveLayout {
     pub(crate) diagnostics: Arc<Vec<runebender::text::layout_tables::LayoutDiagnostic>>,
     /// The advance of each glyph at the location.
     pub(crate) advances: Arc<HashMap<String, f64>>,
+    /// The committed inputs of `font` and its builder, when `font` was built from them.
+    pub(crate) source: Option<LiveLayoutSource>,
+}
+
+/// The committed layout inputs of the active master and the builder that turned them into
+/// the live layout font.
+///
+/// The edit canvas keeps this with its text line.
+/// During a gesture it builds the shaping font from these inputs with the values of the
+/// gesture in place, through the same [`LayoutTables::build_live`] call that the commit takes,
+/// and with the same caches, so a drag step rebuilds only the lookups whose values changed.
+///
+/// [`LayoutTables::build_live`]: runebender::text::layout_tables::LayoutTables::build_live
+#[derive(Clone, Debug)]
+pub(crate) struct LiveLayoutSource {
+    inputs: Arc<runebender::text::layout_tables::LayoutInputs>,
+    tables: Arc<std::sync::Mutex<runebender::text::layout_tables::LayoutTables>>,
+    /// The layer whose values `inputs` hold: the default layer of the active master.
+    layer: runebender::font::variable::LayerId,
+}
+
+impl PartialEq for LiveLayoutSource {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inputs, &other.inputs) && Arc::ptr_eq(&self.tables, &other.tables)
+    }
+}
+
+impl LiveLayoutSource {
+    /// Whether an edit of `layer` changes the values that these inputs hold.
+    pub(crate) fn reads_layer(&self, layer: &runebender::font::variable::LayerId) -> bool {
+        self.layer == *layer
+    }
+
+    /// The overrides that change a committed value; see
+    /// [`LayoutInputs::changes_in`](runebender::text::layout_tables::LayoutInputs::changes_in).
+    pub(crate) fn changes_in(
+        &self,
+        overrides: &runebender::text::layout_tables::LayoutOverrides,
+    ) -> runebender::text::layout_tables::LayoutOverrides {
+        self.inputs.changes_in(overrides)
+    }
+
+    /// The shaping font of the committed values with `overrides` in place, as bytes.
+    pub(crate) fn build(
+        &self,
+        overrides: &runebender::text::layout_tables::LayoutOverrides,
+    ) -> Option<Arc<Vec<u8>>> {
+        match lock_tables(&self.tables).build_live(&self.inputs, overrides) {
+            Ok(built) => Some(Arc::new(built.font.into_bytes())),
+            Err(error) => {
+                runebender::text::shape::log_shaping_failure(&error);
+                None
+            }
+        }
+    }
+
+    /// How many times each step of the shared builder has run.
+    #[cfg(test)]
+    pub(crate) fn build_counts(&self) -> runebender::text::layout_tables::LayoutBuildCounts {
+        lock_tables(&self.tables).build_counts()
+    }
+}
+
+fn lock_tables(
+    tables: &std::sync::Mutex<runebender::text::layout_tables::LayoutTables>,
+) -> std::sync::MutexGuard<'_, runebender::text::layout_tables::LayoutTables> {
+    tables.lock().unwrap_or_else(|error| error.into_inner())
 }
 
 /// The layout revision, the active master and the bits of the normalized location of a build.
@@ -1525,7 +1712,11 @@ type LiveLayoutKey = (u64, usize, Vec<u64>);
 struct LiveLayoutCache {
     /// The state of the last build attempt.
     key: Option<LiveLayoutKey>,
-    tables: runebender::text::layout_tables::LayoutTables,
+    tables: Arc<std::sync::Mutex<runebender::text::layout_tables::LayoutTables>>,
+    /// The committed inputs of `font`, when the last build attempt succeeded.
+    inputs: Option<Arc<runebender::text::layout_tables::LayoutInputs>>,
+    /// The layer that `inputs` were read from.
+    layer: Option<runebender::font::variable::LayerId>,
     font: Option<Arc<Vec<u8>>>,
     error: Option<String>,
     diagnostics: Arc<Vec<runebender::text::layout_tables::LayoutDiagnostic>>,

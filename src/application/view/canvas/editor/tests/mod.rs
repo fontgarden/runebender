@@ -11,6 +11,7 @@ mod painting;
 mod pen;
 mod selection;
 mod text;
+mod text_line;
 mod tools;
 mod workspace_sync;
 

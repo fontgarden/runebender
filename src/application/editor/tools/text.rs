@@ -17,7 +17,8 @@ use std::sync::Arc;
 use masonry::kurbo::{BezPath, Point};
 use runebender::text::buffer::{TextBuffer, TextDirection, TextGlyphInventory, TextKerningModel};
 
-use crate::application::font_model::FontModel;
+use crate::application::font_model::{FontModel, LiveLayoutSource};
+use runebender::text::layout_tables::LayoutOverrides;
 
 /// What the view can carry.
 ///
@@ -37,6 +38,9 @@ pub(crate) struct TextInputs {
     /// The glyph being edited and its unsaved outline, drawn in place of its entry above.
     live_outline: Option<(String, Arc<BezPath>)>,
     compiled: Option<Arc<Vec<u8>>>,
+    /// The committed inputs and builder of `compiled`, when it is the live layout of the
+    /// active master; a gesture shapes the line from them with its own values in place.
+    live_layout: Option<LiveLayoutSource>,
     normalized: Vec<f64>,
     line_height: f64,
     ascender: f64,
@@ -85,6 +89,7 @@ impl PartialEq for TextInputs {
                 (None, None) => true,
                 _ => false,
             }
+            && self.live_layout == other.live_layout
             && match (&self.live_outline, &other.live_outline) {
                 (Some((a_name, a)), Some((b_name, b))) => a_name == b_name && same(a, b),
                 (None, None) => true,
@@ -415,6 +420,7 @@ impl TextInputs {
             outlines: Self::model_outlines(font),
             live_outline: None,
             compiled: None,
+            live_layout: None,
             normalized: Vec::new(),
             line_height: (font.units_per_em().max(font.ascender()) - font.descender()).max(1.0),
             ascender: font.ascender(),
@@ -466,6 +472,7 @@ impl TextInputs {
         let live = font.live_layout(values);
         if let Some(tables) = live.font.clone() {
             self.compiled = Some(tables);
+            self.live_layout = live.source.clone();
         }
         // At a master the advances in the inventory and the outlines are already live.
         if font.at_active_master(values) {
@@ -594,6 +601,29 @@ pub(crate) struct TextState {
     /// Outlines by glyph name, so painting does not touch the font.
     outlines: GlyphOutlines,
     live_outline: Option<(String, Arc<BezPath>)>,
+    /// What the line is shaped from when no gesture is in progress.
+    committed: CommittedLayout,
+    /// The values of the gesture in progress that the line is shaped with; empty without one.
+    overrides: LayoutOverrides,
+}
+
+/// The shaping inputs of the line as the app supplied them, from committed values.
+struct CommittedLayout {
+    compiled: Option<Arc<Vec<u8>>>,
+    normalized: Vec<f64>,
+    inventory: Arc<TextGlyphInventory>,
+    source: Option<LiveLayoutSource>,
+}
+
+impl CommittedLayout {
+    fn of(inputs: &TextInputs) -> Self {
+        Self {
+            compiled: inputs.compiled.clone(),
+            normalized: inputs.normalized.clone(),
+            inventory: inputs.inventory.clone(),
+            source: inputs.live_layout.clone(),
+        }
+    }
 }
 
 impl TextState {
@@ -624,6 +654,7 @@ impl TextState {
             outlines: GlyphOutlines::default(),
             live_outline: None,
             compiled: None,
+            live_layout: None,
             normalized: Vec::new(),
             line_height: 1000.0,
             ascender: 800.0,
@@ -681,6 +712,8 @@ impl TextState {
             descender: inputs.descender,
             outlines: inputs.outlines.clone(),
             live_outline: inputs.live_outline.clone(),
+            committed: CommittedLayout::of(inputs),
+            overrides: LayoutOverrides::default(),
         }
     }
 
@@ -719,6 +752,70 @@ impl TextState {
         self.line_height = inputs.line_height;
         self.ascender = inputs.ascender;
         self.descender = inputs.descender;
+        // New inputs hold every committed value; a gesture still in progress applies its
+        // values again through `follow`.
+        self.committed = CommittedLayout::of(inputs);
+        self.overrides = LayoutOverrides::default();
+    }
+
+    /// Whether the line is shaped by the live layout of a master, which `follow` can rebuild
+    /// with the values of a gesture.
+    pub(crate) fn has_live_layout(&self) -> bool {
+        self.committed.source.is_some()
+    }
+
+    /// Whether an edit of `layer` changes the layout values that the line is shaped from.
+    pub(crate) fn reads_layer(&self, layer: &runebender::font::variable::LayerId) -> bool {
+        self.committed
+            .source
+            .as_ref()
+            .is_some_and(|source| source.reads_layer(layer))
+    }
+
+    /// Shape the line with the values of a gesture in progress in place of the committed ones.
+    ///
+    /// The shaping font comes from the same builder and the same call as the committed one,
+    /// so a drag step and the commit of the same values give the same layout.
+    /// Empty overrides restore the committed font.
+    /// Overrides equal to the committed values build nothing.
+    /// Returns whether the shaping inputs changed.
+    pub(crate) fn follow(&mut self, overrides: &LayoutOverrides) -> bool {
+        let Some(source) = &self.committed.source else {
+            return false;
+        };
+        let overrides = source.changes_in(overrides);
+        if overrides == self.overrides {
+            return false;
+        }
+        let (compiled, inventory) = if overrides.is_empty() {
+            (
+                self.committed.compiled.clone(),
+                self.committed.inventory.clone(),
+            )
+        } else {
+            let Some(font) = source.build(&overrides) else {
+                return false;
+            };
+            // Nominal widths, and the right edge of a right-to-left line, read the inventory.
+            let mut inventory = (*self.committed.inventory).clone();
+            for glyph in &overrides.glyphs {
+                if inventory.advance(&glyph.name).is_some() {
+                    inventory.set_advance(glyph.name.clone(), glyph.advance);
+                }
+            }
+            (Some(font), Arc::new(inventory))
+        };
+        self.overrides = overrides;
+        self.buffer.set_shared_glyph_inventory(inventory);
+        self.buffer
+            .set_compiled_font(compiled, self.committed.normalized.clone());
+        self.buffer.refresh_shaping();
+        true
+    }
+
+    /// The active sort and its layout origin.
+    pub(crate) fn active_placement(&self) -> Option<(usize, Point)> {
+        Some((self.buffer.active_sort()?, self.active_origin()?))
     }
 
     fn outline(&self, name: &str) -> Option<Arc<BezPath>> {
@@ -1026,6 +1123,7 @@ mod tests {
             outlines: GlyphOutlines::default(),
             live_outline: None,
             compiled: None,
+            live_layout: None,
             normalized: Vec::new(),
             line_height: 1000.0,
             ascender: 800.0,
@@ -1074,6 +1172,7 @@ mod tests {
             outlines: GlyphOutlines::default(),
             live_outline: None,
             compiled: None,
+            live_layout: None,
             normalized: Vec::new(),
             line_height: 1000.0,
             ascender: 800.0,
@@ -1112,6 +1211,7 @@ mod tests {
             outlines: GlyphOutlines::default(),
             live_outline: None,
             compiled: None,
+            live_layout: None,
             normalized: Vec::new(),
             line_height: 1000.0,
             ascender: 800.0,
