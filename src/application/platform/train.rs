@@ -78,6 +78,16 @@ pub(crate) struct TrainState {
     pub(crate) versions: Vec<ModelVersion>,
 }
 
+impl Drop for TrainState {
+    /// A run belongs to its document: stop the script when the document closes.
+    /// Without this a run continued for up to its 24 hour deadline with no window to show it.
+    fn drop(&mut self) {
+        if let Some(job) = &self.job {
+            job.cancel.cancel();
+        }
+    }
+}
+
 /// The folder beside `source` that holds its versions: `Name.models` next to `Name.nufo`.
 pub(crate) fn models_dir(source: &Path) -> PathBuf {
     let stem = source.file_stem().unwrap_or_default().to_string_lossy();
