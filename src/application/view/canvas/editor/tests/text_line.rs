@@ -918,3 +918,31 @@ fn the_metrics_card_warns_about_a_pair_that_the_export_leaves_out() {
     );
     assert_eq!(editor.kern_export_warning("one-ar", "two-ar"), None);
 }
+
+/// A drag of the `exit` anchor of the medial seen moves the cursive attachment of the whole
+/// word in the same frame, and the commit moves nothing.
+/// The gesture overrides of item 3.4 already carry the anchor to the live layout, so this
+/// test only proves it.
+#[test]
+fn an_exit_anchor_drag_moves_the_cursive_attachment_of_the_word() {
+    const TEXT: &str = "سسس";
+    let mut app = arabic_workspace("seen-ar.medi");
+    let mut editor = line_editor(&app, TEXT);
+    let before = line(&editor);
+    // Logical order: init, medi, fina; the fina is at the baseline.
+    let y = |line: &[(usize, Point)], index: usize| origin_of(line, index).y;
+    assert_eq!(
+        [y(&before, 0), y(&before, 1), y(&before, 2)],
+        [-160.0, -80.0, 0.0]
+    );
+    drag_anchor(&mut editor, "exit", &[(0.0, 10.0), (0.0, 20.0)]);
+    let dragged = line(&editor);
+    // The medial seen attaches 20 units lower to the final, and the initial follows it.
+    assert_eq!(
+        [y(&dragged, 0), y(&dragged, 1), y(&dragged, 2)],
+        [-180.0, -100.0, 0.0]
+    );
+    release_and_commit(&mut app, &mut editor, TEXT);
+    assert_eq!(line(&editor), dragged, "the commit does not move the line");
+    assert_eq!(fresh_line(&app, TEXT), dragged);
+}

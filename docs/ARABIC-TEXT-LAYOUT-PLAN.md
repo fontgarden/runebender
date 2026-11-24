@@ -372,6 +372,7 @@ Phases 1 to 4 are the new system; phases 5 to 7 build on it.
 - [ ] 6.3 Letters from a skeleton and dot marks through `ccmp`.
       Generator done 2026-11-24: `ccmp_decomposition` in `src/text/arabic_features.rs` writes the decompositions of empty letters from `assets/data/arabic-skeletons.toml` or the `com.runebender.compose` recipe; multi-glyph clusters in the text buffer remain (package A).
 - [ ] 6.4 Cursive attachment editing: entry and exit anchors, whole-word preview.
+      Engine half done 2026-11-24: the gesture overrides of item 3.4 already move the cursive attachment of the whole line in the frame of an `entry` or `exit` drag at a master; a test on `سسس` proves it and no code changed. The overlay drawing of package C remains.
 - [ ] 6.5 Ligature component anchors: display and editing.
       Engine done 2026-11-24: `src/font/ligature_anchors.rs` classifies anchor names as fontc does and writes proposed `name_N`, `_N` and `caret_N` anchors as a `ligature-anchors` proposal layer; the display and the editing in the view are not done.
 - [ ] 6.6 Collision overlay for marks and dots in the text line.
