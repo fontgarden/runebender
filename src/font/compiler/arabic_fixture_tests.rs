@@ -84,7 +84,7 @@ fn unfinished_masters_stop_the_complete_compile() {
         .compile()
         .expect_err("the partial anchor stops the compile");
     assert!(error.contains(PARTIAL_ANCHOR_GLYPH), "{error}");
-    assert!(error.contains("NoDefault"), "{error}");
+    assert!(error.contains("no value at default location"), "{error}");
 
     project
         .remove_document_glyph(PARTIAL_ANCHOR_GLYPH)
@@ -93,7 +93,7 @@ fn unfinished_masters_stop_the_complete_compile() {
         .compile()
         .expect_err("the incompatible contour stops the compile");
     assert!(error.contains(INCOMPATIBLE_GLYPH), "{error}");
-    assert!(error.contains("InconsistentPathElements"), "{error}");
+    assert!(error.contains("interpolation-incompatible paths"), "{error}");
 }
 
 #[test]
