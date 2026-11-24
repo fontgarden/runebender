@@ -373,6 +373,7 @@ Phases 1 to 4 are the new system; phases 5 to 7 build on it.
 - [ ] 6.4 Cursive attachment editing: entry and exit anchors, whole-word preview.
 - [ ] 6.5 Ligature component anchors: display and editing.
 - [ ] 6.6 Collision overlay for marks and dots in the text line.
+      Engine done 2026-11-24: `find_collisions` and `CollisionCache` in `src/analysis/collisions.rs` report overlaps, containments and gaps below the clearance between marks, dots and neighbors; the overlay and its toggle are not done.
 - [ ] 6.7 Test strings for a glyph in all joining contexts and with all mark classes.
 - [ ] 6.8 Quranic sample set in the proof samples.
 - [ ] 6.9 Kashida and tatweel preview.

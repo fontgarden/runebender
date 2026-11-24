@@ -198,6 +198,36 @@ Builds of other worktrees ran on the same host, so the figures are upper values.
 In the same run, a local Virtua Grotesk checkout with 914 glyphs, measured without its feature file, gave 0.49 ms to read the inputs, 6.9 ms for an anchor change, 3.6 ms for a kerning change and 2.8 ms with no change.
 That is above the 1 ms budget of item 5.3, so items 5.1 and 5.2 are still necessary.
 
+## Collisions
+
+Run the benchmark of the collision test of one shaped line:
+
+```sh
+cargo bench --locked --no-default-features --bench collisions
+```
+
+The line is synthetic: 20 letters in right-to-left order, each a curved body with a dot above and a dot below, with a mark above, and 15 marks below, so 55 placed glyphs.
+Neighbors overlap by 20 units, as joined letters do, and five marks below touch the lower dot of the previous letter.
+Each letter has its own outline key.
+Each row has three discarded warmups and fifteen measured samples, and prints the minimum, the median and the nearest-rank 90th percentile.
+
+| Row | Timed work |
+| --- | --- |
+| `find_collisions` | Flatten every outline, split it into islands, sweep, and test every candidate pair, with nothing cached. |
+| `cache, cold` | The same work through a new `CollisionCache`, which also fills the cache. |
+| `cache, no change` | A run with the same line: every island and pair result comes from the cache. |
+| `cache, one mark moved` | A run after one mark moved by a different amount in each sample: only the pairs of that mark are tested again. |
+
+Measured on 2026-11-24 at `70fa13b` with Rust 1.96.1, macOS arm64, Apple M4 Pro and 48 GiB RAM, medians in milliseconds.
+Builds of other worktrees ran on the same host, so the figures are upper values.
+
+| Row | Median |
+| --- | ---: |
+| `find_collisions` | 0.138 |
+| `cache, cold` | 0.119 |
+| `cache, no change` | 0.010 |
+| `cache, one mark moved` | 0.010 |
+
 ## Editor responsiveness
 
 Run the optimized native point-drag probe without opening a window:

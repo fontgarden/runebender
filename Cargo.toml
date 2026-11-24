@@ -43,6 +43,10 @@ harness = false
 name = "layout_tables"
 harness = false
 
+[[bench]]
+name = "collisions"
+harness = false
+
 [features]
 default = ["application"]
 macos-updater = ["application", "dep:sparkle-updater"]

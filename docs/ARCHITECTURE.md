@@ -59,7 +59,7 @@ Library order: `ui`, `outline`, `font`, `text`, `formats`, `analysis`, `workflow
 | 3 | `src/font` | The open document: `Project`, glyph layers, sources, the designspace, interpolation, undo records, proposals, persistence and compilation. | `ui`, `outline` |
 | 4 | `src/text` | Shaping with the feature code of the font, mark features from anchors, Arabic joining, and the text buffer of the Text tool. | `ui`, `outline`, `font` |
 | 5 | `src/formats` | UFO lib keys and complete file formats: UFO, Designspace, Glyphs, Fontra, Babelfont, OpenType binaries, SVG and traced images. | `ui`, `outline`, `font`, `text` |
-| 6 | `src/analysis` | Read-only measurement: curvature, dimensions, thickness, Unicode categories, weight debt and reports. | `ui`, `outline`, `font`, `text`, `formats` |
+| 6 | `src/analysis` | Read-only measurement: curvature, dimensions, thickness, Unicode categories, weight debt, collisions in a shaped line and reports. | `ui`, `outline`, `font`, `text`, `formats` |
 | 7 | `src/workflows` | Saved and live node graphs, the bounded process supervisor, and the local model servers. | All modules before it. |
 | 8 | `src/automation` | The agent tool contracts: disk tools, live tools, typed edit, graph and proof requests, prompts, design context, and the Unix socket mailbox. | All modules before it. |
 
@@ -225,4 +225,5 @@ The other files in the row are the next ones that the change touches.
 | The node graph | `src/workflows/graph.rs` for the model | `src/workflows/graph_run.rs` for the disk runner, `src/workflows/graph_session.rs` and `src/application/editor/tools/graph` for the live graph, `src/ui/graph.rs` for layout, `src/application/view/canvas/graph.rs` for the canvas. |
 | Text | `src/text/buffer/mod.rs` for the buffer, `src/text/shape.rs` for shaping | `src/application/editor/tools/text.rs` for the Text tool. |
 | Arabic feature generators | `src/text/arabic_features.rs` | `assets/data/arabic-skeletons.toml` for the skeletons and marks of the letters, `generate_joining_features` in `src/application/editor/inspector.rs` for the feature draft of the panel, and `src/application/cli/font_commands/features.rs` for `runebender features --joining`. |
+| Mark and dot collisions | `find_collisions` in `src/analysis/collisions.rs` | `CollisionCache` there for a line that changes during a drag, and `benches/collisions.rs` for the cost of one line. |
 | Headless capture | `src/application/platform/screenshot.rs` | `src/application/launch_options.rs`, which reads the `RUNEBENDER_*` variables, and the list of variables in `docs/UI-DESIGN.md`. |

@@ -3,10 +3,11 @@
 
 //! Everything that reads a font to answer a question.
 //!
-//! Measurement, curvature, and Unicode categories.
+//! Measurement, curvature, Unicode categories, and collisions in a shaped line.
 //! Nothing here changes a font.
 
 pub mod category;
+pub mod collisions;
 pub mod curve;
 pub mod dimensions;
 pub mod glyph;
