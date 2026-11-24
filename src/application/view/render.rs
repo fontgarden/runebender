@@ -1,5 +1,5 @@
 // Copyright 2026 the Runebender Authors
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! The render tree: how the workspace's state becomes a frame.
 
@@ -500,7 +500,7 @@ pub(crate) fn app_logic(app: &mut Workspace) -> impl WidgetView<Workspace> + use
             .boxed(),
             app.debt.eval_job.clone(),
         ),
-        app.font.master_paths().clone(),
+        &app.source_roots,
     )
 }
 
