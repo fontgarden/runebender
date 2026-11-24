@@ -155,6 +155,15 @@ impl ShapingFont {
     /// halfway through any edit, so callers are expected to keep
     /// working with whatever they had.
     pub fn build(source: &ShapingSource) -> Result<Self, String> {
+        Self::build_with(source, &NopFeatureProvider)
+    }
+
+    /// Build as [`Self::build`] does, with positioning lookups from `provider` placed at the
+    /// `# Automatic Code` comments of the feature file.
+    pub fn build_with(
+        source: &ShapingSource,
+        provider: &impl fea_rs::compile::FeatureProvider,
+    ) -> Result<Self, String> {
         if source.glyphs.is_empty() {
             return Err("no glyphs to shape with".into());
         }
@@ -173,14 +182,14 @@ impl ShapingFont {
         let glyph_map = GlyphMap::new(names.iter().map(String::as_str))
             .map_err(|error| format!("glyph order: {error}"))?;
 
-        let compilation =
-            Compiler::<NopFeatureProvider, NopVariationInfo>::new(FEA_ROOT, &glyph_map)
-                .with_resolver(InMemoryFea {
-                    root: PathBuf::from(FEA_ROOT),
-                    text: Arc::from(source.features.as_str()),
-                })
-                .compile()
-                .map_err(|e| format!("features.fea: {e}"))?;
+        let compilation = Compiler::<_, NopVariationInfo>::new(FEA_ROOT, &glyph_map)
+            .with_feature_writer(provider)
+            .with_resolver(InMemoryFea {
+                root: PathBuf::from(FEA_ROOT),
+                text: Arc::from(source.features.as_str()),
+            })
+            .compile()
+            .map_err(|e| format!("features.fea: {e}"))?;
 
         let mut builder = FontBuilder::new();
 

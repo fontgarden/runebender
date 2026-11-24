@@ -148,8 +148,9 @@ Findings:
 Facts about the libraries:
 
 - `harfrust` 0.5.2, the pinned shaper, has no message callback and no advance callbacks.
-- `harfrust` 0.15 has a message callback that can skip a lookup but cannot change positions, and font functions for custom advances.
+- `harfrust` 0.15 has a message callback that can read the buffer and skip a lookup but cannot change positions.
   The method of Fontra is therefore not available in Rust.
+- `harfrust` 0.13.3 has font functions for custom advances and uses the same `read-fonts` version as the other pinned crates.
 - `fea_rs::compile` builds layout tables from a glyph order alone and reports the insert markers.
 - Generated lookups enter `fea-rs` through the `FeatureProvider` trait.
   `fontbe`, the back end of fontc, implements it for kerning and marks.
@@ -269,10 +270,17 @@ Phases 1 to 4 are the new system; phases 5 to 7 build on it.
 
 - [ ] 0.1 Find out if the kerning and mark writers of `fontbe` can run from Runebender with values for one location, without the fontc pipeline.
       Result: "reuse" or "port", recorded in this document.
-- [ ] 0.2 Prove marker insertion: a `FeatureProvider` that adds one generated lookup at `# Automatic Code` in `mark`, compiled by `fea-rs` 1.0.0, shaped by `harfrust`.
+      Source study, 2026-11-23: reuse is possible, and no private item blocks it.
+      `fontir` and `fontbe` contexts and the IR types have public constructors; `FeaRsKerns` and `FeaRsMarks` implement `FeatureProvider`.
+      Open: the cost of one edit, because the writers rebuild every group and the GSUB closure each time.
+      A measured test decides between reuse, port, and reuse for marks with a port for kerning.
+- [x] 0.2 Prove marker insertion: a `FeatureProvider` that adds one generated lookup at `# Automatic Code` in `mark`, compiled by `fea-rs` 1.0.0, shaped by `harfrust`.
       Verify with Virtua Grotesk that marks get the same offsets as with fontc.
-- [ ] 0.3 Review a `harfrust` upgrade to the current release: API changes, message callback, font functions.
-      Result: upgrade now, later, or not.
+      Done in `src/text/generated.rs`: glyphs, advances and mark offsets equal the fontc compile for Arabic, Hebrew and Latin samples.
+- [x] 0.3 Review a `harfrust` upgrade to the current release: API changes, message callback, font functions.
+      Result: upgrade to 0.13.3 before phase 3; it needs one changed line and adds no `read-fonts` copy.
+      Move to 0.15 or later, which has the message callback for the debugger, together with a later move to fontc 2.
+      `parley` keeps its own `harfrust` 0.5.2 until it is updated.
 - [ ] 0.4 Put the timing probe into `benches/` so every later phase can be measured.
 
 ### Phase 1: layout tables from live values
@@ -344,13 +352,21 @@ Phases 1 to 4 are the new system; phases 5 to 7 build on it.
 - [ ] 7.3 Update `docs/ARCHITECTURE.md`, the changelog, the website architecture page and the known-limitations page.
 - [ ] 7.4 Record upstream needs in `docs/upstream/`: a `harfrust` hook that can change positions, public kerning and mark writers in `fontbe`, incremental compile in fontc.
 
-## 8. Decisions for the owner
+## 8. Findings during the work
+
+- 2026-11-23: fontc does not take anchors from components for UFO sources.
+  The current live path of the editor does.
+  In Virtua Grotesk, `beh-ar.init` and `noon-ar.fina` are composites with no anchors of their own, so the exported font does not attach a kasra to them, while the editor showed it attached.
+  Decision needed: propagate anchors through components in the export too, as Glyphs does, or show in the editor what the export does.
+
+## 9. Decisions for the owner
 
 1. Export uses the generated lookups of the editor, or fontc keeps its own and the checker compares (item 4.4).
 2. Upgrade `harfrust` now or after phase 3 (item 0.3).
 3. The order of phase 6 items.
+4. Anchors from components: in the export too, or in neither (section 8).
 
-## 9. Sources
+## 10. Sources
 
 - Fontra: [repository](https://github.com/fontra/fontra), [shaper font builder](https://github.com/fontra/build-shaper-font), [design issue 2381](https://github.com/fontra/fontra/issues/2381), [blog](https://blog.fontra.xyz/blog/opentype-harfbuzz/).
 - Counterpunch: [repository](https://github.com/counterpunchspace/editor), [site](https://counterpunch.space/), [fontc issue 1897](https://github.com/googlefonts/fontc/issues/1897).
