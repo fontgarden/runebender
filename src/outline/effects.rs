@@ -73,7 +73,9 @@ pub fn offset_paths(paths: &[BezPath], delta: f64) -> Option<Vec<BezPath>> {
     }
     let mut combined = BezPath::new();
     let mut band = BezPath::new();
-    let style = kurbo::Stroke::new(delta.abs() * 2.0);
+    // A miter join keeps a corner a corner. The default round join replaced each one with
+    // an arc of radius `delta`.
+    let style = kurbo::Stroke::new(delta.abs() * 2.0).with_join(kurbo::Join::Miter);
     let opts = kurbo::StrokeOpts::default();
     for path in paths {
         band.extend(
@@ -278,6 +280,12 @@ mod tests {
             "bolder grows: {}x{}",
             bbox.width(),
             bbox.height()
+        );
+        // A square with sharp corners has the full area; round corners lose 86 units of it.
+        let area: f64 = bolder.iter().map(|path| path.area().abs()).sum();
+        assert!(
+            (area - 14_400.0).abs() <= 20.0,
+            "corners stay sharp: {area}"
         );
         let lighter = offset_paths(&[square()], -10.0).expect("offsets inward");
         let bbox = bounds(&lighter);
