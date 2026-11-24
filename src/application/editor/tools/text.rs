@@ -18,6 +18,7 @@ use masonry::kurbo::{BezPath, Point};
 use runebender::text::buffer::{TextBuffer, TextDirection, TextGlyphInventory, TextKerningModel};
 
 use crate::application::font_model::{FontModel, LiveLayoutSource};
+use runebender::text::kern_direction::{KernDirection, KernDirections};
 use runebender::text::layout_tables::LayoutOverrides;
 
 /// What the view can carry.
@@ -605,6 +606,9 @@ pub(crate) struct TextState {
     committed: CommittedLayout,
     /// The values of the gesture in progress that the line is shaped with; empty without one.
     overrides: LayoutOverrides,
+    /// What the kerning writer of fontc does with each pair, read from the committed shaping
+    /// font when the metrics card first asks.
+    kern_directions: std::cell::OnceCell<KernDirections>,
 }
 
 /// The shaping inputs of the line as the app supplied them, from committed values.
@@ -711,6 +715,7 @@ impl TextState {
             live_outline: inputs.live_outline.clone(),
             committed: CommittedLayout::of(inputs),
             overrides: LayoutOverrides::default(),
+            kern_directions: std::cell::OnceCell::new(),
         }
     }
 
@@ -753,6 +758,7 @@ impl TextState {
         // values again through `follow`.
         self.committed = CommittedLayout::of(inputs);
         self.overrides = LayoutOverrides::default();
+        self.kern_directions = std::cell::OnceCell::new();
     }
 
     /// Whether the line is shaped by the live layout, which `follow` can rebuild with the
@@ -811,6 +817,29 @@ impl TextState {
             .set_compiled_font(compiled, self.committed.normalized.clone());
         self.buffer.refresh_shaping();
         true
+    }
+
+    /// What the kerning writer of fontc does with a pair of UFO glyph or group names, by the
+    /// rules of [`KernDirections`], read from the committed shaping font of the line.
+    /// `None` when the line has no shaping font.
+    pub(crate) fn kern_direction(&self, first: &str, second: &str) -> Option<KernDirection> {
+        let bytes = self.committed.compiled.as_ref()?;
+        let directions = self.kern_directions.get_or_init(|| {
+            runebender::text::shape::ShapingFont::from_bytes((**bytes).clone())
+                .map(|font| KernDirections::from_font(&font))
+                .unwrap_or_default()
+        });
+        let side = |name: &'_ str| -> Vec<String> {
+            self.buffer
+                .group_members(name)
+                .map(<[String]>::to_vec)
+                .unwrap_or_else(|| vec![name.to_owned()])
+        };
+        let (first, second) = (side(first), side(second));
+        Some(directions.pair(
+            first.iter().map(String::as_str),
+            second.iter().map(String::as_str),
+        ))
     }
 
     /// The active sort and its layout origin.

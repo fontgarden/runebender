@@ -153,6 +153,22 @@ impl ShapingFont {
         self.bytes
     }
 
+    /// The OpenType bytes of the font, borrowed.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// The GDEF glyph class of a glyph by name: 1 base, 2 ligature, 3 mark, 4 component.
+    /// `None` when the font has no such glyph or no GDEF glyph class table.
+    pub fn glyph_class(&self, name: &str) -> Option<u16> {
+        use skrifa::raw::TableProvider as _;
+        let id = self.names.iter().position(|candidate| candidate == name)?;
+        let id = skrifa::raw::types::GlyphId16::new(u16::try_from(id).ok()?);
+        let font = skrifa::FontRef::new(&self.bytes).ok()?;
+        let classes = font.gdef().ok()?.glyph_class_def()?.ok()?;
+        Some(classes.get(id))
+    }
+
     /// Compile a font for shaping.
     ///
     /// Fails when the feature file does not compile. That happens

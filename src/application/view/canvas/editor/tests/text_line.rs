@@ -775,3 +775,146 @@ fn a_decomposed_letter_draws_every_glyph_and_edits_its_dots_in_place() {
         "the glyph editor draws the dots at their place in the line"
     );
 }
+
+/// The pair of a kerning drag, its value before and after, and the line during the drag.
+type KerningDrag = ((String, String), f64, f64, Vec<(usize, Point)>);
+
+/// Drag the kerning of the pair that ends at sort `grabbed`, in the scope that the drag
+/// starts with, by pointer steps in design units, then commit it as the app does.
+/// Returns the pair, the value before and after, and the line during the drag.
+fn drag_kerning(
+    app: &mut Workspace,
+    editor: &mut EditorWidget,
+    text: &str,
+    grabbed: usize,
+    steps: &[f64],
+) -> KerningDrag {
+    let (first, second, boundary, rtl, original) = {
+        let buffer = &editor.text.as_ref().expect("a text line").buffer;
+        let (a, b, boundary, rtl, original) = buffer.drag_pair(grabbed).expect("a pair");
+        let scope = buffer.kern_scope(a, b);
+        let [ga, gb] = buffer.pair_groups(a, b);
+        (
+            if scope[0] { ga.unwrap_or(a) } else { a }.to_owned(),
+            if scope[1] { gb.unwrap_or(b) } else { b }.to_owned(),
+            boundary,
+            rtl,
+            original,
+        )
+    };
+    editor.drag = Drag::Kern {
+        grabbed,
+        first,
+        second,
+        boundary,
+        start_x: 0.0,
+        start_offset: editor.session.viewport.offset.x,
+        rtl,
+        original,
+        value: original,
+    };
+    for x in steps {
+        assert!(super::super::tools::text::move_kern(editor, *x).is_some());
+    }
+    let dragged = line(editor);
+    let Some(EditorEvent::KernPair(first, second, value)) =
+        super::super::tools::text::finish_kern(editor, false)
+    else {
+        panic!("the drag commits a pair");
+    };
+    app.kern_first_buf = first.clone();
+    app.kern_second_buf = second.clone();
+    app.kern_value_buf = value.to_string();
+    app.set_kern_pair_from_bufs();
+    refresh(app, editor, text);
+    assert_eq!(line(editor), dragged, "the commit does not move the line");
+    assert_eq!(
+        fresh_line(app, text),
+        dragged,
+        "the drag shows the layout of a fresh build of the committed value"
+    );
+    ((first, second), original, value, dragged)
+}
+
+#[test]
+fn a_kerning_drag_on_alef_after_a_fatha_edits_the_reh_and_alef_groups() {
+    const TEXT: &str = "رَا";
+    let mut app = arabic_workspace("alef-ar");
+    let mut editor = line_editor(&app, TEXT);
+    editor.tool = Tool::Text;
+    let before = line(&editor);
+    // Right to left, a pointer to the left widens the pair.
+    let (pair, original, value, dragged) =
+        drag_kerning(&mut app, &mut editor, TEXT, 2, &[-10.0, -20.0, -40.0]);
+    assert_eq!(
+        pair,
+        (
+            "public.kern1.reh".to_owned(),
+            "public.kern2.alef".to_owned()
+        )
+    );
+    assert_eq!(original, -60.0);
+    assert!(
+        value > original + 30.0 && value < original + 50.0,
+        "{value}"
+    );
+    // The gap between reh and alef opens, and the fatha stays on reh, its base.
+    let gap = |line: &[(usize, Point)]| origin_of(line, 0).x - origin_of(line, 2).x;
+    assert!(gap(&dragged) > gap(&before));
+    let on_reh = |line: &[(usize, Point)]| origin_of(line, 1) - origin_of(line, 0);
+    assert_eq!(on_reh(&dragged), on_reh(&before));
+}
+
+#[test]
+fn a_kerning_drag_in_a_right_to_left_run_of_a_latin_line_has_the_right_sign() {
+    const TEXT: &str = "AV را";
+    let mut app = arabic_workspace("alef-ar");
+    let mut editor = line_editor(&app, TEXT);
+    editor.tool = Tool::Text;
+    let (pair, original, value, _) =
+        drag_kerning(&mut app, &mut editor, TEXT, 4, &[-10.0, -20.0, -40.0]);
+    assert_eq!(
+        pair,
+        (
+            "public.kern1.reh".to_owned(),
+            "public.kern2.alef".to_owned()
+        )
+    );
+    assert!(
+        value > original,
+        "a pointer to the left widens the pair: {value}"
+    );
+}
+
+#[test]
+fn arabic_indic_digits_kern_left_to_right_in_an_arabic_line() {
+    const TEXT: &str = "ر ١٢";
+    let mut app = arabic_workspace("two-ar");
+    let mut editor = line_editor(&app, TEXT);
+    editor.tool = Tool::Text;
+    // Left to right, a pointer to the right widens the pair.
+    let (pair, original, value, _) =
+        drag_kerning(&mut app, &mut editor, TEXT, 3, &[10.0, 20.0, 40.0]);
+    assert_eq!(pair, ("one-ar".to_owned(), "two-ar".to_owned()));
+    assert_eq!(original, -30.0);
+    assert!(value > original + 30.0, "{value}");
+}
+
+#[test]
+fn the_metrics_card_warns_about_a_pair_that_the_export_leaves_out() {
+    let app = arabic_workspace("reh-ar");
+    let editor = line_editor(&app, "را");
+    assert_eq!(
+        editor.kern_export_warning("reh-ar", "one-ar"),
+        Some("not exported")
+    );
+    assert_eq!(
+        editor.kern_export_warning("reh-ar", "A"),
+        Some("not exported")
+    );
+    assert_eq!(
+        editor.kern_export_warning("public.kern1.reh", "public.kern2.alef"),
+        None
+    );
+    assert_eq!(editor.kern_export_warning("one-ar", "two-ar"), None);
+}

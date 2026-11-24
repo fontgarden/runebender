@@ -54,6 +54,18 @@ impl EditorWidget {
         Some(fields)
     }
 
+    /// The warning for a kerning pair, by UFO glyph or group names, that the kerning writer of
+    /// fontc leaves out of the exported font because its glyphs have mixed or ambiguous
+    /// direction, such as reh and an Arabic-Indic digit or reh and a Latin letter.
+    pub(super) fn kern_export_warning(&self, first: &str, second: &str) -> Option<&'static str> {
+        use runebender::text::kern_direction::KernDirection;
+        match self.text.as_ref()?.kern_direction(first, second)? {
+            KernDirection::Dropped => Some("not exported"),
+            KernDirection::PartlyDropped => Some("partly exported"),
+            KernDirection::LeftToRight | KernDirection::RightToLeft => None,
+        }
+    }
+
     pub(super) fn kern_pair(&self, field: MetricField) -> Option<(&str, &str, f64)> {
         let text = self.text.as_ref()?;
         // Another glyph of a cluster, such as the dots of a decomposed letter, has no pair of
@@ -363,10 +375,17 @@ impl EditorWidget {
         let title = match self.field {
             Some(field @ (MetricField::KernLeft | MetricField::KernRight)) => {
                 self.kern_pair(field).map(|(a, b, _)| {
-                    if self.scope_index(MetricField::GroupLeft) == 1 {
+                    let pair = if self.scope_index(MetricField::GroupLeft) == 1 {
                         format!("{b} · {a}")
                     } else {
                         format!("{a} · {b}")
+                    };
+                    let warning = self
+                        .kern_target(field, self.kern_groups)
+                        .and_then(|(first, second, _)| self.kern_export_warning(first, second));
+                    match warning {
+                        Some(warning) => format!("{pair} · {warning}"),
+                        None => pair,
                     }
                 })
             }
@@ -394,10 +413,12 @@ impl EditorWidget {
                 } else {
                     (first, second)
                 };
-                Some((
-                    format!("{} · {}", trim(left), trim(right)),
-                    format!("{value:+.0}"),
-                ))
+                // The pair as stored, in visual order, and whether the export keeps it.
+                let value = match self.kern_export_warning(first, second) {
+                    Some(warning) => format!("{value:+.0} · {warning}"),
+                    None => format!("{value:+.0}"),
+                };
+                Some((format!("{} · {}", trim(left), trim(right)), value))
             }
             _ if self.tool == Tool::Text && self.field.is_none() => self
                 .kern_hover

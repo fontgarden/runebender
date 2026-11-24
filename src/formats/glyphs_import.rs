@@ -13,9 +13,23 @@
 //!
 //! Scope: outlines, components (position/rotation/scale), anchors,
 //! widths, unicodes, per-master vertical metrics, kerning + kerning
-//! groups. Conversion choices follow glyphsLib where a convention
-//! exists: closed-contour node rotation, kern-group naming,
-//! italic-angle sign.
+//! groups, left-to-right and right-to-left. Conversion choices follow glyphsLib where a
+//! convention exists: closed-contour node rotation, kern-group naming,
+//! italic-angle sign, and the right-to-left kerning of Glyphs 3.
+//!
+//! # Right-to-left kerning
+//!
+//! Glyphs 3 stores right-to-left pairs in `kerningRTL`, in logical order, with the first
+//! side as `@MMK_R_` and the second as `@MMK_L_`.
+//! UFO kerning has one table in logical order, so the import merges both, as glyphsLib 6
+//! does: `@MMK_R_x` first becomes `public.kern1.x` and `@MMK_L_y` second becomes
+//! `public.kern2.y`, and a right-to-left pair wins over a left-to-right pair with the same
+//! sides.
+//! A glyph that `kerningRTL` names, directly or through a group, is a right-to-left glyph:
+//! its left group (`kernLeft`) becomes its `public.kern1` group and its right group its
+//! `public.kern2` group, the opposite of a left-to-right glyph.
+//! As in glyphsLib, a glyph therefore cannot be kerned through its groups in both
+//! directions.
 //!
 //! # Known gaps
 //!
@@ -23,7 +37,7 @@
 //!   background of a layer.
 //! - Not read: brace and bracket layers, smart components, OpenType
 //!   features, classes and prefixes, color labels, hints, guides,
-//!   instances, right-to-left and vertical kerning, and most custom
+//!   instances, vertical kerning, and most custom
 //!   parameters. Write-back leaves them in the file untouched.
 //! - Not reading features means the compiled preview has no Glyphs
 //!   features, and feature edits made in Runebender stay in the UFO
@@ -235,15 +249,15 @@ fn convert(font: GlyphsFont) -> Result<ConversionResult, String> {
             text: plist_doc(&format!("<array>\n{layer_rows}</array>")),
         });
 
-        // Kerning groups + per-master kerning (LTR only for now).
+        // Kerning groups + per-master kerning, both directions in one table.
         files.push(ConvertedFile {
             path: format!("{ufo_dir}/groups.plist"),
             text: groups_plist(font),
         });
-        if let Some(kerning) = font.kerning.get(&master.id) {
+        if let Some(kerning) = ufo_kerning(font, &master.id) {
             files.push(ConvertedFile {
                 path: format!("{ufo_dir}/kerning.plist"),
-                text: kerning_plist(kerning),
+                text: kerning_plist(&kerning),
             });
         }
     }
@@ -535,18 +549,105 @@ pub(crate) fn kern_name(raw: &str, first_side: bool) -> String {
     raw.to_string()
 }
 
+/// The UFO name of one side of a right-to-left pair of Glyphs 3: `@MMK_R_x` first is
+/// `public.kern1.x`, `@MMK_L_y` second is `public.kern2.y`, as glyphsLib converts them.
+pub(crate) fn rtl_kern_name(raw: &str, first_side: bool) -> String {
+    let (prefix, group) = if first_side {
+        ("@MMK_R_", "public.kern1.")
+    } else {
+        ("@MMK_L_", "public.kern2.")
+    };
+    match raw.strip_prefix(prefix) {
+        Some(rest) => format!("{group}{rest}"),
+        None => raw.to_owned(),
+    }
+}
+
+/// The glyphs that the right-to-left kerning of the font names, directly or through a
+/// kerning group, as glyphsLib finds them.
+pub(crate) fn rtl_kerning_glyphs(font: &Glyphs3) -> HashSet<String> {
+    let mut glyphs = HashSet::new();
+    // A first side `@MMK_R_x` names the glyphs whose left group is x, a second side `@MMK_L_y`
+    // the glyphs whose right group is y.
+    let mut left_groups = HashSet::new();
+    let mut right_groups = HashSet::new();
+    for table in font.kerning_rtl.values() {
+        for (first, pairs) in table {
+            match first.strip_prefix("@MMK_R_") {
+                Some(group) => left_groups.insert(group),
+                None => glyphs.insert(first.clone()),
+            };
+            for second in pairs.keys() {
+                match second.strip_prefix("@MMK_L_") {
+                    Some(group) => right_groups.insert(group),
+                    None => glyphs.insert(second.clone()),
+                };
+            }
+        }
+    }
+    for glyph in &font.glyphs {
+        if glyph
+            .kern_left
+            .as_deref()
+            .is_some_and(|group| left_groups.contains(group))
+            || glyph
+                .kern_right
+                .as_deref()
+                .is_some_and(|group| right_groups.contains(group))
+        {
+            glyphs.insert(glyph.name.clone());
+        }
+    }
+    glyphs
+}
+
+/// The UFO kerning of one master: the left-to-right pairs and the right-to-left pairs in one
+/// table in logical order, the right-to-left value winning.
+/// `None` when the master has neither.
+pub(crate) fn ufo_kerning(
+    font: &Glyphs3,
+    master: &str,
+) -> Option<BTreeMap<String, BTreeMap<String, f32>>> {
+    let ltr = font.kerning.get(master);
+    let rtl = font.kerning_rtl.get(master);
+    if ltr.is_none() && rtl.is_none() {
+        return None;
+    }
+    let mut kerning: BTreeMap<String, BTreeMap<String, f32>> = BTreeMap::new();
+    for (first, pairs) in ltr.into_iter().flatten() {
+        let row = kerning.entry(kern_name(first, true)).or_default();
+        for (second, value) in pairs {
+            row.insert(kern_name(second, false), *value);
+        }
+    }
+    for (first, pairs) in rtl.into_iter().flatten() {
+        let row = kerning.entry(rtl_kern_name(first, true)).or_default();
+        for (second, value) in pairs {
+            row.insert(rtl_kern_name(second, false), *value);
+        }
+    }
+    Some(kerning)
+}
+
 fn groups_plist(font: &Glyphs3) -> String {
+    let rtl = rtl_kerning_glyphs(font);
     let mut groups: BTreeMap<String, Vec<&str>> = BTreeMap::new();
     for glyph in &font.glyphs {
         // A glyph's RIGHT group forms the FIRST member of kern pairs
         // (public.kern1), its LEFT group the second — same as glyphsLib.
-        if let Some(group) = &glyph.kern_right {
+        // A right-to-left glyph is the other way round.
+        let (first, second) = if rtl.contains(&glyph.name) {
+            (&glyph.kern_left, &glyph.kern_right)
+        } else {
+            (&glyph.kern_right, &glyph.kern_left)
+        };
+        if let Some(group) = first {
             groups
                 .entry(format!("public.kern1.{group}"))
                 .or_default()
                 .push(&glyph.name);
         }
-        if let Some(group) = &glyph.kern_left {
+        if let Some(group) = second {
             groups
                 .entry(format!("public.kern2.{group}"))
                 .or_default()
@@ -565,17 +666,15 @@ fn groups_plist(font: &Glyphs3) -> String {
     plist_doc(&body)
 }
 
+/// The kerning plist of one master, from UFO names.
 fn kerning_plist(kerning: &BTreeMap<String, BTreeMap<String, f32>>) -> String {
     let mut body = String::from("<dict>\n");
     for (first, pairs) in kerning {
-        body.push_str(&format!(
-            "  <key>{}</key>\n  <dict>\n",
-            xml_escape(&kern_name(first, true))
-        ));
+        body.push_str(&format!("  <key>{}</key>\n  <dict>\n", xml_escape(first)));
         for (second, value) in pairs {
             body.push_str(&format!(
                 "    <key>{}</key>\n    <real>{}</real>\n",
-                xml_escape(&kern_name(second, false)),
+                xml_escape(second),
                 fmt_f32(*value)
             ));
         }

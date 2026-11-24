@@ -25,8 +25,12 @@
 //!   are written before its components whatever the original order was.
 //! - Component transforms are decomposed into position, angle, scale and horizontal slant
 //!   only; vertical slant and smart-component settings of an edited component are lost.
-//! - Kerning groups come from the first master. Right-to-left and vertical kerning are not
-//!   read or written.
+//! - Kerning groups come from the first master. Vertical kerning is not read or written.
+//! - Right-to-left kerning is written back to `kerningRTL`.
+//!   A pair keeps the table it came from; a new pair goes to `kerningRTL` when both of its
+//!   sides are right-to-left glyphs of the original file, by the rule of
+//!   [`super::glyphs_import`], or groups with such a glyph, and to `kerningLTR` otherwise.
+//!   A glyph that is new in the working copy is a left-to-right glyph.
 //! - Feature code, master metrics, names and other font info edited in Runebender are not
 //!   written back, because the import does not read them.
 //! - Glyph metadata (category, export flag, production name) is not written back.
@@ -43,7 +47,10 @@ use glyphslib::glyphs3::{
 };
 
 use super::foreign::{WorkingSource, same_drawing};
-use super::glyphs_import::{is_backup_layer, kern_name, layer_to_norad, master_ufo_name};
+use super::glyphs_import::{
+    is_backup_layer, kern_name, layer_to_norad, master_ufo_name, rtl_kern_name, rtl_kerning_glyphs,
+    ufo_kerning,
+};
 
 /// Write `original` with the working copy's edits merged in, at `stage`.
 pub fn write_back(original: &Path, sources: &[WorkingSource], stage: &Path) -> Result<(), String> {
@@ -236,6 +243,8 @@ fn merge(font: &mut Glyphs3, sources: &[WorkingSource]) -> Result<Changes, Strin
     changes.glyph_set = font.glyphs.len() != count;
 
     let (first_groups, second_groups) = kerning_groups(&masters[0].1.font);
+    // The right-to-left glyphs of the original file, whose groups are the other way round.
+    let rtl = rtl_kerning_glyphs(&original);
     for name in &order {
         let index = match font.glyphs.iter().position(|glyph| glyph.name == *name) {
             Some(index) => index,
@@ -255,8 +264,13 @@ fn merge(font: &mut Glyphs3, sources: &[WorkingSource]) -> Result<Changes, Strin
         if glyph.unicode != codepoints[name] {
             glyph.unicode.clone_from(&codepoints[name]);
         }
-        glyph.kern_right = first_groups.get(name).cloned();
-        glyph.kern_left = second_groups.get(name).cloned();
+        let (first, second) = if rtl.contains(name) {
+            (&mut glyph.kern_left, &mut glyph.kern_right)
+        } else {
+            (&mut glyph.kern_right, &mut glyph.kern_left)
+        };
+        *first = first_groups.get(name).cloned();
+        *second = second_groups.get(name).cloned();
         for (master, working) in &masters {
             let Some(edited) = working.font.default_layer().get_glyph(name.as_str()) else {
                 continue;
@@ -301,22 +315,45 @@ fn merge(font: &mut Glyphs3, sources: &[WorkingSource]) -> Result<Changes, Strin
         }
     }
 
+    let groups = &masters[0].1.font.groups;
+    // Whether one side of a UFO pair is right to left: a right-to-left glyph, or a group with one.
+    let rtl_side = |side: &str| {
+        if side.starts_with("public.kern1.") || side.starts_with("public.kern2.") {
+            groups
+                .get(side)
+                .is_some_and(|members| members.iter().any(|member| rtl.contains(member.as_str())))
+        } else {
+            rtl.contains(side)
+        }
+    };
     for (master, working) in &masters {
-        let imported: BTreeMap<String, BTreeMap<String, f64>> = original
-            .kerning
-            .get(master)
+        let imported: BTreeMap<String, BTreeMap<String, f64>> = ufo_kerning(&original, master)
+            .unwrap_or_default()
             .into_iter()
-            .flatten()
             .map(|(left, pairs)| {
                 (
-                    kern_name(left, true),
+                    left,
                     pairs
-                        .iter()
-                        .map(|(right, value)| (kern_name(right, false), f64::from(*value)))
+                        .into_iter()
+                        .map(|(right, value)| (right, f64::from(value)))
                         .collect(),
                 )
             })
             .collect();
+        let keys = |table: Option<&BTreeMap<String, BTreeMap<String, f32>>>,
+                    name: fn(&str, bool) -> String| {
+            table
+                .into_iter()
+                .flatten()
+                .flat_map(|(left, pairs)| {
+                    pairs
+                        .keys()
+                        .map(move |right| (name(left, true), name(right, false)))
+                })
+                .collect::<HashSet<(String, String)>>()
+        };
+        let was_rtl = keys(original.kerning_rtl.get(master), rtl_kern_name);
+        let was_ltr = keys(original.kerning.get(master), kern_name);
         let edited: BTreeMap<String, BTreeMap<String, f64>> = working
             .font
             .kerning
@@ -334,19 +371,37 @@ fn merge(font: &mut Glyphs3, sources: &[WorkingSource]) -> Result<Changes, Strin
         if imported == edited {
             continue;
         }
-        let kerning = edited
-            .into_iter()
-            .map(|(left, pairs)| {
-                (
-                    glyphs_side(&left),
-                    pairs
-                        .into_iter()
-                        .map(|(right, value)| (glyphs_side(&right), narrow(value)))
-                        .collect(),
-                )
-            })
-            .collect();
-        font.kerning.insert(master.clone(), kerning);
+        let mut ltr: BTreeMap<String, BTreeMap<String, f32>> = BTreeMap::new();
+        let mut rtl_table: BTreeMap<String, BTreeMap<String, f32>> = BTreeMap::new();
+        for (left, pairs) in edited {
+            for (right, value) in pairs {
+                let key = (left.clone(), right.clone());
+                let right_to_left = if was_rtl.contains(&key) {
+                    true
+                } else if was_ltr.contains(&key) {
+                    false
+                } else {
+                    rtl_side(&left) && rtl_side(&right)
+                };
+                if right_to_left {
+                    rtl_table
+                        .entry(glyphs_rtl_side(&left))
+                        .or_default()
+                        .insert(glyphs_rtl_side(&right), narrow(value));
+                } else {
+                    ltr.entry(glyphs_side(&left))
+                        .or_default()
+                        .insert(glyphs_side(&right), narrow(value));
+                }
+            }
+        }
+        for (table, values) in [(&mut font.kerning, ltr), (&mut font.kerning_rtl, rtl_table)] {
+            if values.is_empty() {
+                table.remove(master);
+            } else {
+                table.insert(master.clone(), values);
+            }
+        }
         changes.kerning = true;
     }
     Ok(changes)
@@ -370,6 +425,18 @@ fn kerning_groups(font: &norad::Font) -> (HashMap<String, String>, HashMap<Strin
         }
     }
     (first, second)
+}
+
+/// One side of a right-to-left pair in Glyphs 3: `public.kern1.x` is `@MMK_R_x` and
+/// `public.kern2.y` is `@MMK_L_y`.
+fn glyphs_rtl_side(side: &str) -> String {
+    if let Some(group) = side.strip_prefix("public.kern1.") {
+        format!("@MMK_R_{group}")
+    } else if let Some(group) = side.strip_prefix("public.kern2.") {
+        format!("@MMK_L_{group}")
+    } else {
+        side.to_owned()
+    }
 }
 
 fn glyphs_side(side: &str) -> String {
@@ -890,5 +957,201 @@ layers = ({ layerId = m01; width = 400; shapes = ({ ref = B; }); });
             ((-1.0, 1.0), (500.0, 0.0))
         );
         assert_eq!(c.layers[0].layer_id, "m01");
+    }
+
+    /// Glyphs 3 right-to-left kerning: reh is the first glyph of the pair and kerns with its
+    /// left side, so its left group is its first-side group.
+    const RTL_SOURCE: &str = r#"{
+.appVersion = "3260";
+.formatVersion = 3;
+familyName = "Test Sans";
+fontMaster = (
+{
+id = m01;
+name = Regular;
+}
+);
+glyphs = (
+{
+glyphname = "reh-ar";
+kernLeft = reh;
+layers = (
+{
+layerId = m01;
+width = 400;
+}
+);
+unicode = 1585;
+},
+{
+glyphname = "alef-ar";
+kernRight = alef;
+layers = (
+{
+layerId = m01;
+width = 200;
+}
+);
+unicode = 1575;
+},
+{
+glyphname = A;
+kernLeft = A;
+kernRight = A;
+layers = (
+{
+layerId = m01;
+width = 500;
+}
+);
+unicode = 65;
+}
+);
+kerningLTR = {
+m01 = {
+"@MMK_L_A" = {
+"@MMK_R_A" = -20;
+};
+};
+};
+kerningRTL = {
+m01 = {
+"@MMK_R_reh" = {
+"@MMK_L_alef" = -60;
+};
+};
+};
+unitsPerEm = 1000;
+}"#;
+
+    /// The UFO kerning of a converted source, as (first, second, value).
+    fn ufo_pairs(text: &str) -> Vec<(String, String, f64)> {
+        let files = super::super::glyphs_import::glyphs_to_ufo_files(text).unwrap();
+        let kerning = files
+            .files
+            .iter()
+            .find(|file| file.path == "TestSans-Regular.ufo/kerning.plist")
+            .expect("a kerning plist");
+        let value: plist::Dictionary = plist::from_bytes(kerning.text.as_bytes()).unwrap();
+        let mut pairs = Vec::new();
+        for (first, row) in value {
+            for (second, value) in row.into_dictionary().unwrap() {
+                pairs.push((first.clone(), second, value.as_real().unwrap()));
+            }
+        }
+        pairs.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+        pairs
+    }
+
+    #[test]
+    fn right_to_left_kerning_imports_and_writes_back() {
+        // The import merges both tables, with the groups of a right-to-left glyph swapped.
+        assert_eq!(
+            ufo_pairs(RTL_SOURCE),
+            [
+                ("public.kern1.A".into(), "public.kern2.A".into(), -20.0),
+                ("public.kern1.reh".into(), "public.kern2.alef".into(), -60.0),
+            ]
+        );
+        let files = super::super::glyphs_import::glyphs_to_ufo_files(RTL_SOURCE).unwrap();
+        let groups = files
+            .files
+            .iter()
+            .find(|file| file.path == "TestSans-Regular.ufo/groups.plist")
+            .unwrap();
+        let groups: plist::Dictionary = plist::from_bytes(groups.text.as_bytes()).unwrap();
+        let members = |group: &str| -> Vec<String> {
+            groups
+                .get(group)
+                .and_then(|value| value.as_array())
+                .map(|members| {
+                    members
+                        .iter()
+                        .filter_map(|member| member.as_string().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        assert_eq!(members("public.kern1.reh"), ["reh-ar"]);
+        assert_eq!(members("public.kern2.alef"), ["alef-ar"]);
+        assert_eq!(members("public.kern2.reh"), Vec::<String>::new());
+
+        // An unedited working copy changes nothing.
+        let (mut font, sources) = convert_source("rtl-same", RTL_SOURCE);
+        let original = font.clone();
+        let changes = merge(&mut font, &sources).unwrap();
+        assert_eq!(font, original);
+        assert!(!changes.kerning);
+
+        // An edited value stays right to left, a new pair of right-to-left glyphs goes to
+        // `kerningRTL`, and a new Latin pair to `kerningLTR`.
+        let (mut font, mut sources) = convert_source("rtl-edit", RTL_SOURCE);
+        let name = |text: &str| norad::Name::new(text).unwrap();
+        let kerning = &mut sources[0].font.kerning;
+        kerning
+            .get_mut(&name("public.kern1.reh"))
+            .unwrap()
+            .insert(name("public.kern2.alef"), -80.0);
+        kerning
+            .entry(name("reh-ar"))
+            .or_default()
+            .insert(name("alef-ar"), -10.0);
+        kerning
+            .entry(name("A"))
+            .or_default()
+            .insert(name("A"), -5.0);
+        let changes = merge(&mut font, &sources).unwrap();
+        assert!(changes.kerning);
+        let table = |kerning: &BTreeMap<String, BTreeMap<String, BTreeMap<String, f32>>>| {
+            kerning
+                .get("m01")
+                .into_iter()
+                .flatten()
+                .flat_map(|(first, row)| {
+                    row.iter()
+                        .map(move |(second, value)| (first.clone(), second.clone(), *value))
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            table(&font.kerning_rtl),
+            [
+                ("@MMK_R_reh".to_owned(), "@MMK_L_alef".to_owned(), -80.0),
+                ("reh-ar".to_owned(), "alef-ar".to_owned(), -10.0),
+            ]
+        );
+        assert_eq!(
+            table(&font.kerning),
+            [
+                ("@MMK_L_A".to_owned(), "@MMK_R_A".to_owned(), -20.0),
+                ("A".to_owned(), "A".to_owned(), -5.0),
+            ]
+        );
+        // The groups of the right-to-left glyph keep their sides.
+        let reh = font
+            .glyphs
+            .iter()
+            .find(|glyph| glyph.name == "reh-ar")
+            .unwrap();
+        assert_eq!(
+            (reh.kern_left.as_deref(), reh.kern_right.as_deref()),
+            (Some("reh"), None)
+        );
+
+        // The written file opens with the edited values.
+        let path =
+            std::env::temp_dir().join(format!("rb-glyphs-rtl-{}.glyphs", std::process::id()));
+        GlyphsFont::Glyphs3(font).save(&path).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(
+            ufo_pairs(&written),
+            [
+                ("A".into(), "A".into(), -5.0),
+                ("public.kern1.A".into(), "public.kern2.A".into(), -20.0),
+                ("public.kern1.reh".into(), "public.kern2.alef".into(), -80.0),
+                ("reh-ar".into(), "alef-ar".into(), -10.0),
+            ]
+        );
     }
 }

@@ -2568,3 +2568,79 @@ fn a_generated_ccmp_decomposition_gives_each_letter_one_multi_glyph_cluster() {
     assert_eq!(buffer.layout(1000.0).items.len(), 2);
     assert_eq!(buffer.sort_glyph_name(0), Some("behDotless-ar"));
 }
+
+#[test]
+fn kerning_pairs_skip_marks_in_a_right_to_left_line() {
+    let mut buffer = arabic_fixture_buffer();
+    buffer.insert_characters("رَا");
+    assert!(buffer.is_mark_sort(1), "the fatha is a mark");
+    assert!(!buffer.is_mark_sort(0) && !buffer.is_mark_sort(2));
+    // A drag on the alef edits reh and alef, across the fatha, in their groups.
+    let (first, second, boundary, rtl, value) = buffer.drag_pair(2).expect("a pair");
+    assert_eq!(
+        (first, second, rtl, value),
+        ("reh-ar", "alef-ar", true, -60.0)
+    );
+    // The preview without live tables moves the line before the fatha, which sits on reh,
+    // so the fatha moves with its base.
+    assert_eq!(boundary, 1);
+    assert_eq!(buffer.kern_scope(first, second), [true, true]);
+    assert_eq!(
+        buffer.pair_groups(first, second),
+        [Some("public.kern1.reh"), Some("public.kern2.alef")]
+    );
+    // A drag on the fatha kerns its base, reh, which has no base before it.
+    assert_eq!(buffer.drag_pair(1), None);
+    // The metrics card of the alef shows the pair on its right side, reh, and none on its
+    // left; the fatha has none.
+    buffer.activate_sort(2);
+    assert_eq!(
+        buffer.active_visual_kern(false),
+        Some(("reh-ar", "alef-ar", -60.0))
+    );
+    assert_eq!(buffer.active_visual_kern(true), None);
+    buffer.activate_sort(1);
+    assert_eq!(buffer.active_visual_kern(false), None);
+    assert_eq!(buffer.active_visual_kern(true), None);
+    buffer.activate_sort(0);
+    assert_eq!(
+        buffer.active_visual_kern(true),
+        Some(("reh-ar", "alef-ar", -60.0))
+    );
+}
+
+#[test]
+fn a_right_to_left_run_kerns_right_to_left_in_either_line_direction_and_digits_left_to_right() {
+    // An Arabic run in a Latin line.
+    let mut buffer = arabic_fixture_buffer();
+    buffer.insert_characters("AV را");
+    assert_eq!(
+        buffer.resolved_line_direction(0),
+        TextDirection::LeftToRight
+    );
+    let (first, second, boundary, rtl, value) = buffer.drag_pair(4).expect("a pair");
+    assert_eq!(
+        (first, second, boundary, rtl, value),
+        ("reh-ar", "alef-ar", 3, true, -60.0)
+    );
+    let (first, second, boundary, rtl, value) = buffer.drag_pair(1).expect("a pair");
+    assert_eq!(
+        (first, second, boundary, rtl, value),
+        ("A", "V", 1, false, -70.0)
+    );
+
+    // Arabic-Indic digits in an Arabic line are a left-to-right run.
+    let mut buffer = arabic_fixture_buffer();
+    buffer.insert_characters("ر ١٢");
+    assert_eq!(
+        buffer.resolved_line_direction(0),
+        TextDirection::RightToLeft
+    );
+    let (first, second, boundary, rtl, value) = buffer.drag_pair(3).expect("a pair");
+    assert_eq!(
+        (first, second, boundary, rtl, value),
+        ("one-ar", "two-ar", 3, false, -30.0)
+    );
+    // The digit after the space starts its run, so it has no pair with reh.
+    assert_eq!(buffer.drag_pair(2), None);
+}

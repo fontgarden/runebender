@@ -25,6 +25,11 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
 
 ### Changed
 
+- A kerning drag in the Text tool skips marks: a drag on the alef of `رَا` edits the pair of reh and alef, in their kerning groups, and the fatha moves with reh.
+  The pairs of the metrics card skip marks in the same way.
+- The metrics card says "not exported" or "partly exported" for a kerning pair that the font compiler leaves out because its glyphs have mixed direction, such as reh and an Arabic-Indic digit, or reh and a Latin letter.
+- Glyphs 3 right-to-left kerning (`kerningRTL`) is read, with the groups of its glyphs as glyphsLib reads them, and edited pairs are written back to it.
+  Before, the import dropped it.
 - The text line keeps every glyph that shaping gives one character, such as a letter that `ccmp` decomposes into a skeleton and its dots, or a hamza that `ccmp` separates before a lam-alef ligature.
   Before, only the last glyph of such a cluster was drawn.
   A click on the ink of one of the glyphs makes that glyph the one being edited, at its place in the line, and the caret and the selection treat the cluster as one character.

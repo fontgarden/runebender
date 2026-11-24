@@ -2,6 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Kerning between sorts: the model with group fallback, and manual kerning by dragging a sort.
+//!
+//! A kerning pair is two bases next to each other in logical order.
+//! Marks between them are skipped, as the kerning writer of fontc skips them with its
+//! `IgnoreMarks` lookups: in `رَا` the pair is reh and alef, not fatha and alef.
+//! A pair inside a right-to-left run reads right to left on the screen whatever the
+//! direction of the line; Arabic-Indic digits form left-to-right runs, so their pairs read
+//! left to right.
 
 use super::*;
 
@@ -16,15 +23,50 @@ impl TextBuffer {
             .map(|r| r.rtl)
     }
 
+    /// Whether the sort draws a mark: a glyph of the mark class in the GDEF table of the
+    /// shaping font, or, without one, a character of a mark category.
+    pub fn is_mark_sort(&self, index: usize) -> bool {
+        if let Some(name) = self.sorts.get(index).and_then(TextSort::glyph_name)
+            && let Some(font) = self.shaping_font()
+            && let Some(class) = font.glyph_class(name).filter(|class| *class != 0)
+        {
+            return class == 3;
+        }
+        self.sorts
+            .get(index)
+            .and_then(|sort| match sort.kind {
+                TextSortKind::Glyph { codepoint, .. } => codepoint,
+                TextSortKind::LineBreak => None,
+            })
+            .is_some_and(|character| {
+                use unicode_general_category::{GeneralCategory, get_general_category};
+                matches!(
+                    get_general_category(character),
+                    GeneralCategory::NonspacingMark
+                        | GeneralCategory::SpacingMark
+                        | GeneralCategory::EnclosingMark
+                )
+            })
+    }
+
+    /// Whether a sort takes part in a kerning pair: it draws a glyph and is not a mark.
+    fn kerns(&self, index: usize) -> bool {
+        !self.sorts[index].absorbed && !self.is_mark_sort(index)
+    }
+
     /// Pair on a physical side of the active shaped sort, in font kerning order.
+    /// Marks are skipped; an active mark has no pair.
     pub fn active_visual_kern(&self, left: bool) -> Option<(&str, &str, f64)> {
         let active = self.active_sort()?;
+        if self.is_mark_sort(active) {
+            return None;
+        }
         let (start, end) = self.line_range_for_number(self.line_number_for_sort(active));
         let runs = self.visual_runs_for_line(start, end);
         for run in runs.iter() {
             let mut previous = None;
             for &index in run.visual_order() {
-                if self.sorts[index].absorbed {
+                if !self.kerns(index) {
                     continue;
                 }
                 if let Some(prev) = previous
@@ -51,24 +93,42 @@ impl TextBuffer {
     }
 
     /// Logical pair ending at the grabbed sort, plus the visual boundary to move.
+    ///
+    /// Returns the first and second glyph of the pair in logical order, the sort before which
+    /// a preview without live layout tables moves the line, whether the pair's run reads right
+    /// to left, and the current value.
+    /// Marks are skipped on both sides: a grabbed mark kerns as its base, and the pair is that
+    /// base and the base before it, with the marks of the earlier base moving with it.
     pub fn drag_pair(&self, grabbed: usize) -> Option<(&str, &str, usize, bool, f64)> {
         let (start, end) = self.line_range_for_number(self.line_number_for_sort(grabbed));
         let runs = self.visual_runs_for_line(start, end);
         let run = runs.iter().find(|r| r.sorts.contains(&grabbed))?;
         let at = run.sorts.iter().position(|&i| i == grabbed)?;
-        let prev = *run.sorts[..at]
-            .iter()
-            .rev()
-            .find(|&&i| !self.sorts[i].absorbed)?;
+        // A mark kerns as the base it follows.
+        let at = run.sorts[..=at].iter().rposition(|&i| self.kerns(i))?;
+        let grabbed = run.sorts[at];
+        let prev_at = run.sorts[..at].iter().rposition(|&i| self.kerns(i))?;
+        let prev = run.sorts[prev_at];
         let a = self.sort_glyph_name(prev)?;
         let b = self.sort_glyph_name(grabbed)?;
-        Some((
-            a,
-            b,
-            if run.rtl { prev } else { grabbed },
-            run.rtl,
-            self.lookup_kerning(a, b),
-        ))
+        // On the screen the gap is between the grabbed base and the next drawn sort: in a
+        // left-to-right run that is the grabbed base, after the earlier base and its marks;
+        // in a right-to-left run it is the drawn sort logically just before the grabbed one,
+        // a mark of the earlier base or that base.
+        let boundary = if run.rtl {
+            *run.sorts[prev_at..at]
+                .iter()
+                .rev()
+                .find(|&&i| !self.sorts[i].absorbed)?
+        } else {
+            grabbed
+        };
+        Some((a, b, boundary, run.rtl, self.lookup_kerning(a, b)))
+    }
+
+    /// The members of a kerning group, or `None` for a name that is not a group.
+    pub fn group_members(&self, group: &str) -> Option<&[String]> {
+        self.kerning.groups.get(group).map(Vec::as_slice)
     }
 
     /// Match the card's most specific existing pair, then use available groups.

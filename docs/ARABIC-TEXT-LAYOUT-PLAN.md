@@ -365,7 +365,8 @@ Phases 1 to 4 are the new system; phases 5 to 7 build on it.
 
 ### Phase 6: Arabic design features
 
-- [ ] 6.1 Right-to-left kerning: storage, editing in the Text tool, and compile rules equal to fontc.
+- [x] 6.1 Right-to-left kerning: storage, editing in the Text tool, and compile rules equal to fontc.
+      Done 2026-11-24: a kerning drag, the pairs of the metrics card and the kerning hover skip marks and use the kerning groups, a drag in a right-to-left run has the right sign in either line direction and goes through `LayoutTables::build_live`, Arabic-Indic digits kern left to right, `src/text/kern_direction.rs` repeats the direction rules of the fontbe kerning writer so the metrics card warns about a pair the export leaves out, and Glyphs `kerningRTL` is read and written back.
 - [x] 6.2 Generator for joining features from glyph names, as a reviewed proposal.
       Done 2026-11-24: `src/text/arabic_features.rs` writes `isol`, `fina`, `medi`, `init` and `rlig` into one delimited block of the feature text, through Generate Joining in the Features section and `runebender features --joining`.
 - [ ] 6.3 Letters from a skeleton and dot marks through `ccmp`.
