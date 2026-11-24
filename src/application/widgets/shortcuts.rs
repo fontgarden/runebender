@@ -92,6 +92,12 @@ impl Widget for ShortcutHost {
             && !key.modifiers.ctrl()
             && !key.modifiers.alt();
         if unmodified_space {
+            // A held key repeats. One action starts the pan, and a repeat changes nothing, so
+            // it must not rebuild the view tree for each one.
+            if key.repeat && key.state == KeyState::Down {
+                ctx.set_handled();
+                return;
+            }
             let action = match key.state {
                 KeyState::Down => AppAction::BeginSpacePan,
                 KeyState::Up => AppAction::EndSpacePan,

@@ -302,6 +302,18 @@ impl EditorWidget {
                 ctx.request_render();
                 ctx.set_handled();
             }
+            // A trackpad pinch zooms about the pointer, as a scroll does.
+            PointerEvent::Gesture(masonry::core::PointerGestureEvent {
+                gesture: masonry::core::PointerGesture::Pinch(delta),
+                state,
+                ..
+            }) => {
+                let at = ctx.local_position(state.position);
+                let factor = (1.0 + f64::from(*delta)).max(0.1);
+                self.session.viewport.zoom_about(at, factor, 0.02, 64.0);
+                ctx.request_render();
+                ctx.set_handled();
+            }
             _ => {}
         }
     }
