@@ -71,3 +71,160 @@ text = "بَ بِ بُ بّ بْ"
 label = "Latin and Arabic"
 scripts = ["Latin", "Arabic"]
 text = "no HO باب"
+
+# Arabic and Quranic test samples, grouped by what each tests.
+# The texts are the basmala, single words, and short phrases written for these tests.
+# `covers` lists the code points that a sample tests; the text contains each of them.
+# `carriers` lists the other code points that the text can use, such as the base letters.
+# Runebender reads both keys; other readers of the format can ignore them.
+
+# The basmala in Quranic orthography: alef wasla, dagger alef and shadda with fatha.
+[sample.quran-basmala]
+label = "Basmala"
+scripts = ["Arabic"]
+lang = "ar"
+text = "بِسْمِ ٱللَّهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ"
+covers = ["U+064E", "U+0650", "U+0651", "U+0652", "U+0670", "U+0671"]
+carriers = ["U+0621..U+064A"]
+
+# The Quranic pause marks U+06D6 to U+06DC, each on the last letter of a word.
+[sample.quran-pause-marks]
+label = "Quranic pause marks"
+scripts = ["Arabic"]
+lang = "ar"
+text = "قَالَۖ عَلِيمٌۗ كَبِيرٌۘ سَمِيعٌۙ قَدِيرٌۚ حَكِيمٌۛ رَحِيمٌۜ"
+covers = ["U+06D6..U+06DC"]
+carriers = ["U+0621..U+064A", "U+064B..U+0652"]
+
+# End of ayah U+06DD and the disputed end of ayah U+08E2 over Arabic-Indic and Extended
+# Arabic-Indic digits, and a short phrase in the ornate parentheses U+FD3F and U+FD3E.
+[sample.quran-end-of-ayah]
+label = "End of ayah and ornate parentheses"
+scripts = ["Arabic"]
+lang = "ar"
+text = "﴿ٱلْحَمْدُ لِلَّهِ﴾ ۝١ ۝١٢ ۝١٢٣ ۝٤٥٦ ۝٧٨٩ ۝١٠ ۝۱۲۳ ۝۴۵۶ ۝۷۸۹ ۝۱۰ ࣢١٢"
+covers = ["U+06DD", "U+08E2", "U+FD3E", "U+FD3F", "U+0660..U+0669", "U+06F0..U+06F9"]
+carriers = ["U+0621..U+064A", "U+064B..U+0652", "U+0671"]
+
+# The rub el hizb U+06DE before a word and the sajdah sign U+06E9 after one.
+[sample.quran-section-marks]
+label = "Rub el hizb and sajdah"
+scripts = ["Arabic"]
+lang = "ar"
+text = "۞ قُلْ وَٱسْجُدْ ۩ يَسْجُدُونَ ۩"
+covers = ["U+06DE", "U+06E9"]
+carriers = ["U+0621..U+064A", "U+064B..U+0652", "U+0671"]
+
+# The small high and low letters and stops of U+06DF to U+06ED; U+06E5, U+06E6 and U+06E9
+# have samples of their own.
+[sample.quran-small-letters]
+label = "Quranic small letters"
+scripts = ["Arabic"]
+lang = "ar"
+text = "أُو۟لَٰٓئِكَ أَنَا۠ قُلۡ مِنۢ بَعۡدِ مُصَۣيۡطِرٌ مَاۤ ٱلنَّبِيِّۧنَ نُۨجِي مَجۡر۪ىٰهَا تَأۡمَ۫نَّا ءَا۬عۡجَمِيٌّ شِهَابٍۭ"
+covers = ["U+06DF..U+06E4", "U+06E7..U+06E8", "U+06EA..U+06ED"]
+carriers = ["U+0621..U+064A", "U+064B..U+0652", "U+0653", "U+0670", "U+0671"]
+
+# Small waw U+06E5 and small yeh U+06E6 after a pronoun, and the superscript alef U+0670.
+[sample.quran-small-waw-yeh]
+label = "Small waw, small yeh and superscript alef"
+scripts = ["Arabic"]
+lang = "ar"
+text = "إِنَّهُۥ بِهِۦ فِيهِۦ عَلَىٰ هَٰذَا ذَٰلِكَ"
+covers = ["U+06E5", "U+06E6", "U+0670"]
+carriers = ["U+0621..U+064A", "U+064B..U+0652"]
+
+# Alef wasla U+0671, and the subscript alef U+0656 and inverted damma U+0657 of the
+# Indo-Pakistani orthography.
+[sample.quran-alef-wasla]
+label = "Alef wasla, subscript alef and inverted damma"
+scripts = ["Arabic"]
+lang = "ar"
+text = "بِٱسْمِ ٱلْقَلَمِ وَٱدْخُلُوا بِهٖ لَهٗ فِيهٖ"
+covers = ["U+0656", "U+0657", "U+0671"]
+carriers = ["U+0621..U+064A", "U+064B..U+0652"]
+
+# Each hamza and madda letter U+0622 to U+0626, precomposed and then as its canonical
+# decomposition with U+0653 to U+0655, alone and in a word, and the hamza U+0621.
+[sample.arabic-hamza-madda]
+label = "Hamza and madda, precomposed and decomposed"
+scripts = ["Arabic"]
+lang = "ar"
+text = "آ آ أ أ إ إ ؤ ؤ ئ ئ مَآ مَآ سُئِلَ سُئِلَ سَأَلَ سَأَلَ شَيْءٌ"
+covers = ["U+0621..U+0626", "U+0653..U+0655"]
+carriers = ["U+0621..U+064A", "U+064B..U+0652"]
+
+# Tanween U+064B to U+064D, open tanween U+08F0 to U+08F2, and iqlab with the small meem
+# above U+06E2 and below U+06ED.
+[sample.quran-tanween]
+label = "Tanween, open tanween and iqlab"
+scripts = ["Arabic"]
+lang = "ar"
+text = "كِتَٰبًا رَحِيمٌ عَلِيمٍ سَمِيعࣰا غَفُورࣱ رَّحِيمٌ قَلْبࣲ سَلِيمٍ سَمِيعُۢ بَصِيرٌ عَلِيمِۭ بِهِ"
+covers = ["U+064B..U+064D", "U+08F0..U+08F2", "U+06E2", "U+06ED"]
+carriers = ["U+0621..U+064A", "U+064E..U+0652", "U+0670"]
+
+# Shadda with fatha, kasra, damma, fathatan, kasratan and the dagger alef, each in both
+# input orders, on beh alone and in a word.
+[sample.arabic-stacked-marks]
+label = "Stacked marks in both orders"
+scripts = ["Arabic"]
+lang = "ar"
+text = "بَّ بَّ بِّ بِّ بُّ بُّ بًّ بًّ بٍّ بٍّ بّٰ بّٰ رَبِّ رَبِّ"
+covers = ["U+064B", "U+064D..U+0651", "U+0670"]
+carriers = ["U+0628", "U+0631"]
+
+# The Allah ligature with and without alef wasla, and lam-alef with marks, both madda
+# spellings and hamza below.
+[sample.arabic-lam-ligatures]
+label = "Allah and lam-alef ligatures"
+scripts = ["Arabic"]
+lang = "ar"
+text = "ٱللَّهِ لِلَّهِ بِاللَّهِ اللّٰه لَآ لَآ لِإِ فَلَا لَأَ بِلَا"
+covers = ["U+0622", "U+0623", "U+0625", "U+0627", "U+0644", "U+0647", "U+0651", "U+0653", "U+0670", "U+0671"]
+carriers = ["U+0628", "U+0641", "U+064B..U+0652"]
+
+# Each mark of U+08D3 to U+08FF on beh; U+08E2 is a sign, in the end of ayah sample.
+[sample.arabic-extended-marks]
+label = "Extended Arabic marks on beh"
+scripts = ["Arabic"]
+lang = "ar"
+text = "ب࣓ بࣔ بࣕ بࣖ بࣗ بࣘ بࣙ بࣚ بࣛ بࣜ بࣝ بࣞ بࣟ ب࣠ ب࣡ بࣣ بࣤ بࣥ بࣦ بࣧ بࣨ بࣩ ب࣪ ب࣫ ب࣬ ب࣭ ب࣮ ب࣯ بࣰ بࣱ بࣲ بࣳ بࣴ بࣵ بࣶ بࣷ بࣸ بࣹ بࣺ بࣻ بࣼ بࣽ بࣾ بࣿ"
+covers = ["U+08D3..U+08E1", "U+08E3..U+08FF"]
+carriers = ["U+0628"]
+
+# Tatweel U+0640 inside a word with marks on it, and alone with marks.
+[sample.arabic-tatweel-marks]
+label = "Tatweel with marks"
+scripts = ["Arabic"]
+lang = "ar"
+text = "بـب بـَـب بـِـب بـّـب بـٰـب ـَ ـُ ـِ ـّ ـٔ"
+covers = ["U+0640", "U+064E..U+0651", "U+0654", "U+0670"]
+carriers = ["U+0628"]
+
+# Persian letters with keheh and Farsi yeh, a zero width non-joiner and Persian digits.
+[sample.persian-letters]
+label = "Persian letters"
+scripts = ["Arabic"]
+lang = "fa"
+text = "پدر چای ژاله گل کتاب یک می\u200Cروم خانه\u200Cها ۴۵۶"
+covers = ["U+067E", "U+0686", "U+0698", "U+06A9", "U+06AF", "U+06CC", "U+200C", "U+06F4..U+06F6"]
+carriers = ["U+0621..U+063A", "U+0641..U+0642", "U+0644..U+0648"]
+
+# Urdu letters: retroflex letters, noon ghunna, heh doachashmee and goal, yeh barree.
+[sample.urdu-letters]
+label = "Urdu letters"
+scripts = ["Arabic"]
+lang = "ur"
+text = "ٹوپی ڈاک گاڑی میں ہے بھائی ہاں لڑکے آۓ خانۂ ۴۵۶۷"
+covers = ["U+0679", "U+067E", "U+0688", "U+0691", "U+06A9", "U+06AF", "U+06BA", "U+06BE", "U+06C1", "U+06C2", "U+06CC", "U+06D2", "U+06D3", "U+06F4..U+06F7"]
+carriers = ["U+0621..U+063A", "U+0641..U+0642", "U+0644..U+0648"]
+
+# Central Kurdish letters: reh and lam with small v, oe, yeh with small v, veh and ae.
+[sample.kurdish-letters]
+label = "Kurdish letters"
+scripts = ["Arabic"]
+lang = "ckb"
+text = "کوردستان ڕۆژ گوڵ دێ ڤیان ئەوە شەو چیا"
+covers = ["U+0686", "U+0695", "U+0698", "U+06A4", "U+06A9", "U+06AF", "U+06B5", "U+06C6", "U+06CC", "U+06CE", "U+06D5"]
+carriers = ["U+0621..U+063A", "U+0641..U+0642", "U+0644..U+0648"]

@@ -12,10 +12,17 @@
 //! this module ignores them.
 //!
 //! In a sample text, [`GLYPH_PLACEHOLDER`] stands for the character of the open glyph.
+//!
+//! Two optional keys of a sample are Runebender's own: `covers` lists the code points that the
+//! sample tests, and `carriers` the other code points that its text can use, such as base
+//! letters.
+//! Each entry is `U+0628` or a range `U+06D6..U+06DC`.
+//! The tests of the default samples check each text against them.
 
 use serde::Deserialize;
 use serde::de::{MapAccess, Visitor};
 use std::fmt;
+use std::ops::RangeInclusive;
 
 /// The default samples, in the format of a project file.
 pub const DEFAULT_SAMPLES: &str = include_str!("../../assets/data/proof-samples.toml");
@@ -92,6 +99,10 @@ pub struct ProofSample {
     pub text: String,
     /// The language tag, when the file gives one.
     pub lang: Option<String>,
+    /// The code points that the sample tests, from `covers`; empty when the file gives none.
+    pub covers: Vec<RangeInclusive<char>>,
+    /// The other code points that the text can use, from `carriers`.
+    pub carriers: Vec<RangeInclusive<char>>,
 }
 
 impl ProofSample {
@@ -147,6 +158,39 @@ struct RawSample {
     #[serde(default)]
     scripts: Vec<String>,
     lang: Option<String>,
+    #[serde(default)]
+    covers: Vec<String>,
+    #[serde(default)]
+    carriers: Vec<String>,
+}
+
+/// Read `U+0628` or `U+06D6..U+06DC`.
+fn code_points(entry: &str) -> Option<RangeInclusive<char>> {
+    let one = |text: &str| {
+        let hex = text.trim().strip_prefix("U+")?;
+        u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
+    };
+    let (first, last) = match entry.split_once("..") {
+        Some((first, last)) => (one(first)?, one(last)?),
+        None => (one(entry)?, one(entry)?),
+    };
+    (first <= last).then_some(first..=last)
+}
+
+/// Read the `covers` or `carriers` entries of the sample with `key`.
+fn code_point_list(
+    key: &str,
+    field: &str,
+    entries: &[String],
+) -> Result<Vec<RangeInclusive<char>>, String> {
+    entries
+        .iter()
+        .map(|entry| {
+            code_points(entry).ok_or_else(|| {
+                format!("sample.{key}: {field} entry \"{entry}\" is not U+XXXX or U+XXXX..U+YYYY")
+            })
+        })
+        .collect()
 }
 
 /// The sample tables in the order of the file, which a map type would not keep.
@@ -177,8 +221,8 @@ impl<'de> Deserialize<'de> for OrderedSamples {
 ///
 /// # Errors
 ///
-/// Returns a message for TOML that does not parse, a sample without `label` or `text`, and an
-/// unknown script name.
+/// Returns a message for TOML that does not parse, a sample without `label` or `text`, an
+/// unknown script name, and a `covers` or `carriers` entry that is not a code point or range.
 pub fn parse(source: &str) -> Result<SampleFile, String> {
     let raw: RawFile = toml::from_str(source).map_err(|error| error.to_string())?;
     let samples = raw
@@ -198,12 +242,16 @@ pub fn parse(source: &str) -> Result<SampleFile, String> {
                     })
                 })
                 .collect::<Result<_, _>>()?;
+            let covers = code_point_list(&key, "covers", &raw.covers)?;
+            let carriers = code_point_list(&key, "carriers", &raw.carriers)?;
             Ok(ProofSample {
                 key,
                 label: raw.label,
                 scripts,
                 text: raw.text,
                 lang: raw.lang,
+                covers,
+                carriers,
             })
         })
         .collect::<Result<_, String>>()?;
@@ -386,6 +434,140 @@ mod tests {
         assert_eq!(hebrew.text_for(None), None);
         let words = samples.iter().find(|s| s.key == "latin-words").unwrap();
         assert_eq!(words.text_for(None).as_deref(), Some("Hamburgefontsiv"));
+    }
+
+    fn in_ranges(ranges: &[RangeInclusive<char>], c: char) -> bool {
+        ranges.iter().any(|range| range.contains(&c))
+    }
+
+    #[test]
+    fn covers_and_carriers_parse_and_bad_entries_are_named() {
+        let file = parse(
+            "[sample.a]\nlabel = \"A\"\ntext = \"a\"\n\
+             covers = [\"U+0628\", \"U+06D6..U+06DC\"]\ncarriers = [\"U+0020\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            file.samples[0].covers,
+            ['\u{0628}'..='\u{0628}', '\u{06D6}'..='\u{06DC}']
+        );
+        assert_eq!(file.samples[0].carriers, [' '..=' ']);
+        for bad in ["0628", "U+XYZ", "U+06DC..U+06D6", "U+D800"] {
+            let error = parse(&format!(
+                "[sample.a]\nlabel = \"A\"\ntext = \"a\"\ncovers = [\"{bad}\"]\n"
+            ))
+            .unwrap_err();
+            assert!(
+                error.contains(&format!("sample.a: covers entry \"{bad}\"")),
+                "{error}"
+            );
+        }
+    }
+
+    /// Each default sample that lists what it tests contains every code point of `covers`,
+    /// and no code point outside `covers`, `carriers` and the space.
+    #[test]
+    fn every_default_sample_uses_only_and_all_the_code_points_it_claims() {
+        let samples = default_samples();
+        for sample in &samples {
+            assert!(
+                !sample.text.trim().is_empty(),
+                "sample.{} is empty",
+                sample.key
+            );
+            assert!(
+                !sample.label.trim().is_empty(),
+                "sample.{} has no label",
+                sample.key
+            );
+            if sample.covers.is_empty() {
+                continue;
+            }
+            for c in sample.text.chars() {
+                assert!(
+                    c == ' ' || in_ranges(&sample.covers, c) || in_ranges(&sample.carriers, c),
+                    "sample.{}: U+{:04X} is not in covers or carriers",
+                    sample.key,
+                    u32::from(c)
+                );
+            }
+            for c in sample.covers.iter().flat_map(|range| range.clone()) {
+                assert!(
+                    sample.text.contains(c),
+                    "sample.{}: covers U+{:04X}, which the text lacks",
+                    sample.key,
+                    u32::from(c)
+                );
+            }
+        }
+    }
+
+    /// The Quranic and Arabic samples together test every sign that the plan lists.
+    #[test]
+    fn the_arabic_samples_cover_the_quranic_repertoire() {
+        let samples = default_samples();
+        let covered = |c: char| samples.iter().any(|s| in_ranges(&s.covers, c));
+        let required = [
+            '\u{064B}'..='\u{0657}',
+            '\u{0640}'..='\u{0640}',
+            '\u{0670}'..='\u{0671}',
+            '\u{0621}'..='\u{0626}',
+            '\u{06D6}'..='\u{06ED}',
+            '\u{0660}'..='\u{0669}',
+            '\u{06F0}'..='\u{06F9}',
+            '\u{08D3}'..='\u{08FF}',
+            '\u{FD3E}'..='\u{FD3F}',
+        ];
+        for c in required.into_iter().flatten() {
+            assert!(covered(c), "no sample covers U+{:04X}", u32::from(c));
+        }
+        for key in [
+            "quran-basmala",
+            "quran-pause-marks",
+            "quran-end-of-ayah",
+            "quran-section-marks",
+            "quran-small-letters",
+            "quran-small-waw-yeh",
+            "quran-alef-wasla",
+            "arabic-hamza-madda",
+            "quran-tanween",
+            "arabic-stacked-marks",
+            "arabic-lam-ligatures",
+            "arabic-extended-marks",
+            "arabic-tatweel-marks",
+            "persian-letters",
+            "urdu-letters",
+            "kurdish-letters",
+        ] {
+            let sample = samples.iter().find(|s| s.key == key).expect(key);
+            assert_eq!(sample.scripts, [SampleScript::Arabic], "{key}");
+            assert!(!sample.covers.is_empty(), "{key}");
+        }
+    }
+
+    #[test]
+    fn the_stacked_marks_come_in_both_orders_and_hamza_in_both_spellings() {
+        let samples = default_samples();
+        let text = |key: &str| &samples.iter().find(|s| s.key == key).unwrap().text;
+        let stacked = text("arabic-stacked-marks");
+        for (a, b) in [
+            ('\u{0651}', '\u{064E}'),
+            ('\u{0651}', '\u{0650}'),
+            ('\u{0651}', '\u{0670}'),
+        ] {
+            assert!(stacked.contains(&format!("\u{0628}{a}{b}")), "{a}{b}");
+            assert!(stacked.contains(&format!("\u{0628}{b}{a}")), "{b}{a}");
+        }
+        let hamza = text("arabic-hamza-madda");
+        for (precomposed, decomposed) in [
+            ("\u{0622}", "\u{0627}\u{0653}"),
+            ("\u{0623}", "\u{0627}\u{0654}"),
+            ("\u{0625}", "\u{0627}\u{0655}"),
+            ("\u{0624}", "\u{0648}\u{0654}"),
+            ("\u{0626}", "\u{064A}\u{0654}"),
+        ] {
+            assert!(hamza.contains(&format!("{precomposed} {decomposed}")));
+        }
     }
 
     #[test]

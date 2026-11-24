@@ -378,7 +378,8 @@ Phases 1 to 4 are the new system; phases 5 to 7 build on it.
 - [ ] 6.6 Collision overlay for marks and dots in the text line.
       Engine done 2026-11-24: `find_collisions` and `CollisionCache` in `src/analysis/collisions.rs` report overlaps, containments and gaps below the clearance between marks, dots and neighbors; the overlay and its toggle are not done.
 - [ ] 6.7 Test strings for a glyph in all joining contexts and with all mark classes.
-- [ ] 6.8 Quranic sample set in the proof samples.
+- [x] 6.8 Quranic sample set in the proof samples.
+      Done 2026-11-24: sixteen samples in `assets/data/proof-samples.toml`, each with the `covers` and `carriers` code points that a test checks against its text.
 - [ ] 6.9 Kashida and tatweel preview.
 - [ ] 6.10 Shaping debugger, after the `harfrust` decision of 0.3.
 

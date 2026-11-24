@@ -22,6 +22,9 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
   `runebender features --joining` does the same from the command line.
 - The same block holds `ccmp` decompositions for Arabic letters whose glyph is empty while the font has their skeleton and marks, such as `teh-ar` from `behDotless-ar` and `twodotshorizontalabove-ar`.
   The parts come from the `com.runebender.compose` recipe of the glyph, or from a table of the Arabic, Persian and Urdu letters in `assets/data/arabic-skeletons.toml`, and the marks attach through the anchors of the font.
+- Quranic and Arabic proof samples: the basmala, the pause marks, end of ayah with Arabic-Indic and Extended Arabic-Indic digits, ornate parentheses, rub el hizb and sajdah, the small high and low letters, alef wasla, hamza and madda in precomposed and decomposed spellings, tanween and open tanween with iqlab, stacked marks in both input orders, the Allah and lam-alef ligatures, the marks of U+08D3 to U+08FF, and tatweel with marks.
+  Samples for Persian, Urdu and Kurdish letters follow them.
+  The optional `covers` and `carriers` keys of a sample list the code points that it tests and the other code points that it uses.
 
 ### Changed
 
