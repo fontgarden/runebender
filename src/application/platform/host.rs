@@ -214,7 +214,12 @@ impl Workspace {
             list: options.list,
             rail: Rail::Glyphs,
             text_dir: None,
-            text_features_disabled: options.text_features_disabled.iter().cloned().collect(),
+            text_feature_overrides: options
+                .text_features_disabled
+                .iter()
+                .map(|tag| (tag.clone(), false))
+                .collect(),
+            panel_shape_feature: None,
             text_script: options.text_script.clone(),
             text_language: options.text_language.clone(),
             layer_name_buf: "sketch".into(),
@@ -340,6 +345,7 @@ impl Workspace {
             theme_id,
             coord_quadrant: runebender::outline::path::Quadrant::Center,
             coord_x_buf: String::new(),
+            anchor_name_draft: None,
             coord_y_buf: String::new(),
             coord_w_buf: String::new(),
             coord_h_buf: String::new(),
@@ -1067,7 +1073,9 @@ mod tests {
         workspace.preview_text = "B preview \u{0628}".into();
         workspace.preview_visible = false;
         workspace.text_dir = Some(runebender::text::buffer::TextDirection::RightToLeft);
-        workspace.text_features_disabled.insert("rlig".into());
+        workspace
+            .text_feature_overrides
+            .insert("rlig".into(), false);
         workspace.text_script = Some("arab".into());
         workspace.text_language = Some("ur".into());
         workspace.park();
@@ -1100,7 +1108,7 @@ mod tests {
             workspace.text_dir,
             Some(runebender::text::buffer::TextDirection::RightToLeft)
         );
-        assert!(workspace.text_features_disabled.contains("rlig"));
+        assert_eq!(workspace.text_feature_overrides.get("rlig"), Some(&false));
         assert_eq!(workspace.text_script.as_deref(), Some("arab"));
         assert_eq!(workspace.text_language.as_deref(), Some("ur"));
 

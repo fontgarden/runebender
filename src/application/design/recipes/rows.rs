@@ -88,10 +88,6 @@ pub(crate) enum Row {
     Prose(String),
     /// A text field: a caption over a control-height input. Enter
     /// commits.
-    #[expect(
-        dead_code,
-        reason = "the vocabulary is closed: a row nothing uses yet is still part of it"
-    )]
     Field {
         caption: &'static str,
         placeholder: &'static str,

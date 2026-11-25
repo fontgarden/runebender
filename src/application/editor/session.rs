@@ -2255,17 +2255,24 @@ impl Session {
         if !x.is_finite() || !y.is_finite() {
             return;
         }
-        let n = self
-            .current_layer()
-            .map(|layer| layer.anchors().count())
-            .unwrap_or_default();
         let Some(mut transaction) = self.canonical_base.clone() else {
             return;
         };
-        let Ok(anchor) = transaction
-            .draft_mut()
-            .add_anchor(format!("anchor.{n}"), Point::new(x, y))
-        else {
+        let names: HashSet<_> = transaction
+            .draft()
+            .view()
+            .anchors()
+            .map(|a| a.name())
+            .collect();
+        let mut n = names.len();
+        let name = loop {
+            let candidate = format!("anchor.{n}");
+            if !names.contains(candidate.as_str()) {
+                break candidate;
+            }
+            n += 1;
+        };
+        let Ok(anchor) = transaction.draft_mut().add_anchor(name, Point::new(x, y)) else {
             return;
         };
         self.selection.clear();
@@ -2836,7 +2843,7 @@ impl Workspace {
             has_text_session: self.has_text_session,
             preview_text: self.preview_text.clone(),
             direction: self.text_dir,
-            features_disabled: self.text_features_disabled.clone(),
+            feature_overrides: self.text_feature_overrides.clone(),
             script: self.text_script.clone(),
             language: self.text_language.clone(),
         }
@@ -2847,7 +2854,7 @@ impl Workspace {
         self.has_text_session = context.has_text_session;
         self.preview_text = context.preview_text;
         self.text_dir = context.direction;
-        self.text_features_disabled = context.features_disabled;
+        self.text_feature_overrides = context.feature_overrides;
         self.text_script = context.script;
         self.text_language = context.language;
     }

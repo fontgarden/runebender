@@ -520,7 +520,30 @@ pub(crate) fn compare_section(app: &Workspace) -> impl WidgetView<Workspace> + u
             ))
         })
         .collect();
-    let incompatible = app.font.incompatible_count();
+    let names: Vec<_> = app.font.incompatible_names().map(str::to_owned).collect();
+    let incompatible = names.len();
+    let inspect = (!names.is_empty()).then(|| {
+        let row = if let [glyph] = names.as_slice() {
+            let glyph = glyph.clone();
+            recipes::Row::Secondary {
+                text: format!("Compare {glyph}"),
+                on_click: recipes::click(move |app| app.inspect_incompatible_glyph(&glyph)),
+            }
+        } else {
+            recipes::Row::Dropdown {
+                key: "Compare Incompatible Glyphs",
+                caption: "Compare glyph".into(),
+                choices: names.clone(),
+                chosen: None,
+                on_pick: std::sync::Arc::new(move |app, index| {
+                    if let Some(glyph) = names.get(index) {
+                        app.inspect_incompatible_glyph(glyph);
+                    }
+                }),
+            }
+        };
+        recipes::body_of(app, vec![recipes::Group::new("", vec![row])])
+    });
     section(
         app,
         "Compare",
@@ -536,6 +559,7 @@ pub(crate) fn compare_section(app: &Workspace) -> impl WidgetView<Workspace> + u
                         pal.role("warning")
                     },
                 ),
+                inspect,
             ),
         )),
     )

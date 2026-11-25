@@ -623,19 +623,10 @@ impl Workspace {
             .selection
             .clone()
             .map_err(|error| format!("{instruction}: {error}"))?;
-        let disabled: std::collections::HashSet<_> = selection
-            .features
-            .iter()
-            .filter_map(|(tag, enabled)| (!enabled).then_some(tag.as_str()))
-            .collect();
+        let overrides: std::collections::BTreeMap<_, _> =
+            selection.features.iter().cloned().collect();
         if selection.text != self.initial_text
-            || disabled.len() != selection.features.len()
-            || disabled
-                != self
-                    .text_features_disabled
-                    .iter()
-                    .map(String::as_str)
-                    .collect()
+            || overrides != self.text_feature_overrides
             || selection.script != self.text_script
             || selection.language != self.text_language
             || self.text_dir.is_some_and(|direction| {

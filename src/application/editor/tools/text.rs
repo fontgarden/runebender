@@ -575,12 +575,14 @@ impl TextInputs {
     /// Apply preview-only OpenType feature and locale choices.
     pub(crate) fn with_shaping_options(
         mut self,
-        disabled: &std::collections::HashSet<String>,
+        overrides: &std::collections::BTreeMap<String, bool>,
         script: Option<&str>,
         language: Option<&str>,
     ) -> Self {
-        self.feature_overrides = disabled.iter().map(|tag| (tag.clone(), false)).collect();
-        self.feature_overrides.sort();
+        self.feature_overrides = overrides
+            .iter()
+            .map(|(tag, &on)| (tag.clone(), on))
+            .collect();
         self.script = script.map(str::to_string);
         self.language = language.map(str::to_string);
         self
@@ -1157,7 +1159,11 @@ mod tests {
 
     #[test]
     fn shaping_options_reach_the_widget_buffer() {
-        let disabled = std::collections::HashSet::from(["liga".to_string(), "kern".to_string()]);
+        let overrides = std::collections::BTreeMap::from([
+            ("liga".to_string(), false),
+            ("kern".to_string(), false),
+            ("ss01".to_string(), true),
+        ]);
         let inputs = TextInputs {
             context_id: (0, 0),
             inventory: TextGlyphInventory::default().into(),
@@ -1178,13 +1184,17 @@ mod tests {
             script: None,
             language: None,
         }
-        .with_shaping_options(&disabled, Some("arab"), Some("ur"));
+        .with_shaping_options(&overrides, Some("arab"), Some("ur"));
 
         let state = TextState::new(&inputs);
 
         assert_eq!(
             state.buffer.feature_overrides(),
-            &[("kern".into(), false), ("liga".into(), false)]
+            &[
+                ("kern".into(), false),
+                ("liga".into(), false),
+                ("ss01".into(), true)
+            ]
         );
         assert_eq!(state.buffer.shaping_locale(), (Some("arab"), Some("ur")));
     }
@@ -1415,11 +1425,11 @@ mod tests {
                 .is_some_and(|name| name.contains("kasra")),
             "the kasra remains an addressable shaped sort"
         );
-        let disabled = std::collections::HashSet::from(["rlig".to_string()]);
+        let overrides = std::collections::BTreeMap::from([("rlig".to_string(), false)]);
         let no_rlig = TextState::new(
             &TextInputs::new(&font)
                 .with_text(sample)
-                .with_shaping_options(&disabled, Some("arab"), Some("ur")),
+                .with_shaping_options(&overrides, Some("arab"), Some("ur")),
         );
         assert!(
             no_rlig

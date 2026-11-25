@@ -489,6 +489,63 @@ impl EditTransactionHistory {
 }
 
 impl Project {
+    /// Rename one anchor and realign its layer and direct composite users in that layer.
+    /// Undo restores the exact previous name and component transforms together.
+    pub fn rename_document_anchor(
+        &mut self,
+        address: &GlyphLayerAddress,
+        anchor: AnchorId,
+        name: &str,
+    ) -> Result<Option<(EditHistoryGroupId, DocumentChange)>, String> {
+        use crate::font::composites::realign_document_layer;
+
+        let mut renamed = self
+            .begin_document_layer_transaction(address)
+            .map_err(|error| error.to_string())?;
+        if !renamed
+            .draft_mut()
+            .set_anchor_name(anchor, name)
+            .map_err(|error| error.to_string())?
+        {
+            return Ok(None);
+        }
+        realign_document_layer(
+            renamed.draft_mut(),
+            |base| self.document_layer(base, &address.layer),
+            true,
+        )
+        .map_err(|error| error.to_string())?;
+
+        let mut edits = Vec::new();
+        let renamed_layer = renamed.draft().view();
+        for dependent in self.variable.dependent_component_layers(&address.glyph) {
+            if dependent.layer != address.layer || &dependent == address {
+                continue;
+            }
+            let mut edit = self
+                .begin_document_layer_transaction(&dependent)
+                .map_err(|error| error.to_string())?;
+            let changed = realign_document_layer(
+                edit.draft_mut(),
+                |base| {
+                    if base == address.glyph {
+                        Some(renamed_layer)
+                    } else {
+                        self.document_layer(base, &address.layer)
+                    }
+                },
+                true,
+            )
+            .map_err(|error| error.to_string())?;
+            if changed {
+                edits.push(edit);
+            }
+        }
+        edits.push(renamed);
+        self.commit_document_layer_group("rename anchor", edits)
+            .map_err(|error| error.to_string())
+    }
+
     pub(super) fn commit_background_group(
         &mut self,
         mut edit: BackgroundEdit,

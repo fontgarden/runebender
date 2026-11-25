@@ -165,13 +165,17 @@ fn align_inputs_with(
     layer
         .components()
         .map(|component| {
-            let transform = component.transform();
-            let coefficients = transform.as_coeffs();
+            let [a, b, c, d, x, y] = component.transform().as_coeffs();
+            let linear = kurbo::Affine::new([a, b, c, d, 0.0, 0.0]);
+            let mut anchors = base_anchors(component.reference());
+            for (_, position) in &mut anchors {
+                *position = linear * *position;
+            }
             (
                 component.id(),
                 AlignInput {
-                    anchors: base_anchors(component.reference()),
-                    offset: Vec2::new(coefficients[4], coefficients[5]),
+                    anchors,
+                    offset: Vec2::new(x, y),
                     aligned: !component.alignment_disabled(),
                 },
             )
@@ -402,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_alignment_matches_legacy_and_preserves_exact_linear_transform() {
+    fn canonical_alignment_places_the_transformed_mark_anchor_on_the_base_anchor() {
         let mut font = mark_font();
         let mark = &mut font
             .default_layer_mut()
@@ -434,8 +438,12 @@ mod tests {
         assert!(moved);
         let component = transaction.draft().view().components().nth(1).unwrap();
         assert_eq!(
+            component.transform() * Point::new(300.0, 720.0),
+            Point::new(350.0, 700.0)
+        );
+        assert_eq!(
             component.transform().as_coeffs(),
-            [1.25, 0.125, -0.25, 0.875, 50.0, -20.0]
+            [1.25, 0.125, -0.25, 0.875, 155.0, 32.5]
         );
         assert!(
             !realign_document_layer(

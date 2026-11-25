@@ -324,6 +324,7 @@ impl FontModel {
                     match built {
                         Ok(built) => {
                             cache.font = Some(Arc::new(built.font.into_bytes()));
+                            cache.layout_options = Arc::default();
                             cache.error = built.feature_error;
                             cache.inputs = Some(inputs);
                         }
@@ -351,6 +352,7 @@ impl FontModel {
             });
         LiveLayout {
             font: cache.font.clone(),
+            layout_options: cache.layout_options.clone(),
             error: cache.error.clone(),
             diagnostics: cache.diagnostics.clone(),
             advances: cache.advances.clone(),
@@ -954,13 +956,36 @@ impl FontModel {
 
     /// Count the engine's cached compatibility results without interpolating during view rebuilds.
     pub(crate) fn incompatible_count(&self) -> usize {
-        if self.project.document_sources().count() < 2 {
-            return 0;
-        }
+        self.incompatible_names().count()
+    }
+
+    /// Glyphs with failed interpolation, in grid order.
+    pub(crate) fn incompatible_names(&self) -> impl Iterator<Item = &str> {
+        let variable = self.master_count() >= 2;
         self.glyphs
             .iter()
-            .filter(|entry| self.project.compat.get(&entry.name) == Some(&false))
-            .count()
+            .filter(move |entry| variable && self.project.compat.get(&entry.name) == Some(&false))
+            .map(|entry| entry.name.as_str())
+    }
+
+    /// Describe the first mismatched pair of default layers, or the engine's sparse-source error.
+    pub(crate) fn incompatibility_detail(&self, glyph: &str) -> Option<String> {
+        if self.project.compat.get(glyph) != Some(&false) {
+            return None;
+        }
+        let mut layers = self.project.document_sources().filter_map(|source| {
+            self.project
+                .document_layer(glyph, &source.default_layer())
+                .map(|layer| (source.name(), layer))
+        });
+        if let Some((base, first)) = layers.next() {
+            for (other, second) in layers {
+                if let Err(reason) = runebender::analysis::report::compatibility(first, second) {
+                    return Some(format!("{base} / {other} · {reason}"));
+                }
+            }
+        }
+        self.project.compat_detail(glyph)
     }
 
     /// Compare one source's default-layer coverage and advances with the active source.
@@ -1562,6 +1587,11 @@ mod tests {
             .expect("A is deliberately incompatible");
         assert!(detail.contains("Regular 0c"));
         assert!(detail.contains("Bold 1c"));
+        assert_eq!(model.incompatible_names().collect::<Vec<_>>(), ["A"]);
+        assert_eq!(
+            model.incompatibility_detail("A").as_deref(),
+            Some("Regular / Bold · 0 shapes against 1")
+        );
     }
 
     #[test]
@@ -1632,6 +1662,7 @@ pub(crate) type MasterOutlines = Arc<HashMap<String, Arc<BezPath>>>;
 pub(crate) struct LiveLayout {
     /// The shaping font, or the last one that could be built.
     pub(crate) font: Option<Arc<Vec<u8>>>,
+    layout_options: Arc<std::sync::OnceLock<runebender::text::layout_options::LayoutOptions>>,
     /// Why the current font state could not be built.
     pub(crate) error: Option<String>,
     /// The values at the location that came from the nearest master instead of the
@@ -1641,6 +1672,18 @@ pub(crate) struct LiveLayout {
     pub(crate) advances: Arc<HashMap<String, f64>>,
     /// The committed inputs of `font` and its builder, when `font` was built from them.
     pub(crate) source: Option<LiveLayoutSource>,
+}
+
+impl LiveLayout {
+    /// Read GSUB and GPOS tags once for the active table bytes, on the inspector's first request.
+    pub(crate) fn options(&self) -> &runebender::text::layout_options::LayoutOptions {
+        self.layout_options.get_or_init(|| {
+            self.font
+                .as_ref()
+                .map(|bytes| runebender::text::layout_options::LayoutOptions::from_font(bytes))
+                .unwrap_or_default()
+        })
+    }
 }
 
 /// The committed layout inputs at the displayed location, what moves the values of a gesture
@@ -1729,6 +1772,7 @@ struct LiveLayoutCache {
     /// How a gesture on that layer reaches `inputs`.
     basis: Arc<runebender::text::layout_tables::OverrideBasis>,
     font: Option<Arc<Vec<u8>>>,
+    layout_options: Arc<std::sync::OnceLock<runebender::text::layout_options::LayoutOptions>>,
     error: Option<String>,
     diagnostics: Arc<Vec<runebender::text::layout_tables::LayoutDiagnostic>>,
     advances: Arc<HashMap<String, f64>>,

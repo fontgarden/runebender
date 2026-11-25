@@ -625,6 +625,10 @@ pub enum DocumentEditError {
     MissingComponent(ComponentId),
     /// The requested anchor identity does not exist in the layer.
     MissingAnchor(AnchorId),
+    /// A proposed anchor name contains a control character forbidden by UFO.
+    InvalidAnchorName,
+    /// Renaming would give two anchors the same nonempty attachment name.
+    DuplicateAnchorName,
     /// A numeric edit contained NaN or infinity.
     NonFinite,
     /// The edit closure rejected its owned draft.
@@ -670,6 +674,12 @@ impl std::fmt::Display for DocumentEditError {
             }
             Self::MissingComponent(id) => write!(formatter, "component {id:?} does not exist"),
             Self::MissingAnchor(id) => write!(formatter, "anchor {id:?} does not exist"),
+            Self::InvalidAnchorName => {
+                formatter.write_str("anchor names cannot contain control characters")
+            }
+            Self::DuplicateAnchorName => {
+                formatter.write_str("another anchor in this layer already has that name")
+            }
             Self::NonFinite => {
                 formatter.write_str("document coordinates and metrics must be finite")
             }

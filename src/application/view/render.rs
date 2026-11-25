@@ -1019,7 +1019,7 @@ mod tab_tests {
         app.set_editor_text("first editor".into());
         app.preview_text = "first preview".into();
         app.text_dir = Some(TextDirection::RightToLeft);
-        app.text_features_disabled.insert("rlig".into());
+        app.text_feature_overrides.insert("rlig".into(), false);
         app.text_script = Some("arab".into());
         app.text_language = Some("ur".into());
 
@@ -1028,7 +1028,7 @@ mod tab_tests {
         app.set_editor_text("second editor".into());
         app.preview_text = "second preview".into();
         app.text_dir = Some(TextDirection::LeftToRight);
-        app.text_features_disabled.clear();
+        app.text_feature_overrides.clear();
         app.text_script = None;
         app.text_language = None;
 
@@ -1037,7 +1037,7 @@ mod tab_tests {
         assert!(app.has_text_session);
         assert_eq!(app.preview_text, "first preview");
         assert_eq!(app.text_dir, Some(TextDirection::RightToLeft));
-        assert!(app.text_features_disabled.contains("rlig"));
+        assert_eq!(app.text_feature_overrides.get("rlig"), Some(&false));
         assert_eq!(app.text_script.as_deref(), Some("arab"));
         assert_eq!(app.text_language.as_deref(), Some("ur"));
 
@@ -1046,7 +1046,7 @@ mod tab_tests {
         assert!(app.has_text_session);
         assert_eq!(app.preview_text, "second preview");
         assert_eq!(app.text_dir, Some(TextDirection::LeftToRight));
-        assert!(app.text_features_disabled.is_empty());
+        assert!(app.text_feature_overrides.is_empty());
         assert_eq!(app.text_script, None);
         assert_eq!(app.text_language, None);
     }

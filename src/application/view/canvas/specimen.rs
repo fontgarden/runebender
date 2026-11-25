@@ -558,7 +558,7 @@ pub(crate) fn live_block(app: &Workspace, text: &str, size: f64) -> Option<(Bloc
     let inputs = text_tool::TextInputs::new(&app.font)
         .with_location(&app.font, &app.axis_values)
         .with_shaping_options(
-            &app.text_features_disabled,
+            &app.text_feature_overrides,
             app.text_script.as_deref(),
             app.text_language.as_deref(),
         );

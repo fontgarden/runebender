@@ -12,6 +12,76 @@ impl Workspace {
         matches!(self.mode, Mode::Editor(_))
     }
 
+    /// Open an incompatible glyph directly from the Compare section and overlay its masters.
+    pub(crate) fn inspect_incompatible_glyph(&mut self, glyph: &str) {
+        if self.font.project.compat.get(glyph) != Some(&false) {
+            return;
+        }
+        self.open_glyph_tab(glyph);
+        if self.session.glyph_name == glyph && matches!(self.mode, Mode::Editor(_)) {
+            self.collapsed.remove("Editor Axes");
+            if !self.show_all_masters {
+                self.dispatch(crate::application::app_action::AppAction::ShowAllMasters);
+            }
+        }
+    }
+
+    /// Whether the selected point would put this contour's point types in the order of another master.
+    pub(crate) fn selected_start_matches_master(&self) -> bool {
+        use runebender::font::{LayerPointType, LayerShapeView};
+
+        if self.session.selection.len() != 1
+            || !self.on_active_master()
+            || self.session.host.is_some()
+            || self.editing_backup_layer()
+        {
+            return false;
+        }
+        let Some(layer) = self.session.current_layer() else {
+            return false;
+        };
+        for (shape_index, shape) in layer.shapes().enumerate() {
+            let LayerShapeView::Contour(contour) = shape else {
+                continue;
+            };
+            if !contour.is_closed() {
+                continue;
+            }
+            let Some(point_index) = contour.points().position(|p| {
+                p.point_type() != LayerPointType::OffCurve
+                    && self.session.selection.contains(&p.id())
+            }) else {
+                continue;
+            };
+            if point_index == 0 {
+                return false;
+            }
+            let roles: Vec<_> = contour.points().map(|p| p.point_type()).collect();
+            return self.font.project.document_sources().any(|source| {
+                let Some(LayerShapeView::Contour(other)) = self
+                    .font
+                    .project
+                    .document_layer(&self.session.glyph_name, &source.default_layer())
+                    .and_then(|layer| layer.shapes().nth(shape_index))
+                else {
+                    return false;
+                };
+                other.is_closed()
+                    && other.is_hyper() == contour.is_hyper()
+                    && !roles
+                        .iter()
+                        .copied()
+                        .eq(other.points().map(|p| p.point_type()))
+                    && roles[point_index..]
+                        .iter()
+                        .chain(&roles[..point_index])
+                        .copied()
+                        .eq(other.points().map(|p| p.point_type()))
+            });
+        }
+        false
+    }
+
     /// The Layers panel's rows for the open glyph: the master's own layer, then its other
     /// layers.
     pub(crate) fn glyph_layer_rows(&self) -> Vec<GlyphLayerRow> {
@@ -310,6 +380,77 @@ mod layer_tests {
         app.open_glyph(app.font.index_of("A").unwrap());
         assert!(matches!(app.mode, Mode::Editor(_)));
         app
+    }
+
+    #[test]
+    fn comparing_a_glyph_can_repair_a_rotated_master_and_undo_it() {
+        use crate::application::app_action::AppAction;
+        use runebender::font::LayerPointType::{Curve, Line, OffCurve};
+        use runebender::font::generated::{GeneratedContour, GeneratedPoint};
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/incompatible/Test.designspace");
+        let mut project = Project::load(&path).unwrap();
+        let layers: Vec<_> = project
+            .document_sources()
+            .map(|s| s.default_layer())
+            .collect();
+        let mut contour = GeneratedContour {
+            points: [
+                (0., 0., Line),
+                (8., 0., OffCurve),
+                (10., 2., OffCurve),
+                (10., 5., Curve),
+                (0., 10., Line),
+            ]
+            .map(|(x, y, point_type)| GeneratedPoint {
+                position: (x, y).into(),
+                point_type,
+                smooth: false,
+            })
+            .to_vec(),
+        };
+        for layer in &layers {
+            project
+                .edit_document_layer("A", layer, |draft| {
+                    draft.replace_generated_contours(std::slice::from_ref(&contour))?;
+                    Ok(())
+                })
+                .unwrap();
+            contour.points.rotate_left(3);
+        }
+        let mut app = Workspace::from_model(FontModel::from_project(project)).unwrap();
+        app.inspect_incompatible_glyph("A");
+        assert!(matches!(app.mode, Mode::Editor(_)));
+        assert!(app.show_all_masters && !app.collapsed.contains("Editor Axes"));
+        assert!(
+            app.font
+                .incompatibility_detail("A")
+                .unwrap()
+                .contains("contour 0 point 0")
+        );
+        app.set_master(1);
+        assert!(!app.selected_start_matches_master());
+        // In the rotated contour the third point was the first point of the default master.
+        let start = app
+            .session
+            .current_layer()
+            .unwrap()
+            .contours()
+            .next()
+            .unwrap()
+            .points()
+            .nth(2)
+            .unwrap()
+            .id();
+        std::sync::Arc::make_mut(&mut app.session)
+            .selection
+            .insert(start);
+        assert!(app.selected_start_matches_master());
+        app.dispatch(AppAction::SetStartPoint);
+        assert!(app.font.incompatibility_detail("A").is_none());
+        app.dispatch(AppAction::Undo);
+        assert!(app.font.incompatibility_detail("A").is_some());
     }
 
     #[test]

@@ -230,8 +230,11 @@ impl Workspace {
             Vec::new()
         };
         points.sort();
-        let mut disabled = self.text_features_disabled.iter().collect::<Vec<_>>();
-        disabled.sort();
+        let disabled: Vec<_> = self
+            .text_feature_overrides
+            .iter()
+            .filter_map(|(tag, on)| (!on).then_some(tag))
+            .collect();
         let mut overview = self
             .multi_selected
             .iter()
@@ -267,6 +270,7 @@ impl Workspace {
                     runebender::text::buffer::TextDirection::RightToLeft => "rtl",
                 }).unwrap_or("auto"),
                 "features_disabled": disabled,
+                "feature_overrides": self.text_feature_overrides,
                 "script": self.text_script,
                 "language": self.text_language,
                 "caret": null,

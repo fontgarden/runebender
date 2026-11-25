@@ -209,6 +209,7 @@ pub(crate) fn info_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
         // the overview still begins with glyph identity because these
         // optional edit groups disappear there.
         recipes::panel_stack((
+            editing.then(|| anchor_section(app)).flatten(),
             // The picture's properties belong to the picture: they show while it is selected.
             (editing && app.session.image_selected && app.image_frame().is_some())
                 .then(|| recipes::panel_group(pal, super::image::panel(app))),
@@ -267,4 +268,33 @@ pub(crate) fn info_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
             .map(|body| recipes::panel_group(pal, body)),
         editing.then(|| recipes::panel_group(pal, measure_section(app))),
     )))
+}
+
+fn anchor_section(app: &Workspace) -> Option<impl WidgetView<Workspace> + use<>> {
+    let id = app.session.selected_anchor()?;
+    let anchor = app
+        .session
+        .current_layer()?
+        .anchors()
+        .find(|anchor| anchor.id() == id)?;
+    let name = app
+        .anchor_name_draft
+        .as_ref()
+        .filter(|(draft, _)| *draft == id)
+        .map_or_else(|| anchor.name().to_owned(), |(_, text)| text.clone());
+    let field = recipes::Row::Field {
+        caption: "Name",
+        placeholder: "Unnamed",
+        value: name,
+        on_change: std::sync::Arc::new(move |app, value| {
+            app.anchor_name_draft = Some((id, value));
+        }),
+        on_enter: std::sync::Arc::new(move |app, value| app.rename_anchor(id, &value)),
+    };
+    Some(recipes::section_of(
+        app,
+        "Anchor",
+        "Anchor",
+        vec![recipes::Group::new("", vec![field])],
+    ))
 }

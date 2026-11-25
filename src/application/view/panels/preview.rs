@@ -160,7 +160,7 @@ fn outline_strip(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
             .with_direction(app.text_dir)
             .with_text(proof_text)
             .with_shaping_options(
-                &app.text_features_disabled,
+                &app.text_feature_overrides,
                 app.text_script.as_deref(),
                 app.text_language.as_deref(),
             );

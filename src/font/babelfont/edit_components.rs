@@ -5,6 +5,14 @@
 
 use super::*;
 
+fn validate_anchor_name(name: &str) -> Result<(), DocumentEditError> {
+    if !name.is_empty() {
+        crate::font::canonical_metadata::validate_name(name)
+            .map_err(|_| DocumentEditError::InvalidAnchorName)?;
+    }
+    Ok(())
+}
+
 impl LayerEditDraft {
     /// Replace one component's referenced glyph by stable identity.
     pub fn set_component_reference(
@@ -236,6 +244,7 @@ impl LayerEditDraft {
         position: kurbo::Point,
     ) -> Result<AnchorId, DocumentEditError> {
         ensure_finite(&[position.x, position.y])?;
+        validate_anchor_name(&name)?;
         let id = AnchorId::next();
         let mut anchor = Anchor {
             x: position.x,
@@ -254,6 +263,25 @@ impl LayerEditDraft {
             },
         });
         Ok(id)
+    }
+
+    /// Rename an anchor in place, retaining its identity, position and UFO metadata.
+    /// An empty name represents an unnamed UFO anchor.
+    pub fn set_anchor_name(&mut self, id: AnchorId, name: &str) -> Result<bool, DocumentEditError> {
+        validate_anchor_name(name)?;
+        let anchors = &mut self.layer.anchors;
+        let index = anchors
+            .iter()
+            .position(|anchor| read_id(&anchor.format_specific) == Some(id.0))
+            .ok_or(DocumentEditError::MissingAnchor(id))?;
+        if anchors[index].name == name {
+            return Ok(false);
+        }
+        if !name.is_empty() && anchors.iter().any(|anchor| anchor.name == name) {
+            return Err(DocumentEditError::DuplicateAnchorName);
+        }
+        name.clone_into(&mut anchors[index].name);
+        Ok(true)
     }
 
     /// Remove one anchor by stable identity.

@@ -10,7 +10,10 @@ use crate::application::view::canvas::grid::cells_of;
 use crate::application::view::panels::sections::metric_bufs;
 #[cfg(unix)]
 use crate::application::workspace::Tool;
-use crate::application::workspace::{MetadataEdit, Mode, OverviewEditBatch, Workspace};
+use crate::application::workspace::{
+    DocumentGroupScope, MetadataEdit, Mode, OverviewEditBatch, Workspace,
+};
+use runebender::font::AnchorId;
 use runebender::font::CanonicalSourceMetadataSnapshot;
 use runebender::font::canonical_metadata::{KerningParticipant, KerningSide};
 use runebender::font::history::HistoryDirection;
@@ -170,6 +173,7 @@ impl Workspace {
 
     /// Refill the Coordinates fields from the selection.
     pub(crate) fn refresh_coord_bufs(&mut self) {
+        self.anchor_name_draft = None;
         if let Some(bounds) = self.session.selection_bounds() {
             self.coord_w_buf = format!("{}", round_units(bounds.width()));
             self.coord_h_buf = format!("{}", round_units(bounds.height()));
@@ -186,6 +190,31 @@ impl Workspace {
                 self.coord_x_buf.clear();
                 self.coord_y_buf.clear();
             }
+        }
+    }
+
+    /// Commit the inspector's name to its selected anchor on the active layer.
+    pub(crate) fn rename_anchor(&mut self, anchor: AnchorId, name: &str) {
+        if !matches!(self.mode, Mode::Editor(_)) || self.session.selected_anchor() != Some(anchor) {
+            return;
+        }
+        let Some(address) = self.session.canonical_address().cloned() else {
+            return;
+        };
+        match self
+            .font
+            .project
+            .rename_document_anchor(&address, anchor, name)
+        {
+            Ok(Some((group, change))) => {
+                self.record_document_group(group, &change, DocumentGroupScope::Contextual);
+                self.note.clear();
+            }
+            Ok(None) => {
+                self.anchor_name_draft = None;
+                self.note.clear();
+            }
+            Err(error) => self.note = format!("Rename anchor: {error}"),
         }
     }
 
@@ -1792,6 +1821,97 @@ mod size_tests {
             app.features_status
         );
         std::fs::remove_dir_all(path).expect("remove disposable font");
+    }
+
+    #[test]
+    fn rename_anchor_preserves_its_identity_and_undoes_new_attachments() {
+        let path = disposable_font("rename-anchor");
+        let mut font = norad::Font::new();
+        let mut base = norad::Glyph::new("A");
+        let identifier = norad::Identifier::new("base-attachment").unwrap();
+        for (name, id) in [("anchor.0", Some(identifier.clone())), ("bottom", None)] {
+            base.anchors.push(norad::Anchor::new(
+                300.0,
+                700.0,
+                Some(norad::Name::new(name).unwrap()),
+                None,
+                id,
+            ));
+        }
+        let mut mark = norad::Glyph::new("acutecomb");
+        mark.anchors.push(norad::Anchor::new(
+            0.0,
+            0.0,
+            Some(norad::Name::new("_top").unwrap()),
+            None,
+            None,
+        ));
+        let mut composed = norad::Glyph::new("Aacute");
+        for (name, x) in [("A", 0.0), ("acutecomb", 17.0)] {
+            composed.components.push(norad::Component::new(
+                norad::Name::new(name).unwrap(),
+                norad::AffineTransform {
+                    x_offset: x,
+                    ..Default::default()
+                },
+                None,
+            ));
+        }
+        for glyph in [base, mark, composed] {
+            font.default_layer_mut().insert_glyph(glyph);
+        }
+        font.save(&path).unwrap();
+        let mut app = Workspace::open(&path).unwrap();
+        app.open_glyph(app.font.index_of("A").unwrap());
+        let anchor = app.session.anchor_id_at(0).unwrap();
+        Arc::make_mut(&mut app.session)
+            .selected_anchors
+            .insert(anchor);
+        let before = app.font.project.document_snapshot();
+        let mut draft = app
+            .font
+            .project
+            .begin_document_layer_transaction(app.session.canonical_address().unwrap())
+            .unwrap();
+        assert_eq!(
+            draft
+                .draft_mut()
+                .add_anchor("bad\nname".into(), kurbo::Point::ZERO),
+            Err(runebender::font::DocumentEditError::InvalidAnchorName)
+        );
+        app.rename_anchor(anchor, "bottom");
+        assert!(app.note.contains("already has that name"));
+        app.rename_anchor(anchor, "bad\nname");
+        assert!(app.note.contains("control characters"));
+        app.rename_anchor(anchor, "anchor.0");
+        assert_eq!(app.font.project.document_snapshot(), before);
+        assert!(app.metadata_undo.is_empty());
+
+        app.rename_anchor(anchor, "top");
+        assert_eq!(app.session.selected_anchor(), Some(anchor));
+        let layer = app.session.canonical_address().unwrap().layer.clone();
+        let moved = app
+            .font
+            .project
+            .document_layer("Aacute", &layer)
+            .unwrap()
+            .components()
+            .nth(1)
+            .unwrap()
+            .transform();
+        assert_eq!(moved.as_coeffs(), [1.0, 0.0, 0.0, 1.0, 300.0, 700.0]);
+        let after = app.font.project.document_snapshot();
+        assert_eq!(app.metadata_undo.len(), 1);
+        app.undo_active_edit(false);
+        assert_eq!(app.font.project.document_snapshot(), before);
+        app.undo_active_edit(true);
+        assert_eq!(app.font.project.document_snapshot(), after);
+        assert!(app.save());
+        let reopened = norad::Font::load(&path).unwrap();
+        let saved = &reopened.get_glyph("A").unwrap().anchors[0];
+        assert_eq!(saved.name.as_deref(), Some("top"));
+        assert_eq!(saved.identifier(), Some(&identifier));
+        std::fs::remove_dir_all(path).unwrap();
     }
 
     #[test]

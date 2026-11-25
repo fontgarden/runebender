@@ -252,8 +252,10 @@ pub(crate) struct Workspace {
     /// The chips that set it are in the title bar, which is why this is
     /// application state and not the buffer's.
     pub(crate) text_dir: Option<runebender::text::buffer::TextDirection>,
-    /// OpenType features disabled for text-tool and preview shaping.
-    pub(crate) text_features_disabled: std::collections::HashSet<String>,
+    /// Explicit OpenType feature overrides for text-tool and preview shaping.
+    pub(crate) text_feature_overrides: std::collections::BTreeMap<String, bool>,
+    /// Feature currently displayed by the Shaping inspector.
+    pub(crate) panel_shape_feature: Option<String>,
     /// Optional shaping script and language selected in the preview controls.
     pub(crate) text_script: Option<String>,
     pub(crate) text_language: Option<String>,
@@ -359,6 +361,8 @@ pub(crate) struct Workspace {
     pub(crate) sketch_trace: Option<sketch::SketchTraceUi>,
     /// Base glyph typed in the Shapes panel when adding a component.
     pub(crate) component_base_buf: String,
+    /// Uncommitted inspector text for the selected anchor.
+    pub(crate) anchor_name_draft: Option<(runebender::font::AnchorId, String)>,
     /// Current axis location in user units, one per designspace axis.
     pub(crate) axis_values: Vec<f64>,
     /// Last widget-owned text proof selection, bound to its tab and source.
@@ -820,7 +824,7 @@ pub(crate) struct TextContext {
     pub(crate) has_text_session: bool,
     pub(crate) preview_text: String,
     pub(crate) direction: Option<runebender::text::buffer::TextDirection>,
-    pub(crate) features_disabled: std::collections::HashSet<String>,
+    pub(crate) feature_overrides: std::collections::BTreeMap<String, bool>,
     pub(crate) script: Option<String>,
     pub(crate) language: Option<String>,
 }

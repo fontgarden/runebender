@@ -131,18 +131,8 @@ impl Workspace {
             if selection.normalized_location.len() != self.font.project.axes.len() {
                 return Err("text proof location no longer matches the document axes".into());
             }
-            let disabled: std::collections::HashSet<_> = selection
-                .features
-                .iter()
-                .filter_map(|(tag, enabled)| (!enabled).then_some(tag.as_str()))
-                .collect();
-            if disabled.len() != selection.features.len()
-                || disabled
-                    != self
-                        .text_features_disabled
-                        .iter()
-                        .map(String::as_str)
-                        .collect()
+            let overrides: BTreeMap<_, _> = selection.features.iter().cloned().collect();
+            if overrides != self.text_feature_overrides
                 || selection.script != self.text_script
                 || selection.language != self.text_language
                 || self.text_dir.is_some_and(|direction| {

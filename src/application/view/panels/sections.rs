@@ -281,35 +281,54 @@ pub(crate) fn axes_section(
         .collect();
     // Distinguish a valid instance from the active-outline fallback used when
     // this glyph's masters cannot interpolate.
-    let hint = app.interpolation_status().map(|status| {
-        let (summary, detail) = status
-            .split_once(": ")
-            .map_or((status.clone(), None), |(summary, detail)| {
-                (summary.to_string(), Some(detail.to_string()))
-            });
-        xcolumn(
-            Region::List,
-            (
-                label(if summary == "interpolated" {
-                    "Interpolated preview".to_string()
-                } else {
-                    summary
-                })
-                .text_size(TextSize::Caption.px())
-                .color(pal.text),
-                detail.map(|detail| {
-                    label(detail)
-                        .text_size(TextSize::Caption.px())
-                        .color(pal.text_muted)
+    let mismatch = (matches!(app.mode, Mode::Editor(_)) && !app.collapsed.contains(key))
+        .then(|| app.font.incompatibility_detail(&app.session.glyph_name))
+        .flatten();
+    let compare = mismatch.as_ref().map(|reason| {
+        let mut rows = vec![recipes::Row::Prose(reason.clone())];
+        if app.selected_start_matches_master() {
+            rows.push(recipes::Row::Secondary {
+                text: "Use Selected Start Point".into(),
+                on_click: recipes::click(|app| {
+                    app.dispatch(crate::application::app_action::AppAction::SetStartPoint);
                 }),
-            ),
-        )
+            });
+        }
+        recipes::body_of(app, vec![recipes::Group::new("Incompatible Masters", rows)])
     });
+    let hint = mismatch
+        .is_none()
+        .then(|| app.interpolation_status())
+        .flatten()
+        .map(|status| {
+            let (summary, detail) = status
+                .split_once(": ")
+                .map_or((status.clone(), None), |(summary, detail)| {
+                    (summary.to_string(), Some(detail.to_string()))
+                });
+            xcolumn(
+                Region::List,
+                (
+                    label(if summary == "interpolated" {
+                        "Interpolated preview".to_string()
+                    } else {
+                        summary
+                    })
+                    .text_size(TextSize::Caption.px())
+                    .color(pal.text),
+                    detail.map(|detail| {
+                        label(detail)
+                            .text_size(TextSize::Caption.px())
+                            .color(pal.text_muted)
+                    }),
+                ),
+            )
+        });
     Some(recipes::section(
         app,
         key,
         "Axes",
-        xcolumn(Region::Form, (xcolumn(Region::Form, rows), hint)),
+        xcolumn(Region::Form, (xcolumn(Region::Form, rows), compare, hint)),
     ))
 }
 
@@ -321,11 +340,13 @@ pub(crate) fn shaping_section(app: &Workspace) -> impl WidgetView<Workspace> + u
         tab_chip(
             pal,
             tag.into(),
-            !app.text_features_disabled.contains(tag),
+            app.text_feature_overrides.get(tag) != Some(&false),
             false,
             move |app: &mut Workspace| {
-                if !app.text_features_disabled.remove(tag) {
-                    app.text_features_disabled.insert(tag.into());
+                if app.text_feature_overrides.get(tag) == Some(&false) {
+                    app.text_feature_overrides.remove(tag);
+                } else {
+                    app.text_feature_overrides.insert(tag.into(), false);
                 }
             },
         )
@@ -377,9 +398,97 @@ pub(crate) fn shaping_section(app: &Workspace) -> impl WidgetView<Workspace> + u
                         locale("Urdu", Some("arab"), Some("ur")),
                     ),
                 ),
+                (!app.collapsed.contains("Shaping")).then(|| {
+                    let live = app.font.live_layout(&app.axis_values);
+                    recipes::body_of(app, vec![shaping_font_options(app, live.options())])
+                }),
             ),
         ),
     )
+}
+
+/// The inspector uses the same live tables as the text tool, including its last good features.
+fn shaping_font_options(
+    app: &Workspace,
+    options: &runebender::text::layout_options::LayoutOptions,
+) -> recipes::Group {
+    use recipes::Row;
+    use std::sync::Arc;
+
+    let mut rows = Vec::new();
+    if !options.systems.is_empty() {
+        let mut labels = vec!["Auto".to_owned()];
+        let mut settings = vec![(None, None)];
+        for system in &options.systems {
+            let language = system
+                .language
+                .map(|tag| tag.to_string().trim_end().to_owned())
+                .unwrap_or_else(|| "default".to_owned());
+            labels.push(format!(
+                "{} / {language}",
+                system.script.to_string().trim_end()
+            ));
+            let (script, language) = system.shaping_options();
+            settings.push((Some(script), Some(language)));
+        }
+        let current = (app.text_script.clone(), app.text_language.clone());
+        let chosen = settings
+            .iter()
+            .position(|value| *value == current)
+            .unwrap_or_else(|| {
+                // Presets, launch options and restored tabs can specify a BCP 47 locale directly.
+                labels.push(format!(
+                    "{} / {}",
+                    current.0.as_deref().unwrap_or("Auto"),
+                    current.1.as_deref().unwrap_or("default")
+                ));
+                settings.push(current);
+                settings.len() - 1
+            });
+        rows.push(Row::Dropdown {
+            key: "Shaping font systems",
+            caption: "Language system".into(),
+            choices: labels,
+            chosen: Some(chosen),
+            on_pick: Arc::new(move |app, index| {
+                if let Some(setting) = settings.get(index) {
+                    (app.text_script, app.text_language) = setting.clone();
+                }
+            }),
+        });
+    }
+    let tags: Vec<_> = options.features.iter().map(ToString::to_string).collect();
+    if !tags.is_empty() {
+        let index = tags
+            .iter()
+            .position(|tag| Some(tag) == app.panel_shape_feature.as_ref())
+            .unwrap_or(0);
+        let tag = tags[index].clone();
+        rows.push(Row::Dropdown {
+            key: "Shaping font features",
+            caption: "Feature".into(),
+            choices: tags.clone(),
+            chosen: Some(index),
+            on_pick: Arc::new(move |app, index| app.panel_shape_feature = tags.get(index).cloned()),
+        });
+        rows.push(Row::Choice {
+            options: vec!["Default".into(), "On".into(), "Off".into()],
+            chosen: match app.text_feature_overrides.get(&tag) {
+                None => 0,
+                Some(true) => 1,
+                Some(false) => 2,
+            },
+            on_pick: Arc::new(move |app, index| match index {
+                1 | 2 => {
+                    app.text_feature_overrides.insert(tag.clone(), index == 1);
+                }
+                _ => {
+                    app.text_feature_overrides.remove(&tag);
+                }
+            }),
+        });
+    }
+    recipes::Group::new("", rows)
 }
 
 pub(crate) fn transformations_section(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
@@ -1016,4 +1125,54 @@ pub(crate) fn font_advanced_section(app: &Workspace) -> impl WidgetView<Workspac
         .map(|(name, value)| recipes::kv(pal, name.to_string(), value))
         .collect();
     recipes::section(app, "Advanced", "Advanced", xcolumn(Region::List, rows))
+}
+
+#[cfg(test)]
+mod shaping_tests {
+    use super::*;
+    use crate::application::design::recipes::Row;
+    use crate::application::view::render::panel_resize_tests_support::workspace_for_layout;
+
+    #[test]
+    fn font_controls_apply_and_clear_the_registered_system_and_feature() {
+        let mut app = workspace_for_layout();
+        let live = app.font.live_layout(&app.axis_values);
+        let choices = shaping_font_options(&app, live.options());
+        let [
+            Row::Dropdown {
+                choices: systems,
+                on_pick: locale,
+                ..
+            },
+            Row::Dropdown {
+                choices: tags,
+                on_pick: feature,
+                ..
+            },
+            _,
+        ] = choices.rows.as_slice()
+        else {
+            panic!("the core font exposes its layout systems and features");
+        };
+        let latin = systems
+            .iter()
+            .position(|name| name == "latn / default")
+            .unwrap();
+        locale(&mut app, latin);
+        assert_eq!(app.text_script.as_deref(), Some("latn"));
+        assert_eq!(app.text_language.as_deref(), Some("x-hbsclatn"));
+        locale(&mut app, 0);
+        assert_eq!((&app.text_script, &app.text_language), (&None, &None));
+
+        let kern = tags.iter().position(|tag| tag == "kern").unwrap();
+        feature(&mut app, kern);
+        let choices = shaping_font_options(&app, live.options());
+        let Row::Choice { on_pick, .. } = choices.rows.last().unwrap() else {
+            panic!("the chosen feature offers default, on and off");
+        };
+        for (index, expected) in [(2, Some(false)), (1, Some(true)), (0, None)] {
+            on_pick(&mut app, index);
+            assert_eq!(app.text_feature_overrides.get("kern").copied(), expected);
+        }
+    }
 }
