@@ -14,7 +14,7 @@ fs.mkdirSync(output, { recursive: true });
     await frame.waitForFunction(() => window.runebender);
     const setTheme = async theme => {
       await page.mouse.click(393, 15);
-      await page.mouse.click(515, 284);
+      await page.mouse.click(515, 314);
       await page.mouse.click(681, {
         dark: 43, gray: 66, light: 92, 'dark-gray': 118,
         'light-gray': 144, strawberry: 170, campfire: 196,

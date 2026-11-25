@@ -13,10 +13,15 @@ if (output) fs.mkdirSync(output, { recursive: true });
       const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: dpr });
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));
+      // A Rust panic reaches the page as a console error, not as a page error.
+      const consoleErrors = [];
+      page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()); });
       await page.goto(process.env.RUNEBENDER_DEMO_URL || 'http://127.0.0.1:4326/');
       const frame = process.env.RUNEBENDER_IFRAME ? page.frames().find(f => f.url().includes('/app/index.html')) : page;
       assert.ok(frame, 'editor frame exists');
-      await frame.waitForFunction(() => window.runebender);
+      await frame.waitForFunction(() => window.runebender).catch(error => {
+        throw new Error(`the editor did not start:\n${[...errors, ...consoleErrors].join('\n')}\n${error.message}`);
+      });
       const settle = () => page.waitForTimeout(120);
       const state = () => frame.evaluate(() => window.runebender.state());
       const metrics = () => frame.evaluate(() => window.runebender.metrics());
@@ -41,7 +46,7 @@ if (output) fs.mkdirSync(output, { recursive: true });
       };
       const setTheme = async theme => {
         await page.mouse.click(393, 15);
-        await page.mouse.click(515, 284);
+        await page.mouse.click(515, 314);
         await page.mouse.click(681, {
           dark: 43, gray: 66, light: 92, 'dark-gray': 118,
           'light-gray': 144, strawberry: 170, campfire: 196,
