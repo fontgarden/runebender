@@ -23,11 +23,12 @@ use masonry::ui_events::{
     pointer::*,
 };
 use runebender::font::persistence::memory::{
-    MemoryBookkeeping, memory_save_as_files, memory_save_files, open_memory_project,
+    MemoryBookkeeping, MemorySave, memory_save_as_files, memory_save_files, open_memory_project,
 };
 use runebender::font::project::Project;
 use std::{
     cell::{Cell, RefCell},
+    io::{Cursor, Write},
     rc::Rc,
     sync::Arc,
 };
@@ -73,7 +74,7 @@ fn demo_state() -> AppState {
     workspace.graph_changed(graph);
     workspace.graph.open.as_mut().unwrap().path = "example.graph.json".into();
     workspace.mode = Mode::Overview;
-    workspace.note = "Browser session — edits stay in this tab".into();
+    workspace.note = "Browser session — Save As to keep an editable copy".into();
     AppState {
         palette: workspace.palette.clone(),
         theme_id: workspace.theme_id,
@@ -105,6 +106,9 @@ trait BrowserApp {
     fn focus(&mut self, focused: bool);
     fn open_bundle(&mut self, ufo_name: Option<String>, bundle: &[u8]) -> String;
     fn save_bundle(&mut self, into_new_folder: bool) -> Vec<u8>;
+    fn source_zip(&mut self) -> Vec<u8>;
+    fn recovery_bundle(&mut self) -> Result<Vec<u8>, String>;
+    fn restore_draft(&mut self, master: usize, features: Option<String>);
     fn host_result(&mut self, kind: &str, ok: bool, message: &str);
 }
 
@@ -153,10 +157,23 @@ fn build_bundle(files: &[(String, Vec<u8>)], prune: &[String]) -> Vec<u8> {
     bundle
 }
 
+/// Archive the same full source tree that Save As writes to a directory.
+fn zip_sources(save: MemorySave) -> zip::result::ZipResult<Vec<u8>> {
+    let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .compression_level(Some(1));
+    for (path, bytes) in save.files {
+        archive.start_file(path, options)?;
+        archive.write_all(&bytes)?;
+    }
+    Ok(archive.finish()?.into_inner())
+}
+
 /// The snapshot the page is writing. Only a completed write establishes its destination.
 struct PendingSave {
     revision: u64,
-    into_new_folder: bool,
+    full_copy: bool,
 }
 
 struct Host<V: WidgetView<AppState, Widget: Sized>, F> {
@@ -208,6 +225,40 @@ where
         }
         self.rebuild();
         self.dirty = true;
+    }
+    fn encode_save(&mut self, full_copy: bool) -> Result<MemorySave, String> {
+        let workspace = self.app.workspace.as_ref().ok_or("no open font")?;
+        let bookkeeping = self
+            .bookkeeping
+            .get_or_insert_with(MemoryBookkeeping::default);
+        if full_copy {
+            memory_save_as_files(&workspace.font.project, bookkeeping)
+        } else {
+            memory_save_files(&workspace.font.project, bookkeeping)
+        }
+    }
+
+    fn begin_save(&mut self, full_copy: bool) -> Option<MemorySave> {
+        self.pending_save = None;
+        let workspace = self.app.workspace.as_ref()?;
+        if workspace.features_edited {
+            self.set_note("Apply or Revert feature edits before saving".into());
+            return None;
+        }
+        let revision = workspace.font.project.document_revision();
+        match self.encode_save(full_copy) {
+            Ok(save) => {
+                self.pending_save = Some(PendingSave {
+                    revision,
+                    full_copy,
+                });
+                Some(save)
+            }
+            Err(error) => {
+                self.set_note(format!("Save failed: {error}"));
+                None
+            }
+        }
     }
     fn rebuild(&mut self) {
         let next = (self.logic)(&mut self.app);
@@ -429,8 +480,12 @@ where
             .data
     }
     fn feedback(&mut self) -> String {
+        let workspace = self.app.workspace.as_ref();
         serde_json::json!({"cursor": self.root.cursor_icon().to_string(),
             "dirty": self.dirty, "animate": self.root.needs_anim(),
+            "revision": workspace.filter(|w| w.modified).map(|w| w.font.project.document_revision()),
+            "featureDraft": workspace.filter(|w| w.features_edited).map(|w| &w.features_buf),
+            "master": workspace.map(|w| w.font.active()),
             "ime": self.ime_active, "imePosition": self.ime_position,
             "clipboard": self.clipboard.take(),
             "request": HOST_REQUEST.take()})
@@ -467,27 +522,8 @@ where
         }
     }
     fn save_bundle(&mut self, into_new_folder: bool) -> Vec<u8> {
-        let Some(workspace) = self.app.workspace.as_ref() else {
+        let Some(save) = self.begin_save(into_new_folder) else {
             return Vec::new();
-        };
-        if workspace.features_edited {
-            self.set_note("Apply or Revert feature edits before saving".into());
-            return Vec::new();
-        }
-        let bookkeeping = self
-            .bookkeeping
-            .get_or_insert_with(MemoryBookkeeping::default);
-        let encode = if into_new_folder {
-            memory_save_as_files
-        } else {
-            memory_save_files
-        };
-        let save = match encode(&workspace.font.project, bookkeeping) {
-            Ok(save) => save,
-            Err(error) => {
-                self.set_note(format!("Save failed: {error}"));
-                return Vec::new();
-            }
         };
         let mut files = save.files;
         let mut prune = save.glif_directories;
@@ -501,22 +537,42 @@ where
             files.iter_mut().for_each(|(path, _)| strip(path));
             prune.iter_mut().for_each(strip);
         }
-        self.pending_save = Some(PendingSave {
-            revision: workspace.font.project.document_revision(),
-            into_new_folder,
-        });
         build_bundle(&files, &prune)
+    }
+    fn source_zip(&mut self) -> Vec<u8> {
+        let Some(save) = self.begin_save(true) else {
+            return Vec::new();
+        };
+        match zip_sources(save) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.pending_save = None;
+                self.set_note(format!("Could not create editable ZIP: {error}"));
+                Vec::new()
+            }
+        }
     }
     fn host_result(&mut self, kind: &str, ok: bool, message: &str) {
         let note = match (kind, ok) {
-            ("save", true) => {
+            ("recovery", false) => {
+                format!("Local recovery unavailable: {message}. Save a source copy.")
+            }
+            ("download-denied", true) => {
+                self.pending_save = None;
+                format!("Folder write denied. Download started for {message}.")
+            }
+            ("download-copy", true) => {
+                self.pending_save = None;
+                format!("Download started for {message}")
+            }
+            ("save" | "download", true) => {
                 let Some(pending) = self.pending_save.take() else {
                     return;
                 };
                 let Some(workspace) = self.app.workspace.as_mut() else {
                     return;
                 };
-                if pending.into_new_folder {
+                if kind == "save" && pending.full_copy {
                     // The new handle is the parent of the UFO written by Save As.
                     self.ufo_root = None;
                 }
@@ -529,7 +585,11 @@ where
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| source.display().to_string());
-                if workspace.modified {
+                if kind == "download" && workspace.modified {
+                    format!("Download started for {message}. Newer edits still need saving.")
+                } else if kind == "download" {
+                    format!("Download started for {message}")
+                } else if workspace.modified {
                     format!("Saved an earlier version of {label}. Newer edits still need saving.")
                 } else {
                     format!("Saved {label}")
@@ -548,6 +608,21 @@ where
             _ => return,
         };
         self.set_note(note);
+    }
+    fn recovery_bundle(&mut self) -> Result<Vec<u8>, String> {
+        let save = self.encode_save(true)?;
+        Ok(build_bundle(&save.files, &save.glif_directories))
+    }
+    fn restore_draft(&mut self, master: usize, features: Option<String>) {
+        if let Some(workspace) = self.app.workspace.as_mut() {
+            workspace.set_master(master);
+            if let Some(features) = features {
+                workspace.edit_features(features);
+            }
+            workspace.font.project.mark_sources_unsaved();
+            workspace.modified = true;
+        }
+        self.set_note("Recovered a local checkpoint. Save to download editable sources.".into());
     }
     fn text(&mut self, kind: u8, text: String) {
         match kind {
@@ -710,6 +785,18 @@ impl BrowserEditor {
     pub fn save_bundle(&mut self, into_new_folder: bool) -> Vec<u8> {
         self.host.save_bundle(into_new_folder)
     }
+    /// Build a downloadable ZIP of the editable project, including unchanged files.
+    pub fn source_zip(&mut self) -> Vec<u8> {
+        self.host.source_zip()
+    }
+    /// Capture editable sources without acknowledging an explicit save or changing its destination.
+    pub fn recovery_bundle(&mut self) -> Result<Vec<u8>, String> {
+        self.host.recovery_bundle()
+    }
+    /// Restore the feature buffer and mark a reopened checkpoint as awaiting an explicit save.
+    pub fn restore_draft(&mut self, master: usize, features: Option<String>) {
+        self.host.restore_draft(master, features);
+    }
     /// What became of an "open" or "save" request the page carried out.
     pub fn host_result(&mut self, kind: &str, ok: bool, message: &str) {
         self.host.host_result(kind, ok, message);
@@ -734,7 +821,8 @@ pub(crate) fn intercept(
             "Choose a UFO folder, or a folder with a designspace",
         ),
         A::Save => ("save", "Saving…"),
-        A::SaveAs => ("save-as", "Choose the folder to save into"),
+        A::SaveAs => ("save-as", "Saving an editable copy…"),
+        A::DownloadSources => ("download", "Preparing editable sources…"),
         A::NewFont | A::RevertToSaved | A::Quit => {
             return Some("Use the desktop app for this command".into());
         }

@@ -25,6 +25,8 @@ pub(crate) enum AppAction {
     SaveAs,
     RevertToSaved,
     ExportFont,
+    #[cfg(target_arch = "wasm32")]
+    DownloadSources,
     Save,
     Undo,
     Redo,

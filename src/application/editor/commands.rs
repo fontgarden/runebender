@@ -1051,6 +1051,8 @@ impl Workspace {
                 }
             }
             A::ExportFont => self.command_export(),
+            #[cfg(target_arch = "wasm32")]
+            A::DownloadSources => unreachable!("source downloads are handled by the browser host"),
             A::Undo if self.proof_view && self.review.pencil => {
                 let prefix = crate::application::widgets::proof_pencil::prefix(self);
                 self.review.annotations.lock().unwrap().undo(&prefix);

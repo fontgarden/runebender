@@ -455,6 +455,10 @@ impl Workspace {
 /// Outline-changing commands are unavailable while the endpoint drawings are locked.
 pub(crate) fn command_allowed(action: crate::application::app_action::AppAction) -> bool {
     use crate::application::app_action::AppAction as A;
+    #[cfg(target_arch = "wasm32")]
+    if action == A::DownloadSources {
+        return true;
+    }
     matches!(
         action,
         A::Quit

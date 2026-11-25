@@ -2380,6 +2380,13 @@ impl Project {
         Ok(())
     }
 
+    /// Mark the sources from a recovery checkpoint as awaiting an explicit save.
+    pub fn mark_sources_unsaved(&mut self) {
+        for source in &mut self.sources {
+            source.dirty = true;
+        }
+    }
+
     /// Record that a host persisted every source and the designspace itself.
     ///
     /// Hosts without a filesystem write the files from

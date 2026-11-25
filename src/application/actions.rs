@@ -145,6 +145,8 @@ impl Entry {
             A::Save => app.untitled || (app.modified && app.font.is_writable()),
             A::RevertToSaved => !app.untitled,
             A::ExportFont => app.export_job.is_none(),
+            #[cfg(target_arch = "wasm32")]
+            A::DownloadSources => !app.features_edited,
             A::Undo if app.proof_view && app.review.pencil => app
                 .review
                 .annotations
@@ -310,6 +312,8 @@ pub(crate) const ACTIONS: &[Entry] = {
         item("File", "Save As…", Some("CmdOrCtrl+Shift+S"), A::SaveAs),
         item("File", "Revert to Saved…", None, A::RevertToSaved),
         item("File", "Export…", Some("CmdOrCtrl+Alt+E"), A::ExportFont),
+        #[cfg(target_arch = "wasm32")]
+        item("File", "Download Editable Sources (.zip)", None, A::DownloadSources),
         item("Graph", "New Graph", None, A::GraphNew),
         item("Graph", "Open Graph…", None, A::GraphOpen),
         item("Graph", "Save Graph", None, A::GraphSave),

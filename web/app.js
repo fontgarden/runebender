@@ -1,4 +1,6 @@
 import init, { BrowserEditor } from './pkg/runebender_browser.js';
+// The published loader's query identifies its release, including its recovery helper.
+const { fontRecovery } = await import('./pkg/recovery.js' + new URL(import.meta.url).search);
 const canvas = document.querySelector('#app');
 const context = canvas.getContext('2d', { alpha: false });
 const textInput = document.querySelector('#text-input');
@@ -17,8 +19,22 @@ function fail(error) {
   console.error(error);
 }
 // Fonts on disk: the File System Access API reads and writes the folder the user picks.
-const folder = { handle: null, busy: false };
+const folder = { handle: null, name: null, portable: false, busy: false };
 const hasFolders = typeof window.showDirectoryPicker === 'function';
+const recovery = fontRecovery({
+  capture() {
+    const name = folder.name || JSON.parse(editor.state()).source.split('/').pop();
+    return { name, bytes: editor.recovery_bundle() };
+  },
+  restore(label, source) {
+    const error = editor.open_bundle(null, bundle(unbundle(source.bytes).files));
+    if (error) throw new Error(error);
+    editor.restore_draft(label.master, source.featureDraft);
+    // A checkpoint always opens as an independent copy, even if the original folder changed.
+    Object.assign(folder, { name: label.name, handle: null, portable: true, archiveDownload: false });
+  },
+  warn(message) { editor.host_result('recovery', false, message); schedule(); },
+});
 function bundle(files) {
   let offset = 0;
   const manifest = new TextEncoder().encode(JSON.stringify(files.map(([path, bytes]) => {
@@ -41,37 +57,36 @@ function unbundle(bytes) {
 }
 async function readTree(directory, prefix, out) {
   for await (const [name, handle] of directory.entries()) {
-    if (name.startsWith('.')) continue;
+    if (skipEntry(name)) continue;
     if (handle.kind === 'file') out.push([prefix + name, new Uint8Array(await (await handle.getFile()).arrayBuffer())]);
     else await readTree(handle, `${prefix}${name}/`, out);
   }
 }
-// A UFO folder is read whole. Any other folder gives its designspace files and UFO folders.
-async function readFont(directory) {
-  const files = [];
-  if (directory.name.toLowerCase().endsWith('.ufo')) {
-    await readTree(directory, '', files);
-    return { files, ufoName: directory.name };
-  }
-  for await (const [name, handle] of directory.entries()) {
-    if (name.startsWith('.')) continue;
-    if (handle.kind === 'file' && name.endsWith('.designspace')) files.push([name, new Uint8Array(await (await handle.getFile()).arrayBuffer())]);
-    else if (handle.kind === 'directory' && name.toLowerCase().endsWith('.ufo')) await readTree(handle, `${name}/`, files);
-  }
-  return { files, ufoName: null };
-}
+// Include project sidecars and nested masters, leaving out Git internals and Finder metadata.
+const skipEntry = name => name === '.git' || name === '.DS_Store';
 async function writeFile(directory, path, bytes) {
   const parts = path.split('/');
   let at = directory;
   for (const part of parts.slice(0, -1)) at = await at.getDirectoryHandle(part, { create: true });
   const file = await at.getFileHandle(parts.at(-1), { create: true });
   const writable = await file.createWritable();
-  await writable.write(bytes);
-  await writable.close();
+  try {
+    await writable.write(bytes);
+    await writable.close();
+  } catch (error) {
+    // Release the handle so a subsequent Save can retry this file.
+    await writable.abort().catch(() => {});
+    throw error;
+  }
 }
 async function pruneGlifs(directory, path, written) {
   let at = directory;
-  try { for (const part of path.split('/')) at = await at.getDirectoryHandle(part); } catch { return; }
+  try {
+    for (const part of path.split('/')) at = await at.getDirectoryHandle(part);
+  } catch (error) {
+    if (error.name === 'NotFoundError') return;
+    throw error;
+  }
   for await (const [name, handle] of at.entries()) {
     if (handle.kind === 'file' && name.endsWith('.glif') && !written.has(`${path}/${name}`)) await at.removeEntry(name);
   }
@@ -87,7 +102,9 @@ const handleStore = {
     try {
       const db = await this.open();
       return await new Promise((resolve, reject) => {
-        const request = db.transaction('handles').objectStore('handles').get('font');
+        const tx = db.transaction('handles');
+        tx.oncomplete = tx.onabort = () => db.close();
+        const request = tx.objectStore('handles').get('font');
         request.onsuccess = () => resolve(request.result ?? null);
         request.onerror = () => reject(request.error);
       });
@@ -96,16 +113,76 @@ const handleStore = {
   async set(handle) {
     try {
       const db = await this.open();
-      db.transaction('handles', 'readwrite').objectStore('handles').put(handle, 'font');
+      try {
+        await new Promise((resolve, reject) => {
+          const tx = db.transaction('handles', 'readwrite');
+          tx.oncomplete = resolve;
+          tx.onabort = () => reject(tx.error);
+          if (handle) tx.objectStore('handles').put(handle, 'font');
+          else tx.objectStore('handles').delete('font');
+        });
+      } finally { db.close(); }
     } catch { /* remembering the folder is a convenience */ }
   },
 };
-async function openFolder(directory) {
-  const { files, ufoName } = await readFont(directory);
+async function openSources(name, files, directory) {
+  // A picker or directory read may finish after the user has made another edit.
+  if (JSON.parse(editor.state()).modified) throw new Error('Save the current font before opening another folder');
+  const ufoName = name.toLowerCase().endsWith('.ufo') && files.some(([path]) => path === 'metainfo.plist') ? name : null;
   const error = editor.open_bundle(ufoName, bundle(files));
   if (error) throw new Error(error);
+  recovery.newDocument();
+  folder.name = name;
+  folder.portable = !directory;
+  folder.archiveDownload = false;
   folder.handle = directory;
   await handleStore.set(directory);
+}
+async function openFolder(directory) {
+  const files = [];
+  await readTree(directory, '', files);
+  await openSources(directory.name, files, directory);
+}
+async function importFolder(offerPicker) {
+  const dialog = document.querySelector('#source-import');
+  const input = document.querySelector('#source-folder');
+  input.value = '';
+  const selection = new Promise((resolve, reject) => {
+    input.onchange = () => dialog.close('selected');
+    input.oncancel = () => dialog.close();
+    dialog.onclose = () => {
+      input.onchange = input.oncancel = dialog.onclose = null;
+      if (dialog.returnValue === 'selected' && input.files.length) resolve(Array.from(input.files));
+      else reject(new DOMException('Folder selection cancelled', 'AbortError'));
+    };
+  });
+  dialog.returnValue = '';
+  dialog.showModal();
+  if (offerPicker && navigator.userActivation?.isActive) {
+    // An embedded host may deny a programmatic picker. The visible input still works.
+    try { input.click(); } catch { /* choose the folder from the dialog */ }
+  }
+  const selected = await selection;
+  input.value = '';
+  const root = selected[0].webkitRelativePath.split('/')[0];
+  const files = [];
+  for (const file of selected) {
+    const [name, ...parts] = file.webkitRelativePath.split('/');
+    if (!root || name !== root || !parts.length) throw new Error('Choose one project folder');
+    if (parts.some(skipEntry)) continue;
+    files.push([parts.join('/'), new Uint8Array(await file.arrayBuffer())]);
+  }
+  await openSources(root, files, null);
+}
+async function chooseFolder() {
+  if (!hasFolders) return importFolder(true);
+  try {
+    const directory = await window.showDirectoryPicker({ id: 'runebender-font', mode: 'read' });
+    await openFolder(directory);
+  } catch (error) {
+    if (error.name === 'NotAllowedError' || error.name === 'SecurityError') return importFolder(false);
+    throw error;
+  }
 }
 async function saveFolder(intoNewFolder) {
   let directory = folder.handle;
@@ -120,21 +197,56 @@ async function saveFolder(intoNewFolder) {
   for (const [path, data] of files) { await writeFile(directory, path, data); written.add(path); }
   for (const path of prune) await pruneGlifs(directory, path, written);
   folder.handle = directory;
+  folder.name = directory.name;
+  folder.archiveDownload = false;
   await handleStore.set(directory);
   return true;
+}
+function downloadSources(permissionDenied) {
+  const bytes = editor.source_zip();
+  if (!bytes.length) return;
+  const name = folder.name || JSON.parse(editor.state()).source.split('/').pop() || 'Runebender';
+  const filename = name + '.zip';
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
+  const link = document.createElement('a');
+  link.download = filename;
+  link.href = url;
+  try {
+    document.body.append(link);
+    link.click();
+  } finally {
+    link.remove();
+    // The browser may start reading the blob after the click handler returns.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+  recovery.flush();
+  folder.archiveDownload = true;
+  // A copy of a writable project leaves any edits pending for its source folder.
+  const kind = permissionDenied ? 'download-denied' : folder.handle ? 'download-copy' : 'download';
+  editor.host_result(kind, true, filename);
+}
+async function saveSources(intoNewFolder) {
+  if (folder.portable || !hasFolders) {
+    downloadSources(false);
+    return;
+  }
+  try {
+    if (await saveFolder(intoNewFolder)) editor.host_result('save', true, '');
+  } catch (error) {
+    if (!['NotAllowedError', 'SecurityError', 'NoModificationAllowedError'].includes(error.name)) throw error;
+    downloadSources(true);
+  }
 }
 async function hostRequest(request) {
   if (folder.busy) return;
   folder.busy = true;
   const kind = request === 'open' ? 'open' : 'save';
   try {
-    if (!hasFolders) throw new Error('this browser cannot open folders; use Chrome or Edge');
     if (request === 'open') {
-      await openFolder(await window.showDirectoryPicker({ id: 'runebender-font', mode: 'readwrite' }));
+      await chooseFolder();
       editor.host_result('open', true, '');
-    } else if (await saveFolder(request === 'save-as')) {
-      editor.host_result('save', true, '');
-    }
+    } else if (request === 'download') downloadSources(false);
+    else await saveSources(request === 'save-as');
   } catch (error) {
     editor.host_result(kind, false, error?.name === 'AbortError' ? '' : String(error?.message ?? error));
   } finally {
@@ -149,6 +261,7 @@ canvas.addEventListener('drop', async e => {
   if (!editor || !item?.getAsFileSystemHandle || folder.busy) return;
   folder.busy = true;
   try {
+    if (JSON.parse(editor.state()).modified) throw new Error('Save the current font before opening another folder');
     const handle = await item.getAsFileSystemHandle();
     if (handle?.kind === 'directory') { await openFolder(handle); editor.host_result('open', true, ''); }
     else editor.host_result('open', false, 'drop a UFO folder, or a folder with a designspace');
@@ -161,6 +274,7 @@ canvas.addEventListener('drop', async e => {
 });
 function feedback() {
   const state = JSON.parse(editor.feedback());
+  recovery.observe(state, folder.archiveDownload);
   canvas.style.cursor = state.cursor;
   if (state.request) hostRequest(state.request);
   if (state.clipboard != null && navigator.clipboard) {
@@ -300,7 +414,10 @@ for (const target of [canvas, textInput]) target.addEventListener('paste', e => 
 });
 window.addEventListener('blur', blur);
 window.addEventListener('resize', resize);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { lastFrame = 0; resize(); schedule(); } });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) recovery.flush();
+  else { lastFrame = 0; resize(); schedule(); }
+});
 new ResizeObserver(resize).observe(canvas);
 function watchResolution() {
   const query = matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
@@ -316,21 +433,32 @@ try {
   await init();
   resize();
   editor = new BrowserEditor(canvas.width, canvas.height, scale);
+  let recovered = false;
+  try {
+    recovered = await recovery.offer();
+  } catch (error) {
+    editor.host_result('recovery', false, String(error?.message ?? error));
+    recovered = folder.portable;
+  }
+  // Reopen a remembered folder only when the user hasn't recovered an independent draft.
+  const remembered = hasFolders && !recovered ? await handleStore.get() : null;
+  if (remembered) {
+    try {
+      if (await remembered.queryPermission({ mode: 'read' }) === 'granted') await openFolder(remembered);
+    } catch (error) { editor.host_result('open', false, String(error?.message ?? error)); }
+  }
   window.runebender = { state: () => JSON.parse(editor.state()),
     metrics: () => ({ ...measurements, renderMs: [...measurements.renderMs] }),
     // Test hooks: the same open and save paths without a folder picker.
-    openFiles: (ufoName, files) => { const error = editor.open_bundle(ufoName, bundle(files)); schedule(); return error; },
+    openFiles: (ufoName, files) => {
+      const error = editor.open_bundle(ufoName, bundle(files));
+      if (!error) recovery.newDocument();
+      schedule();
+      return error;
+    },
     saveFiles: () => { const bytes = editor.save_bundle(false); return bytes.length ? unbundle(bytes) : null; },
     saved: () => { editor.host_result('save', true, ''); schedule(); } };
   draw(performance.now());
   loading.hidden = true;
   canvas.focus({ preventScroll: true });
-  // Reopen the last folder when Chrome kept the permission, as it does for installed apps.
-  const remembered = hasFolders ? await handleStore.get() : null;
-  if (remembered && await remembered.queryPermission({ mode: 'readwrite' }) === 'granted') {
-    folder.busy = true;
-    try { await openFolder(remembered); } catch (error) { editor.host_result('open', false, String(error?.message ?? error)); }
-    folder.busy = false;
-    schedule();
-  }
 } catch (error) { fail(error); }

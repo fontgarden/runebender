@@ -75,6 +75,8 @@ norad = "0.18"
 regex = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
+# Editable source downloads use the same pure-Rust DEFLATE backend as PNG.
+zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2"] }
 # Shared chat proof-image decoding uses the same codec as the native editor.
 base64 = "0.22.1"
 # Review proof drawings are keyed by the same digest as the native editor.

@@ -10,6 +10,22 @@
 <body>
 <div id="loading"><div id="status">Loading Runebender…</div><pre id="error"></pre></div>
 <canvas id="app" tabindex="0" aria-label="Runebender font editor. Double-click a glyph to edit it."></canvas>
+<dialog id="recovery" aria-labelledby="recovery-title">
+<h2 id="recovery-title">Recover a font session</h2>
+<form method="dialog">
+<label>Local checkpoint <select id="drafts"></select></label>
+<p>Recover an editable copy. The original font folder will stay on disk.</p>
+<button value="restore" autofocus>Recover</button>
+<button value="later">Later</button>
+<button value="discard">Discard selected checkpoint</button>
+</form>
+</dialog>
+<dialog id="source-import" aria-labelledby="source-import-title">
+<h2 id="source-import-title">Open a font folder</h2>
+<p>Choose a UFO or the folder containing a designspace and its masters. Saves download an editable ZIP.</p>
+<input id="source-folder" type="file" webkitdirectory multiple aria-label="Choose font folder">
+<form method="dialog"><button>Cancel</button></form>
+</dialog>
 <textarea id="text-input" aria-label="Runebender text input" autocomplete="off" autocapitalize="off" spellcheck="false" style="position:fixed;width:1px;height:18px;padding:0;border:0;opacity:0;resize:none;pointer-events:none"></textarea>
 <script type="module" src="./app.js"></script>
 </body></html>

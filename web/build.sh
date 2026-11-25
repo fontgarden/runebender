@@ -13,3 +13,4 @@ if [ "$("$bindgen_tool" --version)" != 'wasm-bindgen 0.2.127' ]; then
   exit 1
 fi
 "$bindgen_tool" web/target/wasm32-unknown-unknown/release/runebender_browser.wasm --target web --out-dir web/pkg
+cp web/recovery.js web/pkg/recovery.js
