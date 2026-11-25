@@ -327,6 +327,9 @@ The live server serves 7 prompts: `runebender`, `review-glyph`, `triage-font`,
 `compatibility-check`, `spacing-pass`, `kerning-pass`, `draft-weight`.
 <!-- end -->
 
+The spacing prompt uses whole-glyph translation and an advance adjustment so components and anchors follow a left-sidebearing edit.
+The kerning prompt works on an experiment for one source and can use existing kerning groups.
+
 Each prompt is `skills/runebender-<name>/SKILL.md` (the hub is `skills/runebender/SKILL.md`),
 compiled into the binary by `src/automation/prompts.rs`. Each declares
 `surface: runebender-live-v1`. There are no MCP resources.

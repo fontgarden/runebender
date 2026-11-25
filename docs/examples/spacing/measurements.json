@@ -1,0 +1,164 @@
+{
+  "source": "sources/VirtuaGrotesk-Regular.ufo",
+  "source_tree_hash": "4d2c4a8123afd46a0bb32d9dc34132c0c33ae956979ce106c8815f3b251f6c69",
+  "hash_recipe": "sha256 over sorted relative path bytes, NUL and binary sha256(file bytes)",
+  "font_compile": "ufoLib2 and ufo2ft compileTTF",
+  "render": "Pillow FreeType / RAQM",
+  "upm": 1024,
+  "ppem": 48,
+  "seed_n": {
+    "translation_x": 80,
+    "advance_delta": 80
+  },
+  "av_pair_adjustment_units": -128,
+  "rows": [
+    {
+      "id": "S01",
+      "text": "HnnH",
+      "seed": "Left bearing · repeated",
+      "positions": [
+        {
+          "file": "seed.ttf",
+          "kern": true,
+          "advance_px": 132.75,
+          "ink_box_px": [
+            400,
+            186,
+            533,
+            222
+          ]
+        },
+        {
+          "file": "original.ttf",
+          "kern": true,
+          "advance_px": 125.25,
+          "ink_box_px": [
+            805,
+            186,
+            930,
+            222
+          ]
+        }
+      ]
+    },
+    {
+      "id": "S02",
+      "text": "onion",
+      "seed": "Left bearing · word",
+      "positions": [
+        {
+          "file": "seed.ttf",
+          "kern": true,
+          "advance_px": 134.25,
+          "ink_box_px": [
+            400,
+            264,
+            534,
+            301
+          ]
+        },
+        {
+          "file": "original.ttf",
+          "kern": true,
+          "advance_px": 126.75,
+          "ink_box_px": [
+            805,
+            264,
+            932,
+            301
+          ]
+        }
+      ]
+    },
+    {
+      "id": "K01",
+      "text": "AV",
+      "seed": "AV pair · isolated",
+      "positions": [
+        {
+          "file": "original.ttf",
+          "kern": false,
+          "advance_px": 66.5625,
+          "ink_box_px": [
+            400,
+            342,
+            467,
+            378
+          ]
+        },
+        {
+          "file": "original.ttf",
+          "kern": true,
+          "advance_px": 60.5625,
+          "ink_box_px": [
+            805,
+            342,
+            866,
+            378
+          ]
+        }
+      ]
+    },
+    {
+      "id": "K02",
+      "text": "HAVH",
+      "seed": "AV pair · context",
+      "positions": [
+        {
+          "file": "original.ttf",
+          "kern": false,
+          "advance_px": 136.3125,
+          "ink_box_px": [
+            400,
+            420,
+            536,
+            456
+          ]
+        },
+        {
+          "file": "original.ttf",
+          "kern": true,
+          "advance_px": 130.3125,
+          "ink_box_px": [
+            805,
+            420,
+            935,
+            456
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C01",
+      "text": "HOHO",
+      "seed": "Unchanged control",
+      "positions": [
+        {
+          "file": "original.ttf",
+          "kern": true,
+          "advance_px": 144.75,
+          "ink_box_px": [
+            400,
+            497,
+            545,
+            535
+          ]
+        },
+        {
+          "file": "original.ttf",
+          "kern": true,
+          "advance_px": 144.75,
+          "ink_box_px": [
+            805,
+            497,
+            950,
+            535
+          ]
+        }
+      ]
+    }
+  ],
+  "source_repo": "https://github.com/eliheuer/virtua-grotesk",
+  "source_commit": "018488ed9499b7f2c18a249f5406797fc6a20e1d",
+  "sheet_sha256": "c2879d5838f95f465edddeb69b0e06a9712d6b1463e991c381298fa3840f3d0e"
+}
