@@ -32,15 +32,16 @@ struct Hit {
 }
 
 #[derive(Clone)]
-struct SingleHitPath {
+struct SingleHitPath<'a> {
+    original: &'a Path,
     path: BezierPath,
     hit: Hit,
 }
 
 #[derive(Clone)]
-enum SliceItem {
+enum SliceItem<'a> {
     Paths(Vec<Path>),
-    SingleHit(SingleHitPath),
+    SingleHit(SingleHitPath<'a>),
 }
 
 /// Cut every closed path in `paths` along `line` and return the
@@ -61,6 +62,7 @@ pub fn slice_paths(paths: &[Path], line: Line) -> Vec<Path> {
                 };
                 if let Some(hit) = single {
                     items.push(SliceItem::SingleHit(SingleHitPath {
+                        original: path,
                         path: bezier_path.clone(),
                         hit,
                     }));
@@ -74,6 +76,7 @@ pub fn slice_paths(paths: &[Path], line: Line) -> Vec<Path> {
                 let cubic_path = hyper_path.to_cubic();
                 if let Some(hit) = single_closed_hit(&cubic_path, line) {
                     items.push(SliceItem::SingleHit(SingleHitPath {
+                        original: path,
                         path: cubic_path,
                         hit,
                     }));
@@ -134,7 +137,7 @@ fn hit_count(path: &BezierPath, line: Line) -> usize {
     hits.len()
 }
 
-fn coalesce_single_hit_compound_cuts(items: Vec<SliceItem>) -> Vec<Path> {
+fn coalesce_single_hit_compound_cuts(items: Vec<SliceItem<'_>>) -> Vec<Path> {
     let mut out = Vec::new();
     let mut consumed = vec![false; items.len()];
 
@@ -169,7 +172,7 @@ fn coalesce_single_hit_compound_cuts(items: Vec<SliceItem>) -> Vec<Path> {
                     out.push(Path::Bezier(join_single_hit_paths(first, second)));
                     consumed[j] = true;
                 } else {
-                    out.push(Path::Bezier(first.path.clone()));
+                    out.push(first.original.clone());
                 }
             }
         }
@@ -410,7 +413,7 @@ fn split_path_at_intersections(
     )
 }
 
-fn join_single_hit_paths(first: &SingleHitPath, second: &SingleHitPath) -> BezierPath {
+fn join_single_hit_paths(first: &SingleHitPath<'_>, second: &SingleHitPath<'_>) -> BezierPath {
     let mut points = open_path_at_hit(&first.path, first.hit);
     push_path_point(
         &mut points,
@@ -888,6 +891,35 @@ mod tests {
         );
 
         assert_eq!(sliced.len(), 1);
+    }
+
+    #[test]
+    fn unpaired_single_hit_preserves_hyperbezier_nodes_and_contour_id() {
+        let Path::Hyper(hyper) = hyper_curve_path() else {
+            unreachable!();
+        };
+        let through = Line::new((50.0, -10.0), (50.0, 110.0));
+        let cubic = hyper.to_cubic();
+        let mut hits = Vec::new();
+        collect_hits(&cubic, through, &mut hits);
+        assert!(hits.len() >= 2);
+        let line = line_subsegment(through, 0.0, f64::midpoint(hits[0].line_t, hits[1].line_t));
+        assert_eq!(hit_count(&cubic, line), 1);
+        let sliced = slice_paths(&[Path::Hyper(hyper.clone())], line);
+        let [Path::Hyper(result)] = sliced.as_slice() else {
+            panic!("an unpaired hit must leave the hyperbezier editable");
+        };
+        assert_eq!(result.id, hyper.id);
+        assert!(
+            result
+                .points
+                .iter()
+                .map(|point| (point.id, point.point, point.typ))
+                .eq(hyper
+                    .points
+                    .iter()
+                    .map(|point| (point.id, point.point, point.typ)))
+        );
     }
 
     #[test]

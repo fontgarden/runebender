@@ -322,23 +322,35 @@ impl Source {
     }
 }
 
-/// A UFO contour as a closed cubic path.
+/// Convert a UFO contour to its line, quadratic, and cubic segments, preserving closure.
 pub fn contour_path(contour: &norad::Contour) -> kurbo::BezPath {
     let points = &contour.points;
     let mut path = kurbo::BezPath::new();
-    let Some(start) = points
-        .iter()
-        .position(|point| point.typ != norad::PointType::OffCurve)
-    else {
+    if points.is_empty() {
         return path;
-    };
+    }
     let point = |index: usize| {
         let p = &points[index % points.len()];
         kurbo::Point::new(p.x, p.y)
     };
+    let Some(start) = points
+        .iter()
+        .position(|p| p.typ != norad::PointType::OffCurve)
+    else {
+        // A quadratic contour may store only its controls. Each adjacent pair has an
+        // implied on-curve point halfway between them, including across the seam.
+        path.move_to(point(points.len() - 1).midpoint(point(0)));
+        for index in 0..points.len() {
+            let control = point(index);
+            path.quad_to(control, control.midpoint(point(index + 1)));
+        }
+        path.close_path();
+        return path;
+    };
     path.move_to(point(start));
+    let closed = contour.is_closed();
     let mut pending: Vec<kurbo::Point> = Vec::new();
-    for step in 1..=points.len() {
+    for step in 1..(points.len() + usize::from(closed)) {
         let index = (start + step) % points.len();
         let p = &points[index];
         match p.typ {
@@ -368,13 +380,56 @@ pub fn contour_path(contour: &norad::Contour) -> kurbo::BezPath {
             }
         }
     }
-    path.close_path();
+    if closed {
+        path.close_path();
+    }
     path
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn contour_conversion_keeps_open_endpoints_and_implied_quadratics() {
+        use kurbo::{PathEl, Point};
+        use norad::{Contour, ContourPoint, PointType};
+
+        let point = |x, y, typ| ContourPoint::new(x, y, typ, false, None, None);
+        let open = Contour::new(
+            vec![
+                point(0.0, 0.0, PointType::Move),
+                point(10.0, 0.0, PointType::Line),
+            ],
+            None,
+        );
+        assert_eq!(
+            contour_path(&open).elements(),
+            &[
+                PathEl::MoveTo(Point::ZERO),
+                PathEl::LineTo(Point::new(10.0, 0.0)),
+            ]
+        );
+
+        let controls = [(0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (0.0, 20.0)];
+        let closed = Contour::new(
+            controls
+                .map(|(x, y)| point(x, y, PointType::OffCurve))
+                .to_vec(),
+            None,
+        );
+        assert_eq!(
+            contour_path(&closed).elements(),
+            &[
+                PathEl::MoveTo(Point::new(0.0, 10.0)),
+                PathEl::QuadTo(Point::ZERO, Point::new(10.0, 0.0)),
+                PathEl::QuadTo(Point::new(20.0, 0.0), Point::new(20.0, 10.0)),
+                PathEl::QuadTo(Point::new(20.0, 20.0), Point::new(10.0, 20.0)),
+                PathEl::QuadTo(Point::new(0.0, 20.0), Point::new(0.0, 10.0)),
+                PathEl::ClosePath,
+            ]
+        );
+    }
 
     fn square(x: f64, owner: u32) -> NeuralRegion {
         NeuralRegion {

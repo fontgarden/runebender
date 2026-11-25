@@ -179,6 +179,23 @@ impl Cubic {
         cross(d1, d2) / (speed * speed * speed)
     }
 
+    /// Derivative of signed curvature with respect to arc length at a regular point.
+    fn curvature_gradient(&self, t: f64) -> Option<f64> {
+        let velocity = self.deriv(t);
+        let acceleration = self.deriv2(t);
+        let jerk = ((self.p3 - self.p0) + (self.p1 - self.p2) * 3.0) * 6.0;
+        let speed_squared = velocity.dot(velocity);
+        if speed_squared < 1e-18 {
+            return None;
+        }
+        // Differentiate κ = (v × a) / |v|³ and divide by ds/dt = |v|.
+        Some(
+            (cross(velocity, jerk)
+                - 3.0 * cross(velocity, acceleration) * velocity.dot(acceleration) / speed_squared)
+                / (speed_squared * speed_squared),
+        )
+    }
+
     /// Signed curvature at the start (`t=0`), closed form.
     /// κ(0) = (2/3)·cross(P1−P0, P2−P0) / |P1−P0|³.
     fn curvature_start(&self) -> f64 {
@@ -277,6 +294,10 @@ pub fn node_continuity(contours: &[Vec<Cubic>]) -> Vec<NodeContinuity> {
         for k in 0..n {
             let out_seg = &segs[k];
             let in_seg = &segs[(k + n - 1) % n];
+            if in_seg.p3 != out_seg.p0 {
+                // The endpoints of an open contour have no join to classify.
+                continue;
+            }
             let node = out_seg.p0;
             let level = classify(in_seg, out_seg);
             let (ki, ko) = (in_seg.curvature_end(), out_seg.curvature_start());
@@ -322,11 +343,18 @@ fn classify(in_seg: &Cubic, out_seg: &Cubic) -> GLevel {
     if rel > G2_REL_TOL {
         return GLevel::G1;
     }
-    // G3: compare dκ/ds just inside each side.
-    let dki = (in_seg.curvature(1.0) - in_seg.curvature(0.97)) / 0.03;
-    let dko = (out_seg.curvature(0.03) - out_seg.curvature(0.0)) / 0.03;
-    let ddenom = dki.abs().max(dko.abs()).max(1e-6);
-    if (dki - dko).abs() / ddenom < G3_REL_TOL {
+    let (Some(dki), Some(dko)) = (
+        in_seg.curvature_gradient(1.0),
+        out_seg.curvature_gradient(0.0),
+    ) else {
+        return GLevel::G2;
+    };
+    // dκ/ds scales as κ². Use that scale for roundoff at a stationary curvature.
+    let scale = dki
+        .abs()
+        .max(dko.abs())
+        .max(ki.abs().max(ko.abs()).powi(2) * 1e-9);
+    if (dki - dko).abs() <= G3_REL_TOL * scale {
         GLevel::G3
     } else {
         GLevel::G2
@@ -819,6 +847,36 @@ mod tests {
         // Endpoint curvature magnitude ~ 1/100 (sign depends on winding).
         assert!((c.curvature_start().abs() - 0.01).abs() < 0.001);
         assert!((c.curvature_end().abs() - 0.01).abs() < 0.001);
+    }
+
+    #[test]
+    fn subdividing_a_cubic_unevenly_preserves_geometric_continuity() {
+        use kurbo::{CubicBez, ParamCurve as _};
+        let curve = CubicBez::new((0.0, 0.0), (0.0, 100.0), (110.0, 80.0), (150.0, 10.0));
+        let segment = |range| {
+            let c = curve.subsegment(range);
+            Cubic {
+                p0: c.p0,
+                p1: c.p1,
+                p2: c.p2,
+                p3: c.p3,
+                straight: false,
+                start_smooth: true,
+            }
+        };
+        let incoming = segment(0.0..0.25);
+        let outgoing = segment(0.25..1.0);
+        let joins = node_continuity(&[vec![incoming, outgoing]]);
+        assert_eq!(joins.len(), 1, "the open endpoints form no join");
+        assert_eq!(joins[0].level, GLevel::G3);
+
+        // The far handle changes the curvature derivative at the join, without changing
+        // the tangent or curvature there.
+        let perturbed = Cubic {
+            p3: outgoing.p3 + Vec2::new(0.0, 140.0),
+            ..outgoing
+        };
+        assert_eq!(classify(&incoming, &perturbed), GLevel::G2);
     }
 
     #[test]
