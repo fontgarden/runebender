@@ -40,7 +40,7 @@ Finding a subtle fault without a reference, choosing the right number of font un
 - The live `proof` tool can return drawings and numeric metrics for up to 256 named glyphs.
   The live `specimen` provides a Latin text comparison, and compiled proofs can shape specified text, features and variation locations.
   The proposal-layer proof lays glyphs out in a grid.
-  The new workflow needs to shape complete words with all of the proposed spacing edits applied together in a detached copy.
+  Agent Proof shapes complete words in Working and Proposal for a single proposed glyph.
   A checked-in word can guard its exported positions or its rendered appearance on every change. [Proof guide](PROJECT-PROOFS.md)
 
 ## Run a spacing scan
@@ -66,6 +66,44 @@ On a disposable copy we translated lowercase h by 80 units and increased its adv
 The new left side of h ranked first with a difference of exactly 80 units against n.
 The CLI and the live host produced identical JSON and SVG for the edited copy.
 This trial checks detection of one known error and agreement between the two interfaces.
+
+## Review a proposed change in the editor
+
+Connect your MCP client to `runebender mcp --live` and choose the native editor session for the font copy with `editor_sessions` and `editor_connect`.
+Use the same build for the native editor and the MCP server.
+The built binary's `mcp --install codex claude-code` command registers it in those clients by absolute path.
+OMP can read the repository's `.mcp.json` when this build is on PATH, or use an explicit binary path in its project config. [OMP MCP configuration](https://github.com/can1357/oh-my-pi/blob/main/docs/mcp-config.md)
+If several editors are open, check the project path and source before proposing.
+All tools below are also available as `runebender agent call TOOL --session SOCKET --args JSON`.
+
+For example, ask your agent:
+
+> On the copy of Virtua Grotesk Regular, propose adding 16 units to the left sidebearing of h while keeping its right sidebearing.
+> Show me “ahead”, “rhythm” and “which” in Agent Proof and wait for my decision.
+
+The agent reads h's revision and stages a `propose_edits` task containing a horizontal translation of +16 and an advance adjustment of +16.
+After `editor_open_glyph` selects h, the agent reads `editor_context` and requests the comparison:
+
+```json
+{
+  "action": "spacing",
+  "task": "h-left-plus-16",
+  "words": ["ahead", "rhythm", "which"],
+  "expected_context_revision": "<fresh context_revision>"
+}
+```
+
+The `editor_review` tool shows the working font and the proposed font side by side in Agent Proof.
+Choose **Apply glyph** or **Discard proposal** there, or say “accept” or “reject” in the connected client.
+For a client decision, send the source, task, epoch and document revision from the comparison with `proposal_install` or `proposal_discard`.
+Installation also requires `keep_structure: true` for this workflow and `authorization: "user-approved"`.
+After a stale revision, show the new comparison and ask again.
+Use the editor's Save command to persist accepted edits.
+
+![Agent Proof showing the Working and Proposal versions of ahead, behind and threshold](examples/spacing/agent-proof-words.png)
+
+In this trial on a copy of the eight-master Virtua Grotesk family, rejecting an extra 32 units kept h's advance at 664.
+Accepting a separate correction restored the left sidebearing from 152 to 72 and the advance to 584, with the right sidebearing held at 64.
 
 ## Where to take the scanner next
 

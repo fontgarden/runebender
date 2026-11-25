@@ -833,7 +833,13 @@ impl LaunchOptions {
         {
             workspace.open_glyph(index);
             if workspace.proof_view {
+                // Pinning Before normally switches back to the working drawing. Restore the
+                // explicit launch selection after the requested glyph has its baseline.
+                let proposal = workspace.ai.preview_task.clone();
                 workspace.pin_review_before();
+                if proposal.is_some() {
+                    workspace.select_review_proposal(proposal);
+                }
             }
             #[cfg(unix)]
             if self.proof_sample {
@@ -1236,6 +1242,30 @@ mod tests {
         assert_eq!(view("text"), Some(ProofView::Text));
         assert_eq!(view("yes"), None);
         assert_eq!(options(&[]).proof_view, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn launch_glyph_keeps_the_explicit_proposal_in_the_text_proof() {
+        let mut app = Workspace::untitled().unwrap();
+        app.open_glyph(app.font.index_of("A").unwrap());
+        proof_sample(&mut app);
+        app.open_glyph(app.font.index_of("B").unwrap());
+        app.proof_view = true;
+        let launch = options(&[
+            ("RUNEBENDER_GLYPH", "A"),
+            ("RUNEBENDER_PROPOSAL_PREVIEW", "wider-sample"),
+            ("RUNEBENDER_PROOF_VIEW", "text"),
+            ("RUNEBENDER_PROOF_TEXT", "Atlas Avenue"),
+        ]);
+        launch.apply_to_document(&mut app);
+        launch.apply(&mut app);
+        assert_eq!(app.review.mode, ReviewMode::Text);
+        assert_eq!(app.review_sample_text(), "Atlas Avenue");
+        assert_eq!(
+            app.review_comparison().proposal_task.as_deref(),
+            Some("wider-sample")
+        );
     }
 
     #[test]

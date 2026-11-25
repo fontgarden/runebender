@@ -74,6 +74,16 @@ pub(crate) struct ReviewComparison {
     pub(crate) message: Option<String>,
 }
 
+/// Limits the editor's word proof to a short sample of printable words.
+#[cfg(unix)]
+pub(crate) fn valid_spacing_words(words: &[String]) -> bool {
+    (1..=8).contains(&words.len())
+        && words.iter().all(|word| {
+            (1..=48).contains(&word.chars().count())
+                && !word.chars().any(|ch| ch.is_whitespace() || ch.is_control())
+        })
+}
+
 impl Workspace {
     fn review_identity(&self) -> Option<ReviewIdentity> {
         Some(ReviewIdentity {
@@ -159,6 +169,66 @@ impl Workspace {
         }
         self.ai.preview_task = task;
         self.review.show_before = false;
+    }
+
+    /// Compare one proposed glyph with the working master in the same reading sample.
+    #[cfg(unix)]
+    pub(crate) fn open_spacing_review(
+        &mut self,
+        task: &str,
+        words: &[String],
+    ) -> Result<(), String> {
+        if !valid_spacing_words(words) {
+            return Err("Choose one to eight words of up to 48 characters each".into());
+        }
+        if !self.on_active_master() {
+            return Err("Return to the active master to review spacing".into());
+        }
+        let glyph = &self.session.glyph_name;
+        let address = self
+            .font
+            .active_layer_address(glyph)
+            .ok_or("Missing active layer")?;
+        let layer = self
+            .font
+            .project
+            .document_layer(glyph, &address.layer)
+            .ok_or("Missing active glyph")?;
+        if layer.codepoints().next().is_none() {
+            return Err(format!("Use Compare to review the unencoded glyph {glyph}"));
+        }
+        if !layer
+            .codepoints()
+            .any(|ch| words.iter().any(|word| word.contains(ch)))
+        {
+            return Err(format!(
+                "Include a word containing an encoded character for {glyph}"
+            ));
+        }
+        if self.has_session_proposal(task) {
+            return Err("The editor has a session candidate with this name. Choose a distinct project proposal task.".into());
+        }
+        self.refresh_proposals();
+        let proposal = self
+            .ai
+            .proposals
+            .iter()
+            .find(|proposal| proposal.task == task)
+            .ok_or("The proposal is unavailable in the active source")?;
+        if proposal.glyphs.len() != 1 || proposal.glyphs[0] != self.session.glyph_name {
+            return Err("Choose a proposal for the open glyph alone".into());
+        }
+        self.review_proposal_eligibility(task, &self.session.glyph_name)?;
+        if !self.proof_view {
+            self.toggle_proof_view();
+        }
+        self.select_review_proposal(Some(task.to_owned()));
+        self.review.reading.custom = words.join(" ");
+        self.select_review_sample(super::review_reading::Sample::Custom);
+        self.review.reading.axes.clear();
+        self.review.reading.axis_buffers.clear();
+        self.select_review_mode(ReviewMode::Text);
+        Ok(())
     }
 
     /// Choose the presentation without changing the revision being inspected.
@@ -442,6 +512,31 @@ mod tests {
         });
         assert_eq!(reply["ok"], true, "{reply}");
         app.refresh_proposals();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spacing_review_shows_the_requested_words_without_installing_the_proposal() {
+        let mut app = workspace();
+        propose(&mut app, "spacing", &["A"], 40.0);
+        let revision = app.font.project.document_revision();
+        let width = app.session.advance();
+        assert!(
+            app.open_spacing_review("spacing", &["other".into()])
+                .is_err()
+        );
+        assert!(!app.proof_view);
+        assert_eq!(app.review.mode, ReviewMode::Compare);
+        app.open_spacing_review("spacing", &["Atlas".into(), "Avenue".into()])
+            .unwrap();
+        assert!(app.proof_view);
+        assert_eq!(app.review.mode, ReviewMode::Text);
+        assert_eq!(app.review_sample_text(), "Atlas Avenue");
+        let comparison = app.review_comparison();
+        assert_eq!(comparison.before.unwrap().advance, width);
+        assert_eq!(comparison.working.advance, width + 40.0);
+        assert!(comparison.can_apply_glyph);
+        assert_eq!(app.font.project.document_revision(), revision);
     }
 
     #[cfg(unix)]

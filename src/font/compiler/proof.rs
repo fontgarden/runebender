@@ -220,6 +220,15 @@ impl CompileProofInput {
         &self.canonical_input_sha256
     }
 
+    /// Compile a captured reading specimen with the editor's unfinished-glyph preview policy.
+    ///
+    /// Run this after deriving the proposal so both the working and proposed reading fonts
+    /// receive the same compatibility adjustments before shaping with their OpenType features.
+    pub fn compile_preview(mut self) -> Result<Arc<CompiledFont>, String> {
+        super::preview_tolerance::make_tolerant(&mut self.font)?;
+        CompiledFont::build(self.font).map(Arc::new)
+    }
+
     /// Derive a full-font specimen with only the reviewed persisted proposal glyph replaced.
     /// Foreground revision guards are identical to Apply; the canonical project is unchanged.
     pub fn with_proposal_glyph(

@@ -96,9 +96,11 @@ pub fn tools() -> Vec<agent::Tool> {
     });
     result.push(agent::Tool {
         name: "editor_review".into(),
-        description: "Control the native Agent Proof view for the active editable glyph: edit, compare, toggle, before, after, or pin_before. Requires a fresh editor_context revision; rejects active gestures. pin_before explicitly replaces the baseline. Never edits or saves font data. Use review_proof to inspect the same comparison and reference drawings.".into(),
+        description: "Control the native Agent Proof view for the active editable glyph: edit, compare, toggle, before, after, pin_before, or spacing. For spacing, supply the pending proposal task and sample words for a before/after reading proof. Requires a fresh editor_context revision; rejects active gestures. pin_before explicitly replaces the baseline. Never edits or saves font data. Use review_proof to inspect the same comparison and reference drawings.".into(),
         parameters: json!({"type":"object","properties":{
-            "action":{"type":"string","enum":["edit","compare","toggle","before","after","pin_before"]},
+            "action":{"type":"string","enum":["edit","compare","toggle","before","after","pin_before","spacing"]},
+            "task":{"type":"string","minLength":1,"description":"Pending proposal task for spacing only."},
+            "words":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"string","minLength":1,"maxLength":48},"description":"Sample words for spacing only."},
             "expected_context_revision":{"type":"string"}
         },"required":["action","expected_context_revision"],"additionalProperties":false}),
     });
@@ -223,6 +225,12 @@ pub fn tools() -> Vec<agent::Tool> {
             "type":"string",
             "description":"Optional endpoint lifetime guard from a previous response; mismatch rejects before dispatch."
         });
+        if matches!(tool.name.as_str(), "proposal_install" | "proposal_discard") {
+            tool.parameters["properties"]["expected_document_revision"] = json!({
+                "type":"integer","minimum":0,
+                "description":"Guard a root proposal decision with the document revision from its review."
+            });
+        }
         if matches!(
             tool.name.as_str(),
             "proposal_install" | "experiment_apply" | "experiment_undo_apply"
@@ -458,6 +466,20 @@ fn handle(project: &mut Project, name: &str, args: &Value) -> Result<Value, Stri
             "explicit user authorization required: set authorization to user-approved only after the user asks"
                 .into(),
         );
+    }
+    if matches!(name, "proposal_install" | "proposal_discard")
+        && let Some(expected) = object.get("expected_document_revision")
+    {
+        let revision = expected
+            .as_u64()
+            .ok_or("expected_document_revision must be an unsigned integer")?;
+        if object.contains_key("branch") {
+            return Err("expected_document_revision guards root proposals only".into());
+        }
+        if project.document_revision() != revision {
+            return Ok(json!({"ok":false,"error_code":"stale_revision",
+                "error":"The document has changed since review. Review the current proposal."}));
+        }
     }
     if name == "project_info" {
         let active_source = project.source_id(project.active).map(|source| source.0);
@@ -1251,10 +1273,23 @@ mod tests {
             512.0
         );
         assert_eq!(call(&mut project, "propose_edits", &batch)["ok"], false);
+        let reviewed_revision = project.document_revision();
+        for decision in ["proposal_install", "proposal_discard"] {
+            let rejected = call(
+                &mut project,
+                decision,
+                &json!({"task":"spacing",
+                "keep_structure":true,"authorization":"user-approved",
+                "expected_document_revision":reviewed_revision - 1}),
+            );
+            assert_eq!(rejected["error_code"], "stale_revision");
+            assert_eq!(project.document_revision(), reviewed_revision);
+        }
         let installed = call(
             &mut project,
             "proposal_install",
-            &json!({"task":"spacing","keep_structure":true,"authorization":"user-approved"}),
+            &json!({"task":"spacing","keep_structure":true,"authorization":"user-approved",
+                "expected_document_revision":reviewed_revision}),
         );
         assert_eq!(installed["installed"]["installed"], json!(["live_test"]));
         let address = variable::GlyphLayerAddress {

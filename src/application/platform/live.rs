@@ -260,7 +260,8 @@ impl Workspace {
             },
             "tool": format!("{:?}", self.tool).to_lowercase(),
             "busy_gesture": self.session.gesture_in_progress(),
-            "review":{"visible":self.proof_view,"mode":format!("{:?}",self.review.mode).to_lowercase(),"show_before":self.review.show_before,"has_before":self.review_comparison().before.is_some()},
+            "review":{"visible":self.proof_view,"mode":format!("{:?}",self.review.mode).to_lowercase(),"show_before":self.review.show_before,"has_before":self.review_comparison().before.is_some(),
+                "proposal_task":self.ai.preview_task,"custom_text":self.review.reading.custom},
             "text": {
                 "editor": self.initial_text,
                 "session_active": self.has_text_session,
@@ -404,10 +405,11 @@ impl Workspace {
         else {
             return json!({"ok":false,"error_code":"invalid_arguments"});
         };
-        if object.len() != 2
+        let argument_count = if action == "spacing" { 4 } else { 2 };
+        if object.len() != argument_count
             || !matches!(
                 action,
-                "edit" | "compare" | "toggle" | "before" | "after" | "pin_before"
+                "edit" | "compare" | "toggle" | "before" | "after" | "pin_before" | "spacing"
             )
         {
             return json!({"ok":false,"error_code":"invalid_arguments"});
@@ -420,6 +422,29 @@ impl Workspace {
         }
         if !matches!(self.mode, Mode::Editor(_)) || !self.on_active_master() {
             return json!({"ok":false,"error_code":"not_editing_master"});
+        }
+        if action == "spacing" {
+            let Some(task) = object
+                .get("task")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            else {
+                return json!({"ok":false,"error_code":"invalid_arguments","error":"Supply a pending proposal task"});
+            };
+            let Some(words) = object.get("words").and_then(|v| v.as_array()) else {
+                return json!({"ok":false,"error_code":"invalid_arguments","error":"Supply an array of sample words"});
+            };
+            let words: Option<Vec<_>> = words
+                .iter()
+                .map(|word| word.as_str().map(str::to_owned))
+                .collect();
+            let Some(words) = words else {
+                return json!({"ok":false,"error_code":"invalid_arguments","error":"Sample words must be strings"});
+            };
+            if let Err(error) = self.open_spacing_review(task, &words) {
+                return json!({"ok":false,"error_code":"spacing_review_unavailable","error":error});
+            }
+            return self.live_context();
         }
         if action == "edit" {
             if self.proof_view {
@@ -639,6 +664,34 @@ mod tests {
             assert_eq!(result["context"]["review"]["visible"], action != "edit");
         }
         assert_eq!(app.font.project.document_revision(), revision);
+    }
+
+    #[test]
+    fn live_spacing_review_binds_the_visible_task_and_words_to_the_context() {
+        use serde_json::json;
+        let mut app = Workspace::untitled().unwrap();
+        app.open_glyph(app.font.index_of("A").unwrap());
+        let read = socket_call(&mut app, "read_glyph", json!({"glyph":"A"}));
+        let proposal = socket_call(
+            &mut app,
+            "propose_edits",
+            json!({
+                "task":"spacing", "reason":"review the advance in words",
+                "edits":[{"glyph":"A","expected_revision":read["revision"],
+                    "operations":[{"op":"adjust_width","delta":8.0}]}]
+            }),
+        );
+        assert_eq!(proposal["ok"], true, "{proposal}");
+        let initial = app.live_context();
+        let arguments = json!({"action":"spacing","task":"spacing","words":["Atlas","Avenue"],
+            "expected_context_revision":initial["context_revision"]});
+        let shown = socket_call(&mut app, "editor_review", arguments.clone());
+        assert_eq!(shown["ok"], true, "{shown}");
+        assert_eq!(shown["context"]["review"]["proposal_task"], "spacing");
+        assert_eq!(shown["context"]["review"]["custom_text"], "Atlas Avenue");
+        assert_eq!(shown["document_revision"], proposal["document_revision"]);
+        let stale = socket_call(&mut app, "editor_review", arguments);
+        assert_eq!(stale["error_code"], "stale_context");
     }
 
     #[test]

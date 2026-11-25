@@ -528,6 +528,20 @@ impl Workspace {
             })
     }
 
+    /// Whether the editor would resolve this name to a session candidate in the active source.
+    #[cfg(unix)]
+    pub(crate) fn has_session_proposal(&self, task: &str) -> bool {
+        self.font
+            .project
+            .source_id(self.font.active())
+            .is_some_and(|source| {
+                self.ai
+                    .pending
+                    .get(&(source, task.to_owned()))
+                    .is_some_and(|pending| pending.document_id == self.document_id)
+            })
+    }
+
     /// Capture the exact selected proposal for an immutable native reading specimen.
     pub(crate) fn review_proposal_input(
         &self,
@@ -1238,6 +1252,12 @@ mod tests {
             },
         );
         app.refresh_proposals();
+        #[cfg(unix)]
+        assert!(
+            app.open_spacing_review("review-batch", &["Atlas".into()])
+                .unwrap_err()
+                .contains("session candidate")
+        );
         app.select_review_proposal(Some("review-batch".into()));
         let comparison = app.review_comparison();
         assert_eq!(comparison.proposal_glyph_count, 2);

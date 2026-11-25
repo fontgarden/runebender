@@ -314,6 +314,13 @@ The live `spacing_scan` tool reads a root source, ranks spacing candidates, and 
 Set `include_sheet` to receive the corresponding SVG in `proof_svg`.
 The shell command `runebender spacing-scan FONT --out DIR` creates a new directory containing the report and SVG.
 
+To review one staged glyph in real words, open that glyph in the native editor and call `editor_review` with `action: "spacing"`, the proposal task, a fresh context revision and one to eight words.
+Agent Proof opens Text mode with the same sample in the Working and Proposal cards.
+The agent can accept or reject the proposal after the designer decides in the client.
+Send `expected_document_epoch` and the reviewed `expected_document_revision` on `proposal_install` or `proposal_discard` to bind that decision to the comparison.
+An accepted change takes effect in the live document and can be saved from the editor.
+See the [spacing review workflow](AGENT-SPACING.md) for a sample request.
+
 ### 3.3 Disk tools
 
 <!-- check: disk-tools -->

@@ -221,9 +221,18 @@ mod tests {
         assert!(error.contains("no value at default location"), "{error}");
         assert!(project.preview_exceptions().is_empty());
 
-        project
+        let working = project
             .compiled_preview()
             .expect("the preview compiles the unfinished glyphs");
+        let reading = crate::font::compiler::proof::capture(&project)
+            .unwrap()
+            .compile_preview()
+            .expect("a captured reading revision uses the same preview policy");
+        assert_eq!(working.glyph_order, reading.glyph_order);
+        assert_eq!(
+            working.advances(&[]).unwrap(),
+            reading.advances(&[]).unwrap()
+        );
         let exceptions = project.preview_exceptions();
         assert_eq!(
             *exceptions,

@@ -51,14 +51,25 @@ impl CompileJob {
         input: Result<proof::CompileProofInput, String>,
         mode: CompileMode,
     ) -> Self {
+        Self::run(mode, move || {
+            input
+                .and_then(proof::compile)
+                .map(|snapshot| snapshot.compiled_font())
+        })
+    }
+
+    fn proposal_preview(input: Result<proof::CompileProofInput, String>) -> Self {
+        Self::run(CompileMode::current(), move || {
+            input.and_then(proof::CompileProofInput::compile_preview)
+        })
+    }
+
+    fn run(mode: CompileMode, compile: impl FnOnce() -> CompileResult + Send + 'static) -> Self {
         let job = Self(Arc::new(Mutex::new(None)));
         let result = job.0.clone();
         let work = move || {
-            *result.lock().unwrap_or_else(|e| e.into_inner()) = Some(
-                input
-                    .and_then(proof::compile)
-                    .map(|snapshot| snapshot.compiled_font()),
-            );
+            let compiled = compile();
+            *result.lock().unwrap_or_else(|e| e.into_inner()) = Some(compiled);
         };
         match mode {
             CompileMode::Blocking => work(),
@@ -378,7 +389,7 @@ impl Workspace {
                 .is_none_or(|(old, job)| old != &key && !job.pending())
             {
                 let input = self.review_proposal_input(task);
-                *cache = Some((key.clone(), CompileJob::new(input)));
+                *cache = Some((key.clone(), CompileJob::proposal_preview(input)));
             }
             vec![
                 working(),
