@@ -11,7 +11,7 @@
 //! that read and write a folder themselves, such as the browser with the File System Access API;
 //! [`open_memory_project`] and [`memory_save_files`] do the same for a whole project.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 use norad::designspace::DesignSpaceDocument;
@@ -152,6 +152,12 @@ pub struct EncodedUfo {
     pub layer_directories: Vec<String>,
 }
 
+#[derive(Debug)]
+struct OriginalMetadataFile {
+    original: Option<Vec<u8>>,
+    canonical: Option<Vec<u8>>,
+}
+
 /// What a host keeps beside a project opened from memory, so it can write the project back.
 #[derive(Debug, Default)]
 pub struct MemoryBookkeeping {
@@ -162,6 +168,8 @@ pub struct MemoryBookkeeping {
     /// Per source path, files outside the UFO specification, written back unchanged.
     pub preserved: HashMap<PathBuf, Vec<(String, Vec<u8>)>>,
     original_glifs: HashMap<PathBuf, HashMap<String, super::OriginalGlif>>,
+    // Only differences from the opening Project's metadata serialization need storage.
+    original_metadata: HashMap<PathBuf, BTreeMap<String, OriginalMetadataFile>>,
     // Files beside the managed sources travel with copies, but in-place saves leave them alone.
     project_files: Vec<(String, Vec<u8>)>,
     /// Opening XML and its canonical value, to retain comments and formatting in a copy.
@@ -447,6 +455,15 @@ pub fn ufo_files_from_font(
     layer_directories: &HashMap<String, String>,
     glif_paths: &HashMap<(String, String), String>,
 ) -> Result<EncodedUfo, String> {
+    encode_ufo(font, layer_directories, glif_paths, true)
+}
+
+fn encode_ufo(
+    font: &Font,
+    layer_directories: &HashMap<String, String>,
+    glif_paths: &HashMap<(String, String), String>,
+    include_payloads: bool,
+) -> Result<EncodedUfo, String> {
     let mut encoded = EncodedUfo::default();
     encoded.files.push((
         "metainfo.plist".into(),
@@ -488,7 +505,7 @@ pub fn ufo_files_from_font(
             .get(&name)
             .cloned()
             .unwrap_or_else(|| layer.path().to_string_lossy().into_owned());
-        let mut contents = std::collections::BTreeMap::new();
+        let mut contents = BTreeMap::new();
         let mut taken: HashSet<String> = layer
             .iter()
             .filter_map(|glyph| glif_paths.get(&(name.clone(), glyph.name().to_string())))
@@ -514,9 +531,11 @@ pub fn ufo_files_from_font(
                     candidate
                 }
             };
-            encoded
-                .files
-                .push((format!("{directory}/{file}"), glif_bytes(glyph)?));
+            if include_payloads {
+                encoded
+                    .files
+                    .push((format!("{directory}/{file}"), glif_bytes(glyph)?));
+            }
             contents.insert(glyph_name.to_owned(), file);
         }
         encoded.files.push((
@@ -545,8 +564,10 @@ pub fn ufo_files_from_font(
         "layercontents.plist".into(),
         plist_xml(&layer_contents, "layercontents.plist")?,
     ));
-    store_files("data", font.data.iter(), &mut encoded.files)?;
-    store_files("images", font.images.iter(), &mut encoded.files)?;
+    if include_payloads {
+        store_files("data", font.data.iter(), &mut encoded.files)?;
+        store_files("images", font.images.iter(), &mut encoded.files)?;
+    }
     Ok(encoded)
 }
 
@@ -644,10 +665,7 @@ pub fn open_memory_project(
         let input = decode_ufo(PathBuf::from(name), "", &mut bookkeeping)?;
         let mut project = Project::from_source(input).map_err(|error| error.to_string())?;
         project.export_source = Some(PathBuf::from(name));
-        return Ok(MemoryProject {
-            project,
-            bookkeeping,
-        });
+        return retain_opening_metadata(project, bookkeeping, files, true);
     }
     let mut designspaces: Vec<&str> = files
         .iter()
@@ -721,10 +739,121 @@ pub fn open_memory_project(
             .project_files
             .push((path.clone(), bytes.clone()));
     }
+    retain_opening_metadata(project, bookkeeping, files, false)
+}
+
+fn retain_opening_metadata(
+    project: crate::font::project::Project,
+    mut bookkeeping: MemoryBookkeeping,
+    files: &[(String, Vec<u8>)],
+    opened_ufo_root: bool,
+) -> Result<MemoryProject, String> {
+    for source in project.document_sources() {
+        let path = source.path();
+        let font = project
+            .encode_ufo_source(source.id())
+            .ok_or_else(|| format!("{}: source data is missing", path.display()))?;
+        let (Some(directories), Some(glif_paths)) = (
+            bookkeeping.layer_directories.get(path),
+            bookkeeping.glif_paths.get(path),
+        ) else {
+            return Err(format!(
+                "{}: imported source paths are missing",
+                path.display()
+            ));
+        };
+        let metadata = encode_ufo(&font, directories, glif_paths, false)?;
+        let prefix = if opened_ufo_root {
+            String::new()
+        } else {
+            format!("{}/", path.display())
+        };
+        let mut originals: HashMap<&str, &[u8]> = files
+            .iter()
+            .filter_map(|(name, bytes)| {
+                let relative = name.strip_prefix(&prefix)?;
+                let layer_metadata = relative.rsplit_once('/').is_some_and(|(dir, file)| {
+                    matches!(file, "contents.plist" | "layerinfo.plist")
+                        && metadata.layer_directories.iter().any(|layer| layer == dir)
+                });
+                (is_supported_root_file(relative) || layer_metadata)
+                    .then_some((relative, bytes.as_slice()))
+            })
+            .collect();
+        let mut retained = BTreeMap::new();
+        for (file, canonical) in metadata.files {
+            let original = originals.remove(file.as_str());
+            // A minimally readable input may omit a required package file. Still write that
+            // file when making a complete copy. Optional metadata keeps its original presence.
+            let required = matches!(file.as_str(), "metainfo.plist" | "layercontents.plist")
+                || file.ends_with("/contents.plist");
+            if original != Some(canonical.as_slice()) && (original.is_some() || !required) {
+                retained.insert(
+                    file,
+                    OriginalMetadataFile {
+                        original: original.map(<[u8]>::to_vec),
+                        canonical: Some(canonical),
+                    },
+                );
+            }
+        }
+        // An empty optional file can be present even when the encoder emits nothing for it.
+        for (file, bytes) in originals {
+            retained.insert(
+                file.to_owned(),
+                OriginalMetadataFile {
+                    original: Some(bytes.to_vec()),
+                    canonical: None,
+                },
+            );
+        }
+        bookkeeping
+            .original_metadata
+            .insert(path.to_owned(), retained);
+    }
     Ok(MemoryProject {
         project,
         bookkeeping,
     })
+}
+
+fn restore_unchanged_metadata(
+    encoded: &mut EncodedUfo,
+    original: &BTreeMap<String, OriginalMetadataFile>,
+) {
+    let mut emitted = HashSet::new();
+    encoded.files.retain_mut(|(file, bytes)| {
+        let Some((name, entry)) = original.get_key_value(file) else {
+            return true;
+        };
+        emitted.insert(name);
+        if entry.canonical.as_ref() != Some(bytes) {
+            return true;
+        }
+        if let Some(raw) = &entry.original {
+            bytes.clone_from(raw);
+            true
+        } else {
+            false
+        }
+    });
+    for (file, entry) in original {
+        if emitted.contains(file) || entry.canonical.is_some() {
+            continue;
+        }
+        // A removed layer takes its empty layerinfo.plist with it.
+        if let Some((directory, _)) = file.rsplit_once('/')
+            && !encoded
+                .layer_directories
+                .iter()
+                .any(|layer| layer == directory)
+        {
+            continue;
+        }
+        if let Some(raw) = &entry.original {
+            encoded.files.push((file.clone(), raw.clone()));
+        }
+    }
 }
 
 fn files_outside_sources<'a>(
@@ -787,8 +916,11 @@ fn encode_memory_project(
             .glif_paths
             .get(&path)
             .unwrap_or(&empty_glif_paths);
-        let encoded = ufo_files_from_font(&font, layer_directories, glif_paths)
+        let mut encoded = ufo_files_from_font(&font, layer_directories, glif_paths)
             .map_err(|error| format!("{}: {error}", path.display()))?;
+        if into_new_folder && let Some(original) = bookkeeping.original_metadata.get(&path) {
+            restore_unchanged_metadata(&mut encoded, original);
+        }
         let prefix = path.to_string_lossy();
         for (file, bytes) in encoded.files {
             let retained = bookkeeping
@@ -1115,6 +1247,54 @@ mod tests {
             save.files
                 .iter()
                 .all(|(path, _)| path.starts_with("Mem.ufo/"))
+        );
+    }
+
+    #[test]
+    fn full_copies_preserve_unchanged_ufo_metadata_and_empty_files() {
+        let mut files: Vec<(String, Vec<u8>)> = complete_files()
+            .into_iter()
+            .map(|(file, bytes)| (file.into(), bytes.to_vec()))
+            .collect();
+        files.retain(|(name, _)| name != "groups.plist" && name != "kerning.plist");
+        let empty =
+            b"<?xml version=\"1.0\"?>\n<plist version=\"1.0\"><dict><!-- empty --></dict></plist>";
+        files.push(("groups.plist".into(), empty.to_vec()));
+        files.push(("glyphs/layerinfo.plist".into(), empty.to_vec()));
+        let mut opened = open_memory_project(Some("Face.ufo"), &files).unwrap();
+        let copy = memory_save_as_files(&opened.project, &opened.bookkeeping).unwrap();
+        let metadata = |save: MemorySave| -> BTreeMap<_, _> {
+            save.files
+                .into_iter()
+                .map(|(path, bytes)| (path.strip_prefix("Face.ufo/").unwrap().to_owned(), bytes))
+                .collect()
+        };
+        let copy = metadata(copy);
+        for (file, bytes) in &files {
+            if file.ends_with(".plist") {
+                assert_eq!(copy.get(file), Some(bytes), "{file} keeps its input bytes");
+            }
+        }
+        assert!(!copy.contains_key("kerning.plist"));
+        let source = opened.project.source_id(0).unwrap();
+        opened
+            .project
+            .edit_document_source_metadata(source, |draft| {
+                let mut info = draft.font_info().clone();
+                info.metrics.ascender = Some(900.0);
+                draft.set_font_info(info);
+                Ok(())
+            })
+            .unwrap();
+        let edited = metadata(memory_save_as_files(&opened.project, &opened.bookkeeping).unwrap());
+        assert_ne!(copy["fontinfo.plist"], edited["fontinfo.plist"]);
+        let info: norad::FontInfo = plist::from_bytes(&edited["fontinfo.plist"]).unwrap();
+        assert_eq!(info.ascender, Some(900.0));
+        assert_eq!(edited["groups.plist"], empty);
+        assert_eq!(edited["glyphs/layerinfo.plist"], empty);
+        assert_eq!(
+            edited["glyphs/contents.plist"],
+            copy["glyphs/contents.plist"]
         );
     }
 
