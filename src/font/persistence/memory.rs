@@ -162,6 +162,8 @@ pub struct MemoryBookkeeping {
     /// Per source path, files outside the UFO specification, written back unchanged.
     pub preserved: HashMap<PathBuf, Vec<(String, Vec<u8>)>>,
     original_glifs: HashMap<PathBuf, HashMap<String, super::OriginalGlif>>,
+    // Files beside the managed sources travel with copies, but in-place saves leave them alone.
+    project_files: Vec<(String, Vec<u8>)>,
     /// Opening XML and its canonical value, to retain comments and formatting in a copy.
     original_designspace: Option<(
         crate::font::model::designspace::CanonicalDesignspace,
@@ -653,8 +655,29 @@ pub fn open_memory_project(
         .filter(|path| !path.contains('/') && path.ends_with(".designspace"))
         .collect();
     designspaces.sort_unstable();
-    match designspaces.as_slice() {
-        [] => {}
+    let project = match designspaces.as_slice() {
+        [] => {
+            let mut ufos: Vec<&str> = files
+                .iter()
+                .map(|(path, _)| first_component(path))
+                .filter(|name| name.to_lowercase().ends_with(".ufo"))
+                .collect();
+            ufos.sort_unstable();
+            ufos.dedup();
+            let name = match ufos.as_slice() {
+                [name] => *name,
+                [] => return Err("this folder holds no UFO or designspace".into()),
+                _ => {
+                    return Err(
+                        "this folder holds several UFOs and no designspace; open one UFO".into(),
+                    );
+                }
+            };
+            let input = decode_ufo(PathBuf::from(name), &format!("{name}/"), &mut bookkeeping)?;
+            let mut project = Project::from_source(input).map_err(|error| error.to_string())?;
+            project.export_source = Some(PathBuf::from(name));
+            project
+        }
         [designspace] => {
             let bytes = files
                 .iter()
@@ -683,35 +706,41 @@ pub fn open_memory_project(
                     .clone(),
                 bytes.clone(),
             ));
-            return Ok(MemoryProject {
-                project,
-                bookkeeping,
-            });
+            project
         }
         _ => {
             return Err("this folder holds more than one designspace; open one UFO instead".into());
         }
-    }
-    let mut ufos: Vec<&str> = files
-        .iter()
-        .map(|(path, _)| first_component(path))
-        .filter(|name| name.to_lowercase().ends_with(".ufo"))
-        .collect();
-    ufos.sort_unstable();
-    ufos.dedup();
-    match ufos.as_slice() {
-        [name] => {
-            let input = decode_ufo(PathBuf::from(name), &format!("{name}/"), &mut bookkeeping)?;
-            let mut project = Project::from_source(input).map_err(|error| error.to_string())?;
-            project.export_source = Some(PathBuf::from(name));
-            Ok(MemoryProject {
-                project,
-                bookkeeping,
-            })
+    };
+    let mut paths = HashSet::new();
+    for (path, bytes) in files_outside_sources(&project, files) {
+        if !safe_relative_path(path) || !paths.insert(path) {
+            return Err(format!("invalid or duplicate project file path {path:?}"));
         }
-        [] => Err("this folder holds no UFO or designspace".into()),
-        _ => Err("this folder holds several UFOs and no designspace; open one UFO".into()),
+        bookkeeping
+            .project_files
+            .push((path.clone(), bytes.clone()));
     }
+    Ok(MemoryProject {
+        project,
+        bookkeeping,
+    })
+}
+
+fn files_outside_sources<'a>(
+    project: &crate::font::project::Project,
+    files: &'a [(String, Vec<u8>)],
+) -> impl Iterator<Item = &'a (String, Vec<u8>)> {
+    let managed: HashSet<&Path> = project
+        .document_sources()
+        .map(|source| source.path())
+        .chain(project.export_source.as_deref())
+        .collect();
+    files.iter().filter(move |(path, _)| {
+        !Path::new(path)
+            .ancestors()
+            .any(|part| managed.contains(part))
+    })
 }
 
 /// The files that persist `project`, relative to the folder it was opened from.
@@ -726,7 +755,7 @@ pub fn memory_save_files(
     encode_memory_project(project, bookkeeping, false)
 }
 
-/// Encode every source and the current Designspace descriptor for a new destination.
+/// Encode every source, the current Designspace descriptor, and sidecar files for a new destination.
 ///
 /// A standalone UFO keeps its own directory and has no Designspace descriptor.
 pub fn memory_save_as_files(
@@ -799,6 +828,10 @@ fn encode_memory_project(
         };
         save.files
             .push((destination.to_string_lossy().into_owned(), bytes));
+    }
+    if into_new_folder {
+        save.files
+            .extend(files_outside_sources(project, &bookkeeping.project_files).cloned());
     }
     Ok(save)
 }
@@ -1097,15 +1130,29 @@ mod tests {
         let root = crate::testing::fonts::dir();
         let mut files = Vec::new();
         read_tree(&root, &root, &mut files);
-        // Only the designspace and the UFOs beside it, as the browser host reads a folder.
+        // Arrange the source folders below the descriptor, as in a family with nested masters.
         files.retain(|(path, _)| {
             (!path.contains('/') && path.ends_with(".designspace"))
                 || first_component(path).to_lowercase().ends_with(".ufo")
         });
+        for (path, _) in &mut files {
+            if path.contains('/') {
+                path.insert_str(0, "masters/");
+            }
+        }
+        let sidecar = (
+            "includes/ligatures.fea".to_owned(),
+            b"# keep verbatim\r\n".to_vec(),
+        );
+        files.push(sidecar.clone());
         let (_, xml) = files
             .iter_mut()
             .find(|(name, _)| name == "Core.designspace")
             .unwrap();
+        *xml = std::str::from_utf8(xml)
+            .unwrap()
+            .replace("filename=\"Core-", "filename=\"masters/Core-")
+            .into_bytes();
         xml.extend_from_slice(b"<!-- Preserve the designer's note in an unchanged copy. -->\n");
         let mut opened = open_memory_project(None, &files).expect("designspace folder opens");
         assert_eq!(opened.project.document_sources().count(), 2);
@@ -1128,16 +1175,17 @@ mod tests {
         let mut original: Vec<&str> = files
             .iter()
             .map(|(path, _)| path.as_str())
-            .filter(|path| !path.ends_with(".designspace"))
+            .filter(|path| path.starts_with("masters/"))
             .collect();
         original.sort_unstable();
         assert_eq!(
             written, original,
-            "the saved file set matches the opened one"
+            "an in-place save writes only managed sources"
         );
 
         let copy = memory_save_as_files(&opened.project, &opened.bookkeeping).unwrap();
         assert_eq!(descriptor(&copy.files), descriptor(&files));
+        assert!(copy.files.contains(&sidecar));
         let reopened = open_memory_project(None, &copy.files).expect("the copied family reopens");
         assert_eq!(
             reopened.project.document_designspace(),
