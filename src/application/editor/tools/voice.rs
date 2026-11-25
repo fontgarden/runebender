@@ -337,8 +337,7 @@ impl Workspace {
         let Some(job) = self.voice.job.clone() else {
             return;
         };
-        let events = std::mem::take(&mut *job.events.lock().unwrap_or_else(|e| e.into_inner()));
-        for event in events {
+        let finished = job.drain_events(|event| {
             match event.get("event").and_then(serde_json::Value::as_str) {
                 Some("started") => {
                     if let Some(capture) = &mut self.voice.capture {
@@ -366,7 +365,7 @@ impl Workspace {
                     // "(audience mumbling)" or "[BLANK_AUDIO]".
                     if text.is_empty() || is_placeholder(text) {
                         self.note = "Nothing heard".into();
-                        continue;
+                        return;
                     }
                     eprintln!("voice heard: {text}");
                     if !self.chat.prompt.is_empty() && !self.chat.prompt.ends_with(' ') {
@@ -376,12 +375,7 @@ impl Workspace {
                 }
                 _ => {}
             }
-        }
-        let finished = job
-            .finished
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take();
+        });
         if let Some(result) = finished {
             self.voice.job = None;
             if let Err(error) = result {

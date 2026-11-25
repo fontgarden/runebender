@@ -74,6 +74,33 @@ pub(crate) struct ChatJob {
     pub(crate) finished: Arc<Mutex<Option<Result<(), String>>>>,
 }
 
+impl ChatJob {
+    /// Dispatch queued events before retiring the worker that produced them.
+    pub(super) fn drain_events(
+        &self,
+        mut dispatch: impl FnMut(&Value),
+    ) -> Option<Result<(), String>> {
+        // The producer publishes completion after enqueuing its last event. Reading completion
+        // first guarantees that a terminal drain includes every event. A worker that finishes
+        // during dispatch stays active for the next drain.
+        let finished = self
+            .finished
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        let events = std::mem::take(
+            &mut *self
+                .events
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+        );
+        for event in events {
+            dispatch(&event);
+        }
+        finished
+    }
+}
+
 /// What a chat failure means for the person using the panel, in one
 /// sentence with what to do next, or `None` when the original message is
 /// already plain. The original stays under it, for a bug report.
@@ -487,18 +514,11 @@ impl Workspace {
             ));
             return;
         }
-        let events =
-            std::mem::take(&mut *job.events.lock().unwrap_or_else(|error| error.into_inner()));
-        if !job.cancellation.is_cancelled() {
-            for event in events {
-                self.chat_event(&event);
+        let finished = job.drain_events(|event| {
+            if !job.cancellation.is_cancelled() {
+                self.chat_event(event);
             }
-        }
-        let finished = job
-            .finished
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .take();
+        });
         if let Some(result) = finished {
             self.chat.busy = None;
             self.chat.job = None;
@@ -1016,6 +1036,42 @@ mod tests {
             )
         );
         assert_eq!(plain_error("no glyph named zero"), None);
+    }
+
+    #[test]
+    fn completion_during_dispatch_keeps_the_job_for_its_final_event() {
+        // Complete the worker precisely while its earlier event is being displayed.
+        for result in [
+            Ok(()),
+            Err("worker failed".to_owned()),
+            Err("cancelled".to_owned()),
+        ] {
+            let job = ChatJob::default();
+            job.events.lock().unwrap().push(Value::from("streaming"));
+            let during_dispatch = std::sync::Barrier::new(2);
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    during_dispatch.wait();
+                    job.events.lock().unwrap().push(Value::from("final"));
+                    *job.finished.lock().unwrap() = Some(result.clone());
+                    during_dispatch.wait();
+                });
+                let first = job.drain_events(|event| {
+                    assert_eq!(event, "streaming");
+                    during_dispatch.wait();
+                    during_dispatch.wait();
+                });
+                assert_eq!(first, None);
+            });
+            let mut final_events = Vec::new();
+            let terminal = job.drain_events(|event| final_events.push(event.clone()));
+            assert_eq!(terminal, Some(result));
+            assert_eq!(final_events, [Value::from("final")]);
+            assert_eq!(
+                job.drain_events(|_| panic!("event already delivered")),
+                None
+            );
+        }
     }
 
     #[test]

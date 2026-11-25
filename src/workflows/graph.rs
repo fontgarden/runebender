@@ -1087,17 +1087,22 @@ impl NodeGraph {
             .copied()
             .find(|id| left.contains(id))
             .unwrap_or_default();
+        // A remaining node can be downstream of a cycle. Follow its remaining inputs:
+        // every blocked node has one, even a sink with no outputs of its own.
         let mut path = vec![start];
         let mut at = start;
         loop {
-            let next = out
-                .get(&at)
-                .and_then(|ns| ns.iter().copied().find(|n| left.contains(n)));
+            let next = self
+                .links
+                .iter()
+                .find(|link| link.to() == at && left.contains(&link.from()))
+                .map(|link| link.from());
             let Some(next) = next else {
                 break;
             };
             if let Some(i) = path.iter().position(|&p| p == next) {
                 path.drain(..i);
+                path.reverse();
                 break;
             }
             path.push(next);

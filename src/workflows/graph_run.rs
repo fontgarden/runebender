@@ -799,6 +799,29 @@ pub fn installed(first: Option<&Path>, adapters: bool) -> Vec<(String, PathBuf)>
 /// Runs the graph. Validate first; this assumes the graph is sound
 /// and reports a problem it meets as a failed node.
 pub fn run(graph: &NodeGraph, registry: &Registry, ctx: &mut RunContext<'_>) -> RunReport {
+    let order = match graph.order() {
+        Ok(order) => order,
+        Err(cycle) => {
+            let error = crate::workflows::graph::Problem::Cycle {
+                nodes: cycle.clone(),
+            }
+            .to_string();
+            let nodes = cycle
+                .into_iter()
+                .filter_map(|id| graph.node(id))
+                .map(|node| {
+                    (ctx.on_event)(Event::End {
+                        id: node.id,
+                        status: Status::Failed,
+                        seconds: 0.0,
+                        error: Some(error.clone()),
+                    });
+                    failed(node.id, &node.type_name, &error, 0.0)
+                })
+                .collect();
+            return RunReport { ok: false, nodes };
+        }
+    };
     let mut cache: Cache = ctx
         .cache
         .as_ref()
@@ -808,7 +831,6 @@ pub fn run(graph: &NodeGraph, registry: &Registry, ctx: &mut RunContext<'_>) -> 
     if cache.version != 2 {
         cache = Cache::default();
     }
-    let order = graph.order().unwrap_or_default();
     let total = order.len();
     // Cache files survive rebuilds. Hash the running implementation once
     // so a rebuilt command cannot reuse results from old core behavior.
@@ -1978,7 +2000,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     fn fixture_context<'a>(
         scratch: &'a Scratch,
         binary: PathBuf,
@@ -1998,6 +2019,43 @@ mod tests {
             process_limits: ProcessLimits::default(),
             on_event,
         }
+    }
+
+    #[test]
+    fn public_runner_reports_the_cycle_without_running_nodes_or_writing_cache() {
+        let scratch = Scratch::new();
+        let cache = scratch.0.join("cache.json");
+        let mut graph = NodeGraph::default();
+        let downstream = graph.add("core.layer", [0.0, 0.0]);
+        let a = graph.add("core.layer", [0.0, 0.0]);
+        let b = graph.add("core.layer", [0.0, 0.0]);
+        graph.connect(a, "layer", downstream, "source");
+        graph.connect(a, "layer", b, "source");
+        graph.connect(b, "layer", a, "source");
+        let mut events = Vec::new();
+        let mut on_event = |event| events.push(event);
+        let mut ctx = fixture_context(&scratch, PathBuf::new(), Some(cache.clone()), &mut on_event);
+        let report = run(&graph, &Registry::core(), &mut ctx);
+        assert!(!report.ok);
+        let mut ids: Vec<_> = report.nodes.iter().map(|result| result.id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, [a, b]);
+        assert!(
+            report
+                .nodes
+                .iter()
+                .all(|result| result.status == Status::Failed
+                    && result.report["error"].as_str().unwrap().contains("cycle:"))
+        );
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|event| matches!(
+            event,
+            Event::End {
+                status: Status::Failed,
+                ..
+            }
+        )));
+        assert!(!cache.exists());
     }
 
     #[cfg(unix)]
