@@ -3,13 +3,14 @@
 
 //! Disposable glyph-local HOI samples and directly evaluated static compiler snapshots.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use babelfont::LayerType;
 use fontdrasil::coords::{DesignCoord, DesignLocation};
 
 use super::{CompiledFont, metadata};
 use crate::font::hoi::curvature_bound;
+use crate::font::model::kerning::group_fallback;
 use crate::font::project::Project;
 use crate::font::var_model::{Location, VariationModel, normalize_value};
 use crate::font::variable::GlyphLayerAddress;
@@ -189,8 +190,10 @@ impl Project {
 
     /// Build a single-master snapshot using the exact shared evaluator at a normalized location.
     ///
-    /// Metrics and kerning interpolate with the full sources. This first API keeps default
-    /// naming and rejects Designspace rules and cross-axis mappings rather than dropping them.
+    /// Metrics interpolate across the full sources.
+    /// Kerning uses the default source and each other full source that supplies kerning.
+    /// Static snapshots keep default-source naming and reject Designspace rules
+    /// and cross-axis mappings.
     /// It does not use the variable-font sampler.
     pub fn static_babelfont_snapshot(
         &self,
@@ -270,23 +273,7 @@ impl Project {
                 model.interpolate(&values, location)?[0],
             )?;
         }
-        let pairs: BTreeSet<_> = font
-            .masters
-            .iter()
-            .flat_map(|source| source.kerning.keys().cloned())
-            .collect();
-        master.kerning.clear();
-        for pair in pairs {
-            let values = font
-                .masters
-                .iter()
-                .map(|source| vec![f64::from(source.kerning.get(&pair).copied().unwrap_or(0))])
-                .collect::<Vec<_>>();
-            master.kerning.insert(
-                pair,
-                metadata::kerning(model.interpolate(&values, location)?[0])?,
-            );
-        }
+        interpolate_static_kerning(&font, &locations, default, location, &mut master)?;
         master.location = DesignLocation::default();
         for glyph in font.glyphs.0.iter_mut().filter(|glyph| glyph.exported) {
             let mut layer = self.evaluated_backend_layer(&glyph.name, location)?;
@@ -304,4 +291,60 @@ impl Project {
     pub fn compile_static(&self, location: &Location) -> Result<CompiledFont, String> {
         CompiledFont::build(self.static_babelfont_snapshot(location)?)
     }
+}
+
+fn interpolate_static_kerning(
+    font: &babelfont::Font,
+    locations: &[Location],
+    default: usize,
+    location: &Location,
+    instance: &mut babelfont::Master,
+) -> Result<(), String> {
+    instance.kerning.clear();
+    let pairs: BTreeSet<_> = font
+        .masters
+        .iter()
+        .flat_map(|master| master.kerning.keys())
+        .collect();
+    if pairs.is_empty() {
+        return Ok(());
+    }
+    // The variable compiler includes the default and masters that supply any kerning.
+    let mut sources = Vec::new();
+    let mut kern_locations = Vec::new();
+    for (index, (source, at)) in font.masters.iter().zip(locations).enumerate() {
+        if index == default || !source.kerning.is_empty() {
+            sources.push(source);
+            kern_locations.push(at.clone());
+        }
+    }
+    let weights = VariationModel::new(&kern_locations)?.weights(location)?;
+    let [first, second] = [&font.first_kern_groups, &font.second_kern_groups].map(|groups| {
+        let mut memberships = HashMap::new();
+        for (group, members) in groups {
+            let key = babelfont::SmolStr::from(format!("@{group}"));
+            for member in members {
+                memberships.insert(member.as_str(), key.clone());
+            }
+        }
+        memberships
+    });
+    for pair in pairs {
+        let (left, right) = pair;
+        let left_group = first.get(left.as_str()).map(babelfont::SmolStr::as_str);
+        let right_group = second.get(right.as_str()).map(babelfont::SmolStr::as_str);
+        let mut adjustment = 0.0;
+        for (source, weight) in sources.iter().zip(&weights) {
+            let value = source.kerning.get(pair).copied().or_else(|| {
+                group_fallback(left, right, left_group, right_group, |left, right| {
+                    source.kerning.get(&(left.into(), right.into())).copied()
+                })
+            });
+            adjustment += weight * f64::from(value.unwrap_or(0));
+        }
+        instance
+            .kerning
+            .insert(pair.clone(), metadata::kerning(adjustment)?);
+    }
+    Ok(())
 }

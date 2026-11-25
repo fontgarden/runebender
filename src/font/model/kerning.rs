@@ -9,6 +9,21 @@
 
 use std::collections::HashMap;
 
+/// Resolve a missing exact pair against its group memberships, including single-sided exceptions.
+/// A participant that is already a group has no enclosing group on that side.
+pub(crate) fn group_fallback<T>(
+    left: &str,
+    right: &str,
+    left_group: Option<&str>,
+    right_group: Option<&str>,
+    get: impl Fn(&str, &str) -> Option<T>,
+) -> Option<T> {
+    right_group
+        .and_then(|group| get(left, group))
+        .or_else(|| get(left_group?, right))
+        .or_else(|| get(left_group?, right_group?))
+}
+
 /// Look up the kerning value between two glyphs.
 ///
 /// Lookup follows the UFO spec precedence: the direct glyph pair

@@ -581,35 +581,28 @@ impl MasterKerning {
     /// The value of a pair of glyph or group names: the pair itself, then the groups of its
     /// glyphs, then zero, as fontc resolves a pair that one master does not define.
     fn value(&self, left: &str, right: &str) -> f64 {
+        fn group<'a>(side: &str, memberships: &'a HashMap<String, String>) -> Option<&'a str> {
+            if side.starts_with("public.kern") {
+                return None;
+            }
+            memberships.get(side).map(String::as_str)
+        }
         let get = |left: &str, right: &str| {
             self.pairs
                 .get(&(left.to_owned(), right.to_owned()))
                 .copied()
         };
-        if let Some(value) = get(left, right) {
-            return value;
-        }
-        let is_group = |side: &str| side.starts_with("public.kern");
-        let first_group = if is_group(left) {
-            Some(left)
-        } else {
-            self.first.get(left).map(String::as_str)
-        };
-        let second_group = if is_group(right) {
-            Some(right)
-        } else {
-            self.second.get(right).map(String::as_str)
-        };
-        let first_glyph = (!is_group(left)).then_some(left);
-        let second_glyph = (!is_group(right)).then_some(right);
-        [
-            (first_glyph, second_group),
-            (first_group, second_glyph),
-            (first_group, second_group),
-        ]
-        .into_iter()
-        .find_map(|(left, right)| get(left?, right?))
-        .unwrap_or(0.0)
+        get(left, right)
+            .or_else(|| {
+                crate::font::model::kerning::group_fallback(
+                    left,
+                    right,
+                    group(left, &self.first),
+                    group(right, &self.second),
+                    get,
+                )
+            })
+            .unwrap_or(0.0)
     }
 }
 

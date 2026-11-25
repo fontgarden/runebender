@@ -745,6 +745,115 @@ fn static_snapshot_interpolates_advances_anchors_metrics_and_kerning() {
 }
 
 #[test]
+fn static_kerning_exceptions_match_variable_shaping() {
+    use crate::font::canonical_metadata::{KerningParticipant, KerningSide};
+
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/core/Core.designspace");
+    let mut project = Project::load(&source).unwrap();
+    let sources: Vec<_> = project
+        .document_sources()
+        .map(|source| source.id())
+        .collect();
+    let first = KerningParticipant::group(KerningSide::First, "A").unwrap();
+    let second = KerningParticipant::group(KerningSide::Second, "V").unwrap();
+    let glyph = |name: &str| KerningParticipant::glyph(name).unwrap();
+    for (index, source) in sources.into_iter().enumerate() {
+        project
+            .edit_document_source_metadata(source, |draft| {
+                let mut metadata = draft.font_metadata().clone();
+                metadata
+                    .set_group("public.kern1.A", ["A", "B", "H"].map(str::to_owned).into())
+                    .unwrap();
+                metadata
+                    .set_group("public.kern2.V", ["V", "O"].map(str::to_owned).into())
+                    .unwrap();
+                metadata
+                    .set_kerning_pair(first.clone(), second.clone(), Some(-80.0))
+                    .unwrap();
+                let exceptions = if index == 0 {
+                    vec![
+                        (glyph("A"), glyph("V"), -120.0),
+                        (glyph("B"), glyph("V"), 0.0),
+                        (glyph("H"), glyph("O"), -160.0),
+                    ]
+                } else {
+                    vec![
+                        (glyph("H"), second.clone(), -60.0),
+                        (first.clone(), glyph("O"), -40.0),
+                    ]
+                };
+                for (left, right, value) in exceptions {
+                    metadata.set_kerning_pair(left, right, Some(value)).unwrap();
+                }
+                draft.set_font_metadata(metadata);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    assert_compiled_kerning(
+        &project,
+        &[
+            ("AV", [-120., -100., -80.]),
+            ("BV", [0., -40., -80.]),
+            ("HO", [-160., -110., -60.]),
+            ("HV", [-80., -70., -60.]),
+            ("AO", [-80., -60., -40.]),
+        ],
+    );
+}
+
+#[test]
+fn static_kerning_keeps_an_empty_default_and_skips_empty_nondefault_masters() {
+    let core = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/core");
+    for (empty, expected) in [("Regular", [0., -32., -64.]), ("Bold", [-64.; 3])] {
+        let mut input = files(&core);
+        input
+            .remove(&format!("Core-{empty}.ufo/kerning.plist"))
+            .unwrap();
+        assert_compiled_kerning(&open(&input).project, &[("AV", expected)]);
+    }
+}
+
+fn assert_compiled_kerning(project: &Project, pairs: &[(&str, [f64; 3])]) {
+    use crate::text::shape::ShapingFont;
+
+    fn adjustment(shaper: &ShapingFont, pair: &str) -> f64 {
+        let advance = |kern| {
+            shaper
+                .shape_with_features(pair, false, &[("kern".into(), kern)])
+                .unwrap()
+                .iter()
+                .map(|glyph| glyph.x_advance)
+                .sum::<f64>()
+        };
+        advance(true) - advance(false)
+    }
+
+    let variable = project.compile().unwrap();
+    for (index, weight) in [0.0, 0.5, 1.0].into_iter().enumerate() {
+        let variable = ShapingFont::from_bytes((*variable.bytes).clone())
+            .unwrap()
+            .at_normalized(vec![weight]);
+        let instance = project.compile_static(&location(weight)).unwrap();
+        let instance = ShapingFont::from_bytes((*instance.bytes).clone()).unwrap();
+        for (pair, expected) in pairs {
+            assert_eq!(
+                adjustment(&variable, pair),
+                expected[index],
+                "variable {pair} at {weight}"
+            );
+            assert_eq!(
+                adjustment(&instance, pair),
+                expected[index],
+                "static {pair} at {weight}"
+            );
+        }
+    }
+}
+
+#[test]
 fn overflowing_curvature_never_becomes_a_silent_linear_export() {
     let mut memory = fixture();
     let mut curve = bent(&memory.project, "box", 1, 2, 0);
