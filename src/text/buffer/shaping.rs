@@ -125,108 +125,61 @@ impl TextBuffer {
         for line in 0..self.line_count() {
             let (line_start, line_end) = self.line_range_for_number(line);
 
-            // Shape run by run, the way the text is laid out: a run's
-            // direction comes from its bidi level, not from the line
-            // around it, and a run is one script so the shaper can pick
-            // the right rules for it.
             for bidi_run in self.visual_runs_for_line(line_start, line_end).iter() {
-                let chars: Vec<(char, usize)> = bidi_run
+                // A glyph inserted by name must break shaping on either side: dropping it
+                // from the input would let its neighbors join or form a ligature across it.
+                for sorts in bidi_run
                     .sorts
-                    .iter()
-                    .filter_map(|&index| Some((self.sort_codepoint(index)?, index)))
-                    .collect();
-                let run_rtl = bidi_run.rtl;
-
-                let mut run_start = 0;
-                while run_start < chars.len() {
-                    let arabic = joining::is_arabic(chars[run_start].0);
-                    let mut run_end = run_start;
-                    while run_end < chars.len() && joining::is_arabic(chars[run_end].0) == arabic {
-                        run_end += 1;
+                    .split(|&index| self.sort_codepoint(index).is_none())
+                {
+                    if sorts.is_empty() {
+                        continue;
                     }
-
                     let mut text = String::new();
-                    let mut sort_for_offset: Vec<usize> = Vec::new();
-                    for &(char, index) in &chars[run_start..run_end] {
-                        for _ in 0..char.len_utf8() {
-                            sort_for_offset.push(index);
-                        }
-                        text.push(char);
+                    let mut sort_for_offset = Vec::new();
+                    for &index in sorts {
+                        let character = self.sort_codepoint(index).expect("a run of encoded sorts");
+                        sort_for_offset.extend(std::iter::repeat_n(index, character.len_utf8()));
+                        text.push(character);
+                        absorbed[index] = true;
                     }
-
-                    // An Arabic run is shaped as Arabic in both directions: the digits of a
-                    // left-to-right run inside an Arabic line belong to the Arabic script,
-                    // where fontc puts their kerning, as a text engine itemizes them.
-                    let script = self.script_override.as_deref().or(arabic.then_some("arab"));
                     let Ok(shaped) = font.shape_with_options(
                         &text,
-                        run_rtl,
+                        bidi_run.rtl,
                         &self.feature_overrides,
-                        script,
+                        self.script_override.as_deref(),
                         self.language_override.as_deref(),
                     ) else {
                         self.shaped.0.clear();
                         return None;
                     };
-
-                    // Clusters are byte offsets into the run. A ligature
-                    // reports the offset of its first character and stands
-                    // for every character up to the next cluster.
-                    // A multiple substitution, such as a `ccmp` decomposition, gives one
-                    // cluster several glyphs; the sort keeps them all, in the shaper's order.
-                    let mut covered = vec![false; sort_for_offset.len()];
-                    let mut run_clusters: Vec<(usize, Vec<ClusterGlyph>)> = Vec::new();
-                    for glyph in &shaped {
-                        let Some(&sort_index) = sort_for_offset.get(glyph.cluster as usize) else {
-                            continue;
-                        };
-                        let Some(name) = font.glyph_name(glyph.glyph_id) else {
-                            continue;
-                        };
-                        // Positioning: a mark sits on its base's anchor
-                        // by an offset from the pen, which layout adds.
-                        let glyph = ClusterGlyph {
-                            name: name.to_string(),
-                            advance: glyph.x_advance,
-                            x_offset: glyph.x_offset,
-                            y_offset: glyph.y_offset,
-                        };
-                        match run_clusters
-                            .iter_mut()
-                            .find(|(index, _)| *index == sort_index)
-                        {
-                            Some((_, glyphs)) => glyphs.push(glyph),
-                            None => run_clusters.push((sort_index, vec![glyph])),
-                        }
-                        for (offset, covered) in covered.iter_mut().enumerate() {
-                            if sort_for_offset[offset] == sort_index {
-                                *covered = true;
-                            }
-                        }
+                    // Monotone cluster values keep all outputs of a multiple substitution
+                    // together. A sort with no output is absorbed into another cluster.
+                    for group in shaped.chunk_by(|a, b| a.cluster == b.cluster) {
+                        let index = sort_for_offset[group[0].cluster as usize];
+                        let glyphs: Vec<_> = group
+                            .iter()
+                            .map(|glyph| ClusterGlyph {
+                                name: font
+                                    .glyph_name(glyph.glyph_id)
+                                    .unwrap_or(".notdef")
+                                    .to_owned(),
+                                advance: glyph.x_advance,
+                                x_offset: glyph.x_offset,
+                                y_offset: glyph.y_offset,
+                            })
+                            .collect();
+                        let own = if bidi_run.rtl { glyphs.len() - 1 } else { 0 };
+                        updates.push((index, glyphs[own].name.clone(), glyphs[own].advance));
+                        clusters.insert(index, ShapedCluster { glyphs, own });
+                        absorbed[index] = false;
                     }
-                    for (sort_index, glyphs) in run_clusters {
-                        // The sort's own glyph is the first in logical order. The shaper's
-                        // output is in visual order, so in a right-to-left run that is the
-                        // last glyph of the cluster.
-                        let own = if run_rtl { glyphs.len() - 1 } else { 0 };
-                        updates.push((sort_index, glyphs[own].name.clone(), glyphs[own].advance));
-                        clusters.insert(sort_index, ShapedCluster { glyphs, own });
-                    }
-
-                    let mut seen_sort: Option<usize> = None;
-                    for (offset, &sort_index) in sort_for_offset.iter().enumerate() {
-                        if seen_sort == Some(sort_index) {
-                            continue;
-                        }
-                        seen_sort = Some(sort_index);
-                        if !covered[offset] {
-                            absorbed[sort_index] = true;
-                            updates.push((sort_index, String::new(), 0.0));
-                        }
-                    }
-
-                    run_start = run_end;
                 }
+            }
+        }
+        for (index, &is_absorbed) in absorbed.iter().enumerate() {
+            if is_absorbed {
+                updates.push((index, String::new(), 0.0));
             }
         }
 

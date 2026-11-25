@@ -14,6 +14,7 @@ pub mod generated;
 pub mod joining;
 mod joining_data;
 pub mod kern_direction;
+pub mod layout_options;
 pub mod layout_tables;
 pub mod layout_variation;
 pub mod proof_samples;

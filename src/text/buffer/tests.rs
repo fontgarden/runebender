@@ -2317,6 +2317,88 @@ fn active_visual_kern_uses_logical_pair_for_the_neighbor_on_the_left_in_arabic()
     );
 }
 
+#[test]
+fn script_specific_substitutions_and_offsets_follow_each_script_in_visual_order() {
+    let font = norad::Font::load(crate::testing::fonts::regular_ufo()).unwrap();
+    let mut inventory = TextGlyphInventory::from_font(&font);
+    // Reuse the fixture outlines. Only the codepoints and script-specific lookups matter.
+    for (character, glyph) in [('א', "A"), ('ب', "B"), ('β', "B")] {
+        inventory.unicode.insert(u32::from(character), glyph.into());
+    }
+    inventory.features = "
+        languagesystem latn dflt; languagesystem grek dflt;
+        languagesystem hebr dflt; languagesystem arab dflt;
+        feature locl {
+            script latn; sub A by T;
+            script grek; sub B by O;
+            script hebr; sub A by H;
+            script arab; sub B by V;
+        } locl;
+        feature kern {
+            script grek; pos O <-21 23 -10 0>;
+            script hebr; pos H <31 17 60 0>;
+        } kern;"
+        .into();
+    let mut buffer = TextBuffer::new();
+    buffer.set_glyph_inventory(inventory);
+    let font = buffer.shaping_font().unwrap();
+    let rows = |text: &str, rtl, script| {
+        font.shape_with_options(text, rtl, &[], script, None)
+            .unwrap()
+            .into_iter()
+            .map(|g| {
+                (
+                    font.glyph_name(g.glyph_id).unwrap(),
+                    g.cluster,
+                    g.x_offset,
+                    g.y_offset,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        rows("Aβ", false, None),
+        [("T", 0, 0.0, 0.0), ("O", 1, -21.0, 23.0)]
+    );
+    assert_eq!(
+        rows("אب", true, None),
+        [("V", 2, 0.0, 0.0), ("H", 0, 31.0, 17.0)]
+    );
+    assert_eq!(rows("א", true, Some("latn")), [("T", 0, 0.0, 0.0)]);
+
+    buffer.insert_characters("Aβאب");
+    let layout = buffer.layout(1000.0);
+    assert_eq!(
+        layout
+            .items
+            .iter()
+            .map(|item| (item.index, buffer.item_glyph_name(item)))
+            .collect::<Vec<_>>(),
+        [
+            (0, Some("T")),
+            (1, Some("O")),
+            (3, Some("V")),
+            (2, Some("H"))
+        ]
+    );
+    assert_eq!(buffer.shaped_offset(1), (-21.0, 23.0));
+    assert_eq!(buffer.shaped_offset(2), (31.0, 17.0));
+}
+
+#[test]
+fn a_named_glyph_breaks_an_arabic_ligature() {
+    let mut buffer = arabic_fixture_buffer();
+    buffer.insert_characters("لا");
+    assert_eq!(buffer.sort_glyph_name(0), Some("lam_alef-ar"));
+    buffer.set_cursor(1);
+    buffer.insert_glyph("V", None, 600.0);
+    buffer.refresh_shaping();
+    assert_eq!(buffer.sort_glyph_name(0), Some("lam-ar"));
+    assert_eq!(buffer.sort_glyph_name(1), Some("V"));
+    assert_eq!(buffer.sort_glyph_name(2), Some("alef-ar"));
+    assert_eq!(buffer.layout(1000.0).items.len(), 3);
+}
+
 /// A buffer shaped by the live layout tables of the Regular master of the Arabic fixture.
 fn arabic_fixture_buffer() -> TextBuffer {
     let project = crate::font::project::Project::load(&crate::testing::fonts::arabic_regular_ufo())

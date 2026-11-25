@@ -836,6 +836,22 @@ fn mark_positioning_tracks_live_anchors_in_both_masters() {
             Ok(DocumentEditOutcome::Changed { .. })
         ));
     }
+    // With no declared language systems, fontc puts generated marks under DFLT. Its
+    // generated Latin kerning creates a latn GPOS record, so a Latin run selects that
+    // record and does not inherit DFLT's mark feature.
+    let implicit = project.compile().unwrap();
+    let shaper = ShapingFont::from_bytes((*implicit.bytes).clone()).unwrap();
+    let text = "A\u{301}";
+    assert_eq!(shaper.shape(text, false).unwrap()[1].y_offset, 0.0);
+    let default_script = shaper
+        .shape_with_options(text, false, &[], Some("Zzzz"), None)
+        .unwrap();
+    assert_eq!(default_script[1].y_offset, 700.0);
+
+    let features = project.document_feature_text(SourceId(0)).unwrap();
+    assert!(project.set_feature_text(format!(
+        "languagesystem DFLT dflt; languagesystem latn dflt;\n{features}"
+    )));
     let compiled = project.compile().unwrap();
     for (location, y) in [(0.0, 700.0), (0.5, 800.0), (1.0, 900.0)] {
         let shaping = ShapingFont::from_bytes((*compiled.bytes).clone())

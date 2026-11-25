@@ -17,7 +17,8 @@ use fea_rs::{
     compile::{NopFeatureProvider, NopVariationInfo},
     parse::{SourceLoadError, SourceResolver},
 };
-use harfrust::{Direction, FontRef, ShaperData, UnicodeBuffer, script};
+use harfrust::{Direction, FontRef, ShaperData, UnicodeBuffer};
+use icu_properties::{CodePointMapData, props::Script};
 
 use crate::outline::glyph_paths::round_units;
 use write_fonts::{
@@ -59,7 +60,7 @@ pub struct ShapingSource {
 pub struct ShapedGlyph {
     /// Index into the source's glyph order.
     pub glyph_id: u16,
-    /// Which input character this came from. A ligature reports the
+    /// UTF-8 byte offset in the input. A ligature reports the
     /// cluster of its first character, so several glyphs can share one
     /// cluster and one glyph can stand for several characters.
     pub cluster: u32,
@@ -320,7 +321,7 @@ impl ShapingFont {
     /// Shape with explicit script and language overrides on top of
     /// the feature list. `script` is an ISO 15924 tag ("arab",
     /// "latn"); `language` a BCP 47 tag ("ur", "sd"). Either may be
-    /// `None` to keep the direction-derived default. Language-specific
+    /// `None` to infer the script from Unicode or use the default language. Language-specific
     /// OpenType rules (languagesystem arab URD) only fire when the
     /// language is set here.
     pub fn shape_with_options(
@@ -345,42 +346,12 @@ impl ShapingFont {
         );
         let shaper = data.shaper(&font).instance(Some(&instance)).build();
 
-        let mut buffer = UnicodeBuffer::new();
-        // One cluster per character: a mark keeps its own cluster
-        // instead of merging into its base's, so the buffer can hand
-        // it back to the sort that typed it, with its position. A
-        // ligature still reports its first character's cluster.
-        buffer.set_cluster_level(harfrust::BufferClusterLevel::MonotoneCharacters);
-        buffer.push_str(text);
-        buffer.set_direction(if right_to_left {
-            Direction::RightToLeft
-        } else {
-            Direction::LeftToRight
-        });
-        match script.map(str::trim).filter(|s| s.len() == 4) {
-            Some(tag) => {
-                let mut bytes = [b' '; 4];
-                bytes.copy_from_slice(tag.as_bytes());
-                if let Some(script) =
-                    harfrust::Script::from_iso15924_tag(harfrust::Tag::new(&bytes))
-                {
-                    buffer.set_script(script);
-                }
-            }
-            None => {
-                if right_to_left {
-                    buffer.set_script(script::ARABIC);
-                }
-            }
-        }
-        if let Some(lang) = language
+        let ranges = script_runs(text, right_to_left, script);
+        let script = script
             .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .and_then(|l| l.parse::<harfrust::Language>().ok())
-        {
-            buffer.set_language(lang);
-        }
-
+            .filter(|tag| tag.len() == 4 && tag.is_ascii())
+            .and_then(|tag| tag.parse::<harfrust::Script>().ok());
+        let language = language.and_then(|tag| tag.trim().parse::<harfrust::Language>().ok());
         let overrides: Vec<harfrust::Feature> = features
             .iter()
             .filter(|(tag, _)| tag.len() == 4 && tag.is_ascii())
@@ -391,26 +362,85 @@ impl ShapingFont {
             })
             .collect();
 
-        let shaped = shaper.shape(buffer, &overrides);
-        let infos = shaped.glyph_infos();
-        let positions = shaped.glyph_positions();
-        Ok(infos
-            .iter()
-            .zip(positions.iter())
-            .map(|(info, pos)| ShapedGlyph {
-                glyph_id: u16::try_from(info.glyph_id).unwrap_or(0),
-                cluster: info.cluster,
-                x_advance: pos.x_advance as f64,
-                x_offset: pos.x_offset as f64,
-                y_offset: pos.y_offset as f64,
-            })
-            .collect())
+        // A bidi run can contain several scripts reading in the same direction.
+        // The API returns the glyphs in visual order, with clusters in the original text.
+        u32::try_from(text.len()).map_err(|_| "text exceeds the shaper's cluster range")?;
+        let mut glyphs = Vec::new();
+        let mut buffer = UnicodeBuffer::new();
+        for range in ranges {
+            let offset = u32::try_from(range.start).expect("a range starts within the text");
+            buffer.set_cluster_level(harfrust::BufferClusterLevel::MonotoneCharacters);
+            buffer.push_str(&text[range]);
+            buffer.set_direction(if right_to_left {
+                Direction::RightToLeft
+            } else {
+                Direction::LeftToRight
+            });
+            if let Some(script) = script {
+                buffer.set_script(script);
+            }
+            buffer.guess_segment_properties();
+            if let Some(lang) = &language {
+                buffer.set_language(lang.clone());
+            }
+            let shaped = shaper.shape(buffer, &overrides);
+            glyphs.extend(
+                shaped
+                    .glyph_infos()
+                    .iter()
+                    .zip(shaped.glyph_positions())
+                    .map(|(info, pos)| ShapedGlyph {
+                        glyph_id: u16::try_from(info.glyph_id).unwrap_or(0),
+                        cluster: offset + info.cluster,
+                        x_advance: pos.x_advance as f64,
+                        x_offset: pos.x_offset as f64,
+                        y_offset: pos.y_offset as f64,
+                    }),
+            );
+            buffer = shaped.clear();
+        }
+        Ok(glyphs)
     }
 
     /// Glyph name for a shaped glyph id.
     pub fn glyph_name(&self, glyph_id: u16) -> Option<&str> {
         self.names.get(glyph_id as usize).map(String::as_str)
     }
+}
+
+/// The UTF-8 ranges of the script runs within one directional span, in visual order.
+///
+/// Common and inherited characters stay with the preceding script, or with the following
+/// script at the beginning of the run. In particular, a combining mark stays with its base.
+/// A four-byte script override assigns the entire span to that script.
+pub fn script_runs(
+    text: &str,
+    right_to_left: bool,
+    script: Option<&str>,
+) -> Vec<std::ops::Range<usize>> {
+    if script.is_some_and(|tag| tag.trim().len() == 4 && tag.trim().is_ascii()) {
+        return std::iter::once(0..text.len()).collect();
+    }
+    let scripts = CodePointMapData::<Script>::new();
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    let mut active = None;
+    for (offset, character) in text.char_indices() {
+        let script = scripts.get(character);
+        if matches!(script, Script::Common | Script::Inherited | Script::Unknown) {
+            continue;
+        }
+        if active.is_some_and(|previous| previous != script) {
+            ranges.push(start..offset);
+            start = offset;
+        }
+        active = Some(script);
+    }
+    ranges.push(start..text.len());
+    if right_to_left {
+        ranges.reverse();
+    }
+    ranges
 }
 
 /// The host function that receives text shaping failures.

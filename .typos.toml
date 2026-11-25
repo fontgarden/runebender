@@ -19,6 +19,10 @@ extend-exclude = [
     "**/*.svg",
 ]
 
+[default]
+# HarfBuzz names its OpenType shaper "ot".
+extend-ignore-re = ['--shapers=ot']
+
 [default.extend-identifiers]
 # OpenType axis/table tags are fixed external identifiers, not English spellings.
 ital = "ital"
@@ -28,6 +32,9 @@ wght = "wght"
 cmap = "cmap"
 glyf = "glyf"
 hmtx = "hmtx"
+# Bengali and Vai shaping script tags.
+beng = "beng"
+vai = "vai"
 # External schemas, Unicode categories, French fixture text, and a recorded commit identity.
 custom_ot_values = "custom_ot_values"
 # The OpenType rounding trait and method of write-fonts.
