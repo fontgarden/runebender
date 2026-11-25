@@ -158,6 +158,68 @@ fn a_font_that_does_not_compile_is_a_failure() {
 }
 
 #[test]
+fn project_owned_proofs_check_the_compiled_font() {
+    let (dir, _) = scratch_ufo();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    for (family, source) in [
+        ("arabic", "Arabic-Regular.ufo"),
+        ("core", "Core.designspace"),
+    ] {
+        let folder = fixtures.join(family);
+        let source = folder.join(source);
+        let manifest = folder.join("proofs.json");
+        let images = dir.path().join(family);
+        let (code, report) = run(&[
+            "check-proof",
+            source.to_str().unwrap(),
+            manifest.to_str().unwrap(),
+            "--images",
+            images.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "{report}");
+        assert_eq!(report["ok"], true, "{report}");
+        assert!(images.join("1.png").is_file());
+    }
+
+    let source = fixtures.join("core/Core.designspace");
+    let manifest = dir.path().join("changed.json");
+    let mut cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/core/proofs.json")).unwrap();
+    cases[0]["expected"][0][2] = 123.into();
+    std::fs::write(&manifest, cases.to_string()).unwrap();
+    let check = || {
+        run(&[
+            "check-proof",
+            source.to_str().unwrap(),
+            manifest.to_str().unwrap(),
+        ])
+    };
+    let (code, report) = check();
+    assert_eq!(code, 4, "{report}");
+    assert_eq!(report["cases"][0]["ok"], false);
+    assert_eq!(report["cases"][1]["ok"], true);
+    cases[0]["location"] = serde_json::json!({"oops": 550});
+    std::fs::write(&manifest, cases.to_string()).unwrap();
+    assert_eq!(check().0, 2, "a misspelled axis must not test the default");
+
+    let mut arabic: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/arabic/proofs.json")).unwrap();
+    let reference = dir.path().join("different.png");
+    let image = image::RgbaImage::new(224, 192);
+    image.save(&reference).unwrap();
+    arabic[0]["reference_png"] = "different.png".into();
+    std::fs::write(&manifest, arabic.to_string()).unwrap();
+    let (code, report) = run(&[
+        "check-proof",
+        fixtures.join("arabic/Arabic-Regular.ufo").to_str().unwrap(),
+        manifest.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 4, "{report}");
+    assert_eq!(report["cases"][0]["pixels_match"], false);
+    assert_eq!(report["cases"][0]["actual"], report["cases"][0]["expected"]);
+}
+
+#[test]
 fn proof_writes_svg_and_metrics() {
     let (dir, ufo) = scratch_ufo();
     let svg = dir.path().join("proof.svg");

@@ -161,6 +161,7 @@ Each directory under `src` has one row.
 | `src/application` | The executable. `src/application/mod.rs` lists the modules. |
 | `src/application/cli` | One file for each group of subcommands: agent tools, font commands, graph commands, the MCP host, the MCP installer and themes. |
 | `src/application/cli/font_commands` | The font subcommands: features, inspection, outlines and proposals. |
+| `src/application/cli/proof_check` | HarfBuzz lookup traces for a named proof case in the compiled font. |
 | `src/application/design` | The design system. Read `src/application/design/mod.rs` first. |
 | `src/application/design/controls` | The pressable control widget and the icon button. |
 | `src/application/design/recipes` | The `Row` vocabulary in `src/application/design/recipes/rows.rs`, the section recipes and the proof page recipes. |

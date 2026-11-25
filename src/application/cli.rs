@@ -19,6 +19,7 @@ mod graph_commands;
 mod mcp;
 mod mcp_install;
 mod output;
+mod proof_check;
 mod theme;
 
 use agent_commands::{AgentAction, agent_command};
@@ -83,6 +84,8 @@ enum Command {
     Info(InfoArgs),
     /// Draw a proof sheet as SVG, with metrics per glyph.
     Proof(ProofArgs),
+    /// Compile a UFO or designspace and check its project-owned shaping proofs.
+    CheckProof(proof_check::Args),
     /// Render SVG path data in font units (y up) with the editor’s Gray thickness palette.
     Thickness {
         /// File containing the shaped outline as SVG path data.
@@ -222,6 +225,7 @@ pub(crate) fn run() -> Startup {
         Command::Sessions => emit(true, sessions()),
         Command::Info(args) => emit(json, info(args)),
         Command::Proof(args) => emit(json, proof(args)),
+        Command::CheckProof(args) => emit(json, proof_check::check(args)),
         Command::Thickness {
             outline,
             reference,

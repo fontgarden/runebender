@@ -489,9 +489,15 @@ Counterpunch features not covered by 6.1-6.9: a place for generated or plug-in `
 7. A drag in an RTL line edits the right-hand (logical previous) pair, as today?
 8. Order of phase 6 items.
 
-## 11. Status on 2026-11-24
+## 11. Status on 2026-11-25
 
 The editing path uses the live layout tables of phases 1 to 3 at every location.
+The text tool now splits each directional run by Unicode script and retains original UTF-8 clusters across scripts.
+Hebrew and Arabic use their own lookup systems, and explicitly inserted unencoded glyphs separate neighboring shaping runs.
+The Shaping inspector reads the script and language systems and the feature tags in the active GSUB and GPOS tables.
+In the Feature menu, Default restores the shaper’s setting and On or Off forces that feature for the editor and its previews.
+The language-system menu shows the original OpenType tags, including separate entries for a script’s default and its named languages.
+The Auto, Arabic and Urdu shortcuts remain available.
 Some checkboxes in section 7 are not updated; this section is the current status.
 
 Done:
@@ -510,12 +516,15 @@ Deferred:
 - 5.1 to 5.4: speed work for large fonts. An anchor drag step takes about 7 ms on Virtua Grotesk.
 - 6.4, 6.5 and 6.6: the canvas drawing, the view options and the toggles of the overlays.
 - 6.9: kashida and tatweel preview.
-- 6.10 and the `harfrust` upgrade from 0.5.2 (0.13.3 first, 0.15 or later for a debugger).
+- 6.10 has a headless lookup trace via `runebender check-proof SOURCE MANIFEST --trace-case NAME` and an installed `hb-shape`.
+  It traces each directional script run in the compiled font, including the before and after glyph buffers, feature settings and variation location.
+  The lookup indices refer to this GSUB or GPOS binary.
+  The graphical debugger, FEA source line mapping and `harfrust` upgrade remain open.
 
 Known problems:
 
 - A component drag does not move the anchors that a composite takes from its components.
-- A right-to-left run in a script other than Arabic is shaped as Arabic.
+- Horizontal caret movement and hit testing can still follow the paragraph direction at a mixed-direction boundary.
 - A pair of glyphs with different directions cannot be dragged.
 - Proposed ligature anchors follow the scaled advances, not the ink.
 - The collision overlay finds dots by area only.

@@ -1,0 +1,16 @@
+[
+  {
+    "name": "Fatha on joining beh",
+    "text": "بَب",
+    "right_to_left": true,
+    "script": "arab",
+    "language": "ar",
+    "reference_png": "beh-fatha.png",
+    "rendering": {"width_px": 224, "height_px": 192, "first_baseline_px": 64, "line_height_px": 120},
+    "expected": [
+      ["beh-ar.fina", 4, 480, 0, 0],
+      ["fatha-ar", 2, 0, 120, 320],
+      ["beh-ar.init", 0, 300, 0, 0]
+    ]
+  }
+]

@@ -110,6 +110,20 @@ impl CompiledProofRendering {
         self == &Self::default()
     }
 
+    /// Lines shaped independently, each with its starting UTF-8 offset in the recipe text.
+    /// Page settings split at newlines; ordinary wrapped proofs use the whole input.
+    pub fn shaping_lines<'a>(
+        &self,
+        text: &'a str,
+    ) -> impl Iterator<Item = (usize, &'a str)> + use<'a> {
+        let limit = if self.lines.is_empty() { 1 } else { usize::MAX };
+        text.splitn(limit, '\n').scan(0, |offset, line| {
+            let start = *offset;
+            *offset += line.len() + 1;
+            Some((start, line))
+        })
+    }
+
     /// Reject settings that could overflow the scene or make the layout unusable.
     pub fn validate(&self) -> Result<(), String> {
         if !(128..=2048).contains(&self.width_px) || !(128..=2048).contains(&self.height_px) {
@@ -657,19 +671,22 @@ impl CompiledProof {
     }
 }
 
-/// Shape and render a bounded PNG using only one immutable compiled snapshot.
-///
-/// This operation is intentionally independent of [`Project`].
-/// Call it off the application thread; the local Designbot renderer receives
-/// only a data-only scene containing outlines already extracted from the bytes.
-pub fn prove(
+/// Shape the text of a compiled proof without extracting outlines or launching a renderer.
+pub fn shape_text(
     snapshot: &CompiledProofSnapshot,
-    recipe: CompiledProofRecipe,
-) -> Result<CompiledProof, String> {
+    recipe: &CompiledProofRecipe,
+) -> Result<Vec<CompiledProofGlyph>, String> {
     recipe.validate()?;
-    if let Some(script) = &recipe.specimen_script {
-        return prove_specimen_script(snapshot, script.clone(), recipe);
+    if recipe.specimen_script.is_some() {
+        return Err("a scripted specimen has no shaped text run".into());
     }
+    shape_runs(snapshot, recipe).map(|(glyphs, _)| glyphs)
+}
+
+fn shape_runs(
+    snapshot: &CompiledProofSnapshot,
+    recipe: &CompiledProofRecipe,
+) -> Result<(Vec<CompiledProofGlyph>, Vec<usize>), String> {
     if recipe.normalized_location.len() != snapshot.font.axis_tags.len() {
         return Err(format!(
             "proof location has {} coordinates, but compiled font has {} axes",
@@ -681,15 +698,10 @@ pub fn prove(
         .map(|font| font.at_normalized(recipe.normalized_location.clone()))?;
     // A page shapes each line on its own; clusters stay offsets into the
     // whole recipe text. `line_ends` holds where each line's glyphs end.
-    let runs: Vec<&str> = if recipe.rendering.lines.is_empty() {
-        vec![recipe.text.as_str()]
-    } else {
-        recipe.text.split('\n').collect()
-    };
     let mut glyphs = Vec::new();
-    let mut line_ends = Vec::with_capacity(runs.len());
-    let mut offset = 0_u32;
-    for run in runs {
+    let mut line_ends = Vec::new();
+    for (offset, run) in recipe.rendering.shaping_lines(&recipe.text) {
+        let offset = u32::try_from(offset).expect("a validated proof fits its cluster type");
         let shaped = shaper.shape_with_options(
             run,
             recipe.right_to_left,
@@ -715,9 +727,24 @@ pub fn prove(
             }
         }));
         line_ends.push(glyphs.len());
-        // The text is at most MAX_TEXT_BYTES, so this cannot overflow.
-        offset += u32::try_from(run.len() + 1).unwrap_or(u32::MAX);
     }
+    Ok((glyphs, line_ends))
+}
+
+/// Shape and render a bounded PNG using only one immutable compiled snapshot.
+///
+/// This operation is intentionally independent of [`Project`].
+/// Call it off the application thread; the local Designbot renderer receives
+/// only a data-only scene containing outlines already extracted from the bytes.
+pub fn prove(
+    snapshot: &CompiledProofSnapshot,
+    recipe: CompiledProofRecipe,
+) -> Result<CompiledProof, String> {
+    recipe.validate()?;
+    if let Some(script) = &recipe.specimen_script {
+        return prove_specimen_script(snapshot, script.clone(), recipe);
+    }
+    let (glyphs, line_ends) = shape_runs(snapshot, &recipe)?;
     let mut target_glyph_index = None;
     if let Some(target) = &recipe.target {
         let mut occurrence = 0_u32;

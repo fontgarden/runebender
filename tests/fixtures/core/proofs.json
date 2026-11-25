@@ -1,0 +1,15 @@
+[
+  {
+    "name": "AV at the midpoint",
+    "text": "AV",
+    "location": {"wght": 550},
+    "expected": [["A", 0, 592, 0, 0], ["V", 1, 656, 0, 0]]
+  },
+  {
+    "name": "AV at the midpoint without kerning",
+    "text": "AV",
+    "location": {"wght": 550},
+    "features": {"kern": false},
+    "expected": [["A", 0, 656, 0, 0], ["V", 1, 656, 0, 0]]
+  }
+]

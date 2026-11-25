@@ -141,6 +141,17 @@ jobs:
           cargo install --locked --git https://github.com/eliheuer/designbot
           --rev d723b6b891c9a9c7e5d79790738134bc2d0ce765
           --bin designbot designbot-cli
+      - name: Compare the exported Arabic word with the project proof
+        if: runner.os == 'Linux'
+        run: >-
+          cargo run --locked -- check-proof tests/fixtures/arabic/Arabic-Regular.ufo
+          tests/fixtures/arabic/proofs.json --images "${{ runner.temp }}/arabic-proof"
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        with:
+          name: compiled-arabic-proof
+          path: ${{ runner.temp }}/arabic-proof
+          if-no-files-found: ignore
       - name: Self-contained engine unit tests without application features
         run: env -u RUNEBENDER_TEST_FONTS cargo test --lib --no-default-features --locked -- --test-threads=1
       - name: Tests including pinned external font fixtures
