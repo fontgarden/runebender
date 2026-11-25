@@ -84,6 +84,8 @@ enum Command {
     Info(InfoArgs),
     /// Draw a proof sheet as SVG, with metrics per glyph.
     Proof(ProofArgs),
+    /// Rank spacing proof strings for one source and optionally write a review sheet.
+    SpacingScan(font_commands::SpacingScanArgs),
     /// Compile a UFO or designspace and check its project-owned shaping proofs.
     CheckProof(proof_check::Args),
     /// Render SVG path data in font units (y up) with the editor’s Gray thickness palette.
@@ -224,6 +226,7 @@ pub(crate) fn run() -> Startup {
         Command::CollapseMetaballs(args) => emit(json, collapse_metaballs(args)),
         Command::Sessions => emit(true, sessions()),
         Command::Info(args) => emit(json, info(args)),
+        Command::SpacingScan(args) => emit(json, font_commands::spacing_scan(args)),
         Command::Proof(args) => emit(json, proof(args)),
         Command::CheckProof(args) => emit(json, proof_check::check(args)),
         Command::Thickness {

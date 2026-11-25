@@ -18,6 +18,67 @@ pub(super) use proposals::{
     proposal_command, proposal_discard, proposal_list, propose,
 };
 
+/// Arguments of `spacing-scan`.
+#[derive(clap::Args)]
+pub(super) struct SpacingScanArgs {
+    /// UFO or designspace to inspect.
+    font: PathBuf,
+    /// Stable source identity, required for a family.
+    #[arg(long)]
+    source: Option<usize>,
+    /// Number of ranked candidates to return.
+    #[arg(long, default_value_t = 20)]
+    limit: usize,
+    /// Number of ranked candidates to skip.
+    #[arg(long, default_value_t = 0)]
+    offset: usize,
+    /// Create this new directory with report.json and proof.svg.
+    #[arg(long)]
+    out: Option<PathBuf>,
+}
+
+pub(super) fn spacing_scan(args: &SpacingScanArgs) -> CommandResult {
+    use runebender::analysis::{spacing, spacing_sheet};
+    use runebender::font::variable::SourceId;
+
+    let project = Project::load(&args.font).map_err(CliError::usage)?;
+    let source = match args.source {
+        Some(id) => SourceId(id),
+        None if project.document_sources().count() == 1 => {
+            project.document_sources().next().expect("one source").id()
+        }
+        None => return Err(CliError::usage("select a family source with --source ID")),
+    };
+    let report =
+        spacing::scan_page(&project, source, args.limit, args.offset).map_err(CliError::usage)?;
+    let display = serde_json::to_string_pretty(&report).map_err(CliError::failed)? + "\n";
+    if let Some(out) = &args.out {
+        let svg = spacing_sheet::render(&project, source, &report).map_err(CliError::failed)?;
+        std::fs::create_dir(out).map_err(CliError::usage)?;
+        let write = |name: &str, contents: &str| -> std::io::Result<()> {
+            use std::io::Write as _;
+            let path = out.join(name);
+            let mut file = std::fs::File::create_new(&path)?;
+            if let Err(error) = file.write_all(contents.as_bytes()) {
+                drop(file);
+                let _ = std::fs::remove_file(path);
+                return Err(error);
+            }
+            Ok(())
+        };
+        let result = write("proof.svg", &svg).and_then(|()| {
+            write("report.json", &display).inspect_err(|_| {
+                let _ = std::fs::remove_file(out.join("proof.svg"));
+            })
+        });
+        if let Err(error) = result {
+            let _ = std::fs::remove_dir(out);
+            return Err(CliError::failed(error));
+        }
+    }
+    Ok(CommandOutput::new(report, display))
+}
+
 /// Arguments of `compile`.
 #[derive(clap::Args)]
 pub(in crate::application::cli) struct CompileArgs {

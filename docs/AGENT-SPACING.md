@@ -43,7 +43,31 @@ Finding a subtle fault without a reference, choosing the right number of font un
   The new workflow needs to shape complete words with all of the proposed spacing edits applied together in a detached copy.
   A checked-in word can guard its exported positions or its rendered appearance on every change. [Proof guide](PROJECT-PROOFS.md)
 
-## What to build
+## Run a spacing scan
+
+Choose a UFO or a master in a designspace and write one page to a fresh directory.
+
+```sh
+runebender spacing-scan tests/fixtures/core/Core.designspace --source 0 --limit 12 --out spacing-page-1
+```
+
+Open `proof.svg` to inspect the unkerned glyphs and give the worker `report.json` for the row IDs and measurements.
+The score is the absolute difference in font units between one sidebearing and its reference.
+Treat the direction and size of any correction as a design decision.
+If the reference itself is poorly spaced, inspect its other contexts before changing the flagged glyphs.
+
+In live MCP, call `spacing_scan` with the same source, limit and offset and set `include_sheet` to true when a worker needs the image.
+Keep the snapshot and the IDs of reviewed rows with the worker's decisions.
+Use `next_offset` to request another page and verify that the snapshot still matches before combining results.
+If it changes, rescan the source before applying old suggestions.
+
+In a trial on Virtua Grotesk Regular, the scanner returned two rows, one for each side of capital I.
+On a disposable copy we translated lowercase h by 80 units and increased its advance by 80 units to preserve its right sidebearing.
+The new left side of h ranked first with a difference of exactly 80 units against n.
+The CLI and the live host produced identical JSON and SVG for the edited copy.
+This trial checks detection of one known error and agreement between the two interfaces.
+
+## Where to take the scanner next
 
 1. **Scan the source once.** Read the project's design context, glyph categories, advances, resolved outlines, kerning groups and writing systems.
    Start with the project's own proof words and a representative corpus for each supported script.
@@ -83,6 +107,5 @@ Compile once per candidate revision and cache sheets by font revision, text, axi
 Report cases covered, faults found, false positives, accepted corrections, remaining rows, elapsed time and model usage.
 Compare against the designer's review of held-out words before increasing the batch size.
 
-The smallest deliverable is a read-only scan shared by the CLI and MCP that returns ranked rows, a proof sheet and a resumable manifest.
-It can use the existing proposal and kerning tools for corrections.
-The whole-font optical scan, sheet planner, guarded group edits and resumable queue described here are proposed work.
+The first implementation supplies bounded pages of Latin bearing comparisons and a vector proof through the CLI and live MCP.
+Project word lists, optical gap scoring, automatic worker dispatch, guarded group edits and a persistent decision ledger are follow-up work.

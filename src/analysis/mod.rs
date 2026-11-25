@@ -13,5 +13,7 @@ pub mod dimensions;
 pub mod glyph;
 pub mod measure;
 pub mod report;
+pub mod spacing;
+pub mod spacing_sheet;
 pub mod thickness;
 pub mod weight_debt;

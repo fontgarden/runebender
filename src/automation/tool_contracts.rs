@@ -194,8 +194,8 @@ fn effects_for(name: &str, surface: ToolSurface) -> Option<ToolEffects> {
         ToolSurface::Live => match name {
             "project_info" | "font_info" | "read_glyph" | "proof" | "proposal_list"
             | "editor_context" | "review_proof" | "glyph_inventory" | "design_context"
-            | "analyze_glyph" | "analyze_font" | "experiment_list" | "read_kerning"
-            | "specimen" | "agent_receipt" | "proof_status" | "graph_discover"
+            | "analyze_glyph" | "analyze_font" | "spacing_scan" | "experiment_list"
+            | "read_kerning" | "specimen" | "agent_receipt" | "proof_status" | "graph_discover"
             | "graph_snapshot" | "graph_status" | "graph_trace_status" | "graph_image"
             | "editor_sessions" => ToolEffects::read(),
             "editor_connect"

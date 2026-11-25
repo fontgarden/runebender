@@ -197,6 +197,12 @@ pub fn tools() -> Vec<agent::Tool> {
             json!([]),
         ),
         (
+            "spacing_scan",
+            "Rank source spacing candidates for visual review. Use offset to continue by rank and include_sheet to receive the matching SVG.",
+            json!({"limit":{"type":"integer","minimum":1,"maximum":100},"offset":{"type":"integer","minimum":0},"include_sheet":{"type":"boolean"}}),
+            json!([]),
+        ),
+        (
             "read_kerning",
             "Read the complete kerning table, group membership and revision for a source or experiment.",
             json!({}),
@@ -245,7 +251,7 @@ pub fn tools() -> Vec<agent::Tool> {
                 | "experiment_undo_apply"
         ) {
             tool.parameters["properties"]["source"] = json!({"type":"integer","minimum":0});
-            if tool.name != "experiment_fork" {
+            if !matches!(tool.name.as_str(), "experiment_fork" | "spacing_scan") {
                 tool.parameters["properties"]["branch"] = json!({"type":"string","description":"Named experiment; omit to address the root."});
             }
         }
@@ -611,6 +617,35 @@ fn handle(project: &mut Project, name: &str, args: &Value) -> Result<Value, Stri
                 None => crate::formats::designbot::specimen_project(project, source, text)?,
             };
             json!({"ok":true,"scene":scene,"text":text,"kerning_revision":experiments::kerning_revision(metadata)?})
+        }
+        "spacing_scan" => {
+            if branch.is_some() {
+                return Err("spacing_scan requires a root source".into());
+            }
+            let count = |key: &str, default: usize| -> Result<usize, String> {
+                object.get(key).map_or(Ok(default), |v| {
+                    v.as_u64()
+                        .and_then(|n| usize::try_from(n).ok())
+                        .ok_or_else(|| format!("{key} must be a nonnegative integer"))
+                })
+            };
+            let include_sheet = object.get("include_sheet").map_or(Ok(false), |v| {
+                v.as_bool().ok_or("include_sheet must be a boolean")
+            })?;
+            let report = crate::analysis::spacing::scan_page(
+                project,
+                source,
+                count("limit", 20)?,
+                count("offset", 0)?,
+            )?;
+            let mut response = json!({"ok":true});
+            if include_sheet {
+                response["proof_svg"] = json!(crate::analysis::spacing_sheet::render(
+                    project, source, &report
+                )?);
+            }
+            response["report"] = report;
+            response
         }
         "read_kerning" => {
             let metadata = match branch {
@@ -1124,6 +1159,28 @@ mod tests {
     use super::*;
     use crate::font::history::HistoryDirection;
     use crate::font::variable;
+
+    #[test]
+    fn spacing_scan_returns_the_requested_page_and_optional_sheet() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/core/Core-Regular.ufo");
+        let mut project = Project::load(&path).unwrap();
+        let source = project.source_id(0).unwrap();
+        let expected = crate::analysis::spacing::scan_page(&project, source, 1, 1).unwrap();
+        let args = json!({"source": source.0, "limit": 1, "offset": 1});
+        let result = call(&mut project, "spacing_scan", &args);
+        assert_eq!(result["report"], expected);
+        assert!(result.get("proof_svg").is_none());
+        let mut args = args;
+        args["include_sheet"] = json!(true);
+        let result = call(&mut project, "spacing_scan", &args);
+        assert_eq!(result["ok"], true, "{result}");
+        assert_eq!(result["report"], expected);
+        assert_eq!(
+            result["proof_svg"],
+            crate::analysis::spacing_sheet::render(&project, source, &expected).unwrap()
+        );
+    }
 
     #[test]
     fn experiment_specimen_reports_the_snapshot_kerning_revision() {

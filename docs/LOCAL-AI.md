@@ -293,12 +293,12 @@ The `design_context` tool and the Chat prompt read these files.
 ### 3.2 Live tools
 
 <!-- check: live-tools -->
-The live server publishes 51 tools.
+The live server publishes 52 tools.
 
 | Group | Tools |
 | --- | --- |
 | Connection and state | `editor_sessions`, `editor_connect`, `project_info`, `editor_context`, `editor_set_source`, `editor_open_glyph`, `editor_review`, `editor_select_points`, `editor_set_text` |
-| Read and analysis | `font_info`, `read_glyph`, `glyph_inventory`, `design_context`, `analyze_glyph`, `analyze_font`, `read_kerning`, `proof`, `specimen`, `review_proof`, `export_proof` |
+| Read and analysis | `font_info`, `read_glyph`, `glyph_inventory`, `design_context`, `analyze_glyph`, `analyze_font`, `spacing_scan`, `read_kerning`, `proof`, `specimen`, `review_proof`, `export_proof` |
 | Proposals and marks | `propose_edits`, `proposal_list`, `proposal_discard`, `proposal_install`, `flag_glyph` |
 | Experiments | `experiment_fork`, `experiment_list`, `experiment_kern`, `experiment_apply`, `experiment_undo_apply` |
 | Guarded apply | `agent_apply`, `agent_receipt`, `agent_cancel`, `agent_history` |
@@ -309,6 +309,10 @@ The live server publishes 51 tools.
 Registries: `src/automation/live.rs`, `src/automation/agent_edit.rs`,
 `src/automation/agent_proof.rs`, `src/automation/agent_graph.rs`,
 `src/automation/tool_contracts.rs`.
+
+The live `spacing_scan` tool reads a root source, ranks spacing candidates, and returns a report for the requested offset and limit.
+Set `include_sheet` to receive the corresponding SVG in `proof_svg`.
+The shell command `runebender spacing-scan FONT --out DIR` creates a new directory containing the report and SVG.
 
 ### 3.3 Disk tools
 

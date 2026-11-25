@@ -158,6 +158,37 @@ fn a_font_that_does_not_compile_is_a_failure() {
 }
 
 #[test]
+fn spacing_scan_writes_one_review_page_without_replacing_existing_work() {
+    let (dir, font) = scratch_ufo();
+    let output = dir.path().join("review");
+    let args = [
+        "spacing-scan",
+        font.to_str().unwrap(),
+        "--limit",
+        "2",
+        "--out",
+        output.to_str().unwrap(),
+    ];
+    let (code, result) = run(&args);
+    assert_eq!(code, 0, "{result}");
+    let report = std::fs::read(output.join("report.json")).unwrap();
+    let page: serde_json::Value = serde_json::from_slice(&report).unwrap();
+    assert!(page["rows"].as_array().unwrap().len() <= 2);
+    assert!(
+        page["snapshot"]
+            .as_str()
+            .is_some_and(|hash| !hash.is_empty())
+    );
+    assert!(
+        std::fs::read_to_string(output.join("proof.svg"))
+            .unwrap()
+            .contains("<svg")
+    );
+    assert_ne!(run(&args).0, 0);
+    assert_eq!(report, std::fs::read(output.join("report.json")).unwrap());
+}
+
+#[test]
 fn project_owned_proofs_check_the_compiled_font() {
     let (dir, _) = scratch_ufo();
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
