@@ -9,6 +9,13 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
 
 ### Added
 
+- The native `check-proof` command checks a project's words at chosen axis locations and compares their glyphs, positions, and optional reference images.
+  Pass `--trace-case` to inspect the OpenType lookups that shaped one case using HarfBuzz.
+- The Shaping panel lists the scripts, language systems and features in the font and can enable discretionary features.
+- Compare opens an incompatible glyph with its master overlays.
+  The Axes panel identifies the mismatch and offers a start-point repair when the selected point has the required sequence of point types.
+- Selecting one anchor exposes its name in the inspector.
+  Renaming the anchor and updating attached components share an undo step.
 - Review queue on the proof page: `1` to `4` grade the open glyph red, orange, yellow or green and open the next purple draft of the active master; `[` and `]` step through the drafts without a grade. The status line gives the number of drafts left. The same commands are in the Glyph menu.
 - A font's own context file can be named `CONTEXT.md`: the plain name `context.md` is read in any case.
 - Thickness overlay in the Curves section: the local thickness field of the ink (Hildebrand and Rüegsegger), filled as a smooth gradient on the warm end of the theme's mark ramp around the glyph's median thickness.
@@ -30,6 +37,10 @@ The next planned version is `0.1.0-alpha.2`; outstanding tests and planned work 
   View > Joining Contexts shows the contexts in the Proof section and the reading proof.
 
 ### Changed
+
+- An ordinary browser Save preserves untouched empty UFO tables and checks for conflicting edits before replacing a file.
+- Saving back to Glyphs preserves unrelated drawing metadata and extra package files, and reports when another editor has changed the original.
+- Changing a Fontra advance or moving a named anchor preserves the original contour data and unrelated native fields in the glyph.
 
 - A kerning drag in the Text tool skips marks: a drag on the alef of `رَا` edits the pair of reh and alef, in their kerning groups, and the fatha moves with reh.
   The pairs of the metrics card skip marks in the same way.

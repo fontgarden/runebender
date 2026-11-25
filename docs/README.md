@@ -18,9 +18,12 @@ Commands in these guides run from the repository root unless stated otherwise.
 - [Architecture](ARCHITECTURE.md): the layers, the module order, and the file where each type of change starts, checked by `tests/architecture_map.rs`.
 - [Browser development](../web/README.md): browser preparation, locked builds, and Playwright checks.
 - [Engine benchmarks](BENCHMARKS.md): repeatable measurements and interpretation.
+- [Project-owned proofs](PROJECT-PROOFS.md) explains how to check a compiled word and review changes to its shape and positioning in CI.
+- [Agent spacing and kerning](AGENT-SPACING.md) describes the tools available today and a bounded whole-font review workflow to build on them.
 - [Audit of 2026-11-09](AUDIT-2026-11-09.md): historical findings, status corrections, and the previously reported validation baseline.
 - [Cleanup plan](CLEANUP-PLAN.md): a checklist from the code review of 2026-11-17, with files, changes and verification for each item.
 - [Quality review of 2026-11-23](QUALITY-REVIEW-2026-11-23.md): a temporary checklist from a full review of the repository, one item at a time.
+- [Engineering review of 2026-11-25](QUALITY-PASS-2026-11-25.md) records the fixes, verification and remaining risks from the repository-wide pass.
 - [Upstream work](upstream/README.md): changes and workarounds to propose to Xilem, Vello and `spline`, with the Linebender LLM policy rules.
 
 ## Interface and local models
