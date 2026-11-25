@@ -123,13 +123,31 @@ def verify_tag_target(tag, commit, required=False):
 
 
 def required_checks(commit):
-    checks = json.loads(run("gh", "api", f"repos/{REPOSITORY}/commits/{commit}/check-runs"))["check_runs"]
-    required = {"formatting and repository hygiene", "ubuntu-latest", "macos-latest", "security advisories"}
-    latest = {}
-    for check in sorted(checks, key=lambda check: check["id"]):
-        if check["head_sha"] == commit:
-            latest[check["name"]] = check["conclusion"]
-    missing = {name for name in required if latest.get(name) != "success"}
+    def records(endpoint, key):
+        pages = json.loads(run("gh", "api", "--paginate", "--slurp", endpoint))
+        return (record for page in pages for record in page[key])
+
+    actions = f"repos/{REPOSITORY}/actions"
+    runs = records(f"{actions}/workflows/ci.yml/runs?head_sha={commit}&per_page=100", "workflow_runs")
+    # Weekly scans run only advisories. Take all six jobs from one full CI run.
+    candidate = max(
+        (item for item in runs if item["head_sha"] == commit and item["event"] in
+         {"push", "pull_request", "workflow_dispatch"}),
+        key=lambda item: item["id"], default=None,
+    )
+    if candidate is None or candidate["status"] != "completed" or candidate["conclusion"] != "success":
+        raise ValueError(f"Release SHA {commit} needs a successful completed CI run")
+    required = {
+        "formatting and repository hygiene",
+        "minimum Rust / ubuntu-latest",
+        "minimum Rust / macos-latest",
+        "current stable / Linux compatibility",
+        "browser editor",
+        "security advisories",
+    }
+    jobs = records(f"{actions}/runs/{candidate['id']}/jobs?filter=latest&per_page=100", "jobs")
+    passed = {job["name"] for job in jobs if job["conclusion"] == "success"}
+    missing = required - passed
     if missing:
         raise ValueError(f"Release SHA is missing passing CI: {sorted(missing)}")
 

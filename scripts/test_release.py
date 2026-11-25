@@ -57,19 +57,42 @@ class ReleaseGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "does not include the updater"):
             release.artifact(self.directory, local_test=True)
 
-    def test_new_failed_ci_run_cannot_be_hidden_by_an_older_success(self):
-        names = ["formatting and repository hygiene", "ubuntu-latest", "macos-latest", "security advisories"]
-        checks = [{"id": i, "name": name, "head_sha": "chosen", "conclusion": "success"}
-                  for i, name in enumerate(names)]
-        checks.append({"id": 100, "name": "security advisories", "head_sha": "chosen", "conclusion": "failure"})
-        with patch.object(release, "run", return_value=json.dumps({"check_runs": checks})):
-            with self.assertRaisesRegex(ValueError, "security advisories"):
-                release.required_checks("chosen")
+    def test_release_checks_follow_the_jobs_for_the_candidate(self):
+        # Names from the GitHub response for dfa8ace, including the two matrix jobs.
+        names = ["current stable / Linux compatibility", "formatting and repository hygiene",
+                 "browser editor", "minimum Rust / macos-latest", "minimum Rust / ubuntu-latest",
+                 "security advisories"]
+        run = {"id": 42, "head_sha": "chosen", "event": "push",
+               "status": "completed", "conclusion": "success"}
+        runs = [{"workflow_runs": [dict(run, id=43, event="schedule")]},
+                {"workflow_runs": [run]}]
+        jobs = [{"name": name, "conclusion": "success"} for name in names]
+        with patch.object(release, "run", side_effect=[
+                json.dumps(runs), json.dumps([{"jobs": jobs[:2]}, {"jobs": jobs[2:]}])]) as api:
+            release.required_checks("chosen")
+            self.assertIn("/runs/42/jobs?", api.call_args.args[-1])
+        for conclusion in ("failure", "skipped", None):
+            with self.subTest(conclusion=conclusion):
+                jobs[2]["conclusion"] = conclusion
+                with patch.object(release, "run", side_effect=[
+                        json.dumps(runs), json.dumps([{"jobs": jobs}])]):
+                    with self.assertRaisesRegex(ValueError, "browser editor"):
+                        release.required_checks("chosen")
+
+    def test_an_old_success_cannot_hide_a_failed_or_pending_run(self):
+        earlier = {"id": 1, "head_sha": "chosen", "event": "push",
+                   "status": "completed", "conclusion": "success"}
+        for status, conclusion in (("in_progress", None), ("completed", "failure")):
+            newer = dict(earlier, id=2, status=status, conclusion=conclusion)
+            with patch.object(release, "run", return_value=json.dumps([
+                    {"workflow_runs": [newer, earlier]}])):
+                with self.assertRaisesRegex(ValueError, "successful completed CI"):
+                    release.required_checks("chosen")
 
     def test_ci_for_another_commit_does_not_count(self):
-        checks = [{"id": 1, "name": "macos-latest", "head_sha": "different", "conclusion": "success"}]
-        with patch.object(release, "run", return_value=json.dumps({"check_runs": checks})):
-            with self.assertRaisesRegex(ValueError, "macos-latest"):
+        runs = [{"id": 1, "head_sha": "different", "event": "push", "conclusion": "success"}]
+        with patch.object(release, "run", return_value=json.dumps([{"workflow_runs": runs}])):
+            with self.assertRaisesRegex(ValueError, "successful completed CI"):
                 release.required_checks("chosen")
 
 
