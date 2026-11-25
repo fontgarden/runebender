@@ -91,7 +91,8 @@ async function existingFile(directory, path) {
 function sameBytes(a, b) {
   return a === b || (a !== undefined && b !== undefined && a.length === b.length && a.every((value, i) => value === b[i]));
 }
-async function writeChanges(directory, files, prune, baseline) {
+// Omission means deletion only for files the editor manages in this package.
+function desiredFiles(files, prune, baseline) {
   const desired = new Map(files);
   const glyphDirectories = new Set(prune);
   const optionalTables = new Set();
@@ -106,8 +107,12 @@ async function writeChanges(directory, files, prune, baseline) {
       desired.set(path, undefined);
     }
   }
+  return desired;
+}
+async function writeChanges(directory, files, prune, baseline) {
+  // Check every proposed change before writing the first file.
   const changes = [];
-  for (const [path, bytes] of desired) {
+  for (const [path, bytes] of desiredFiles(files, prune, baseline)) {
     const before = baseline.get(path);
     if (sameBytes(before, bytes)) continue;
     const current = await existingFile(directory, path);

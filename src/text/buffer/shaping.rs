@@ -136,12 +136,15 @@ impl TextBuffer {
                         continue;
                     }
                     let mut text = String::new();
-                    let mut sort_for_offset = Vec::new();
-                    for &index in sorts {
-                        let character = self.sort_codepoint(index).expect("a run of encoded sorts");
-                        sort_for_offset.extend(std::iter::repeat_n(index, character.len_utf8()));
+                    // Shaper clusters are UTF-8 byte offsets into this span.
+                    let mut sort_at_byte = Vec::new();
+                    for &sort_index in sorts {
+                        let character = self
+                            .sort_codepoint(sort_index)
+                            .expect("a run of encoded sorts");
+                        sort_at_byte.extend(std::iter::repeat_n(sort_index, character.len_utf8()));
                         text.push(character);
-                        absorbed[index] = true;
+                        absorbed[sort_index] = true;
                     }
                     let Ok(shaped) = font.shape_with_options(
                         &text,
@@ -156,7 +159,7 @@ impl TextBuffer {
                     // Monotone cluster values keep all outputs of a multiple substitution
                     // together. A sort with no output is absorbed into another cluster.
                     for group in shaped.chunk_by(|a, b| a.cluster == b.cluster) {
-                        let index = sort_for_offset[group[0].cluster as usize];
+                        let sort_index = sort_at_byte[group[0].cluster as usize];
                         let glyphs: Vec<_> = group
                             .iter()
                             .map(|glyph| ClusterGlyph {
@@ -170,9 +173,9 @@ impl TextBuffer {
                             })
                             .collect();
                         let own = if bidi_run.rtl { glyphs.len() - 1 } else { 0 };
-                        updates.push((index, glyphs[own].name.clone(), glyphs[own].advance));
-                        clusters.insert(index, ShapedCluster { glyphs, own });
-                        absorbed[index] = false;
+                        updates.push((sort_index, glyphs[own].name.clone(), glyphs[own].advance));
+                        clusters.insert(sort_index, ShapedCluster { glyphs, own });
+                        absorbed[sort_index] = false;
                     }
                 }
             }
@@ -189,17 +192,14 @@ impl TextBuffer {
             let (x, y) = cluster.own_offset();
             cluster.glyphs.len() > 1 || x != 0.0 || y != 0.0
         });
-        let offsets_changed = clusters != self.shaped.0;
+        let clusters_changed = clusters != self.shaped.0;
         self.shaped.0 = clusters;
-        let mut absorbed_changed = offsets_changed;
-        for (index, sort) in self.sorts.iter_mut().enumerate() {
-            let want = absorbed.get(index).copied().unwrap_or(false);
-            if sort.absorbed != want {
-                sort.absorbed = want;
-                absorbed_changed = true;
-            }
+        let mut absorption_changed = false;
+        for (sort, is_absorbed) in self.sorts.iter_mut().zip(absorbed) {
+            absorption_changed |= sort.absorbed != is_absorbed;
+            sort.absorbed = is_absorbed;
         }
-        Some(changed || absorbed_changed)
+        Some(changed || clusters_changed || absorption_changed)
     }
 
     /// Rebuild every glyph sort from the current Unicode inventory, then shape

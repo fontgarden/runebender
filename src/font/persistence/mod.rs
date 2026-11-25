@@ -624,60 +624,16 @@ struct PublishedArtifact {
 }
 
 fn publish(staged: Vec<StagedArtifact>, replace_existing: bool) -> Result<(), String> {
-    let mut published: Vec<PublishedArtifact> = Vec::new();
+    let mut published = Vec::with_capacity(staged.len());
     for artifact in &staged {
-        let destination_exists = match path_entry_exists(&artifact.destination) {
-            Ok(exists) => exists,
+        match publish_one(artifact, replace_existing) {
+            Ok(replacement) => published.push(replacement),
             Err(error) => {
                 rollback(&published);
                 cleanup_staged(&staged);
                 return Err(error);
             }
-        };
-        if destination_exists && !replace_existing {
-            rollback(&published);
-            cleanup_staged(&staged);
-            return Err(format!(
-                "filesystem export destination appeared during staging: {}",
-                artifact.destination.display()
-            ));
         }
-        let backup = if destination_exists {
-            let backup = match fresh_sibling(&artifact.destination, "backup") {
-                Ok(backup) => backup,
-                Err(error) => {
-                    rollback(&published);
-                    cleanup_staged(&staged);
-                    return Err(error);
-                }
-            };
-            if let Err(error) = fs::rename(&artifact.destination, &backup) {
-                rollback(&published);
-                cleanup_staged(&staged);
-                return Err(format!(
-                    "could not stage existing {} for replacement: {error}",
-                    artifact.destination.display()
-                ));
-            }
-            Some(backup)
-        } else {
-            None
-        };
-        if let Err(error) = fs::rename(&artifact.stage, &artifact.destination) {
-            if let Some(backup) = &backup {
-                let _ = fs::rename(backup, &artifact.destination);
-            }
-            rollback(&published);
-            cleanup_staged(&staged);
-            return Err(format!(
-                "could not publish {}: {error}",
-                artifact.destination.display()
-            ));
-        }
-        published.push(PublishedArtifact {
-            destination: artifact.destination.clone(),
-            backup,
-        });
     }
     for artifact in &published {
         if let Some(backup) = &artifact.backup {
@@ -685,6 +641,52 @@ fn publish(staged: Vec<StagedArtifact>, replace_existing: bool) -> Result<(), St
         }
     }
     Ok(())
+}
+
+/// Keep the displaced source until all the other members of the family have been published.
+fn publish_one(
+    artifact: &StagedArtifact,
+    replace_existing: bool,
+) -> Result<PublishedArtifact, String> {
+    let destination = &artifact.destination;
+    let backup = if path_entry_exists(destination)? {
+        if !replace_existing {
+            return Err(format!(
+                "filesystem export destination appeared during staging: {}",
+                destination.display()
+            ));
+        }
+        let backup = fresh_sibling(destination, "backup")?;
+        fs::rename(destination, &backup).map_err(|error| {
+            format!(
+                "could not stage existing {} for replacement: {error}",
+                destination.display()
+            )
+        })?;
+        Some(backup)
+    } else {
+        None
+    };
+
+    if let Err(error) = fs::rename(&artifact.stage, destination) {
+        if let Some(backup) = &backup {
+            fs::rename(backup, destination).map_err(|restore| {
+                format!(
+                    "could not publish {}: {error}. Restoring {} failed: {restore}",
+                    destination.display(),
+                    backup.display()
+                )
+            })?;
+        }
+        return Err(format!(
+            "could not publish {}: {error}",
+            destination.display()
+        ));
+    }
+    Ok(PublishedArtifact {
+        destination: destination.clone(),
+        backup,
+    })
 }
 
 fn cleanup_staged(staged: &[StagedArtifact]) {
@@ -1170,6 +1172,34 @@ mod tests {
                     .contains("runebender-stage")),
             "failed staging must clean its temporary artifacts"
         );
+    }
+
+    #[test]
+    fn publication_restores_both_sources_when_the_second_staged_file_disappears() {
+        let scratch = Scratch::new("publish-rollback");
+        let regular = scratch.0.join("Regular");
+        let bold = scratch.0.join("Bold");
+        fs::write(&regular, b"original regular").unwrap();
+        fs::write(&bold, b"original bold").unwrap();
+        let staged_regular = scratch.0.join("Regular.stage");
+        fs::write(&staged_regular, b"edited regular").unwrap();
+        let staged = vec![
+            StagedArtifact {
+                destination: regular.clone(),
+                stage: staged_regular,
+                created_parents: Vec::new(),
+            },
+            StagedArtifact {
+                destination: bold.clone(),
+                stage: scratch.0.join("missing.stage"),
+                created_parents: Vec::new(),
+            },
+        ];
+        let error = publish(staged, true).unwrap_err();
+        assert!(error.contains("could not publish"), "{error}");
+        assert_eq!(fs::read(regular).unwrap(), b"original regular");
+        assert_eq!(fs::read(bold).unwrap(), b"original bold");
+        assert_eq!(fs::read_dir(&scratch.0).unwrap().count(), 2);
     }
 
     #[test]
