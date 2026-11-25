@@ -76,13 +76,13 @@ OMP can read the repository's `.mcp.json` when this build is on PATH, or use an 
 If several editors are open, check the project path and source before proposing.
 All tools below are also available as `runebender agent call TOOL --session SOCKET --args JSON`.
 
-For example, ask your agent:
+Try this request in the connected client.
 
 > On the copy of Virtua Grotesk Regular, propose adding 16 units to the left sidebearing of h while keeping its right sidebearing.
 > Show me “ahead”, “rhythm” and “which” in Agent Proof and wait for my decision.
 
 The agent reads h's revision and stages a `propose_edits` task containing a horizontal translation of +16 and an advance adjustment of +16.
-After `editor_open_glyph` selects h, the agent reads `editor_context` and requests the comparison:
+After `editor_open_glyph` selects h, the agent reads `editor_context` and requests the comparison.
 
 ```json
 {

@@ -1247,7 +1247,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn launch_glyph_keeps_the_explicit_proposal_in_the_text_proof() {
-        let mut app = Workspace::untitled().unwrap();
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/core/Core-Regular.ufo");
+        let font = crate::application::font_model::FontModel::open(&fixture).unwrap();
+        let mut app = Workspace::from_model(font).unwrap();
         app.open_glyph(app.font.index_of("A").unwrap());
         proof_sample(&mut app);
         app.open_glyph(app.font.index_of("B").unwrap());
