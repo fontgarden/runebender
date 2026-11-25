@@ -398,6 +398,8 @@ pub struct Project {
     /// The Glyphs file or Fontra folder this project's UFOs were converted from, which Save
     /// also writes back to.
     pub foreign_source: Option<crate::formats::foreign::ForeignSource>,
+    /// The working copy has been saved since the last successful write to the foreign source.
+    foreign_write_back_pending: bool,
     /// What the conversion from a foreign source could not read.
     pub import_warnings: Vec<String>,
 }
@@ -561,6 +563,7 @@ impl Project {
             brace: Vec::new(),
             experiments: super::experiments::Experiments::default(),
             foreign_source: None,
+            foreign_write_back_pending: false,
             import_warnings: Vec::new(),
         }
     }
@@ -1566,9 +1569,9 @@ impl Project {
             .filter_map(|id| self.document_source(id))
     }
 
-    /// Whether any source or Designspace metadata has unsaved changes.
+    /// Whether any source, Designspace metadata or foreign original still needs saving.
     pub fn is_modified(&self) -> bool {
-        self.ds_dirty || self.sources.iter().any(|source| source.dirty)
+        self.foreign_write_back_pending || self.ds_dirty || self.sources.iter().any(|s| s.dirty)
     }
 
     /// Whether one stable source has unsaved changes.
@@ -2316,7 +2319,7 @@ impl Project {
         &self.variable
     }
 
-    /// Save every edited source from the variable project, then its Designspace metadata.
+    /// Save edited sources and Designspace metadata, then publish any pending foreign write-back.
     pub fn save(&mut self) -> Result<(), String> {
         let mut exports = Vec::with_capacity(self.sources.len());
         for index in 0..self.sources.len() {
@@ -2352,20 +2355,27 @@ impl Project {
         if self.sources.is_empty() {
             return Err("a filesystem export needs at least one UFO source".into());
         }
-        // Nothing was edited since the last save, so the files on disk are current.
-        if exports.is_empty() && designspace.is_none() {
+        if !exports.is_empty() || designspace.is_some() {
+            super::persistence::ExportPlan::new(exports, designspace)?.execute()?;
             self.mark_saved();
-            return Ok(());
+            self.foreign_write_back_pending = self.foreign_source.is_some();
         }
-        super::persistence::ExportPlan::new(exports, designspace)?.execute()?;
-        self.mark_saved();
-        if let (Some(foreign), Some(working)) = (&self.foreign_source, &self.export_source) {
+        if self.foreign_write_back_pending {
+            let foreign = self
+                .foreign_source
+                .as_ref()
+                .ok_or("missing foreign save destination")?;
+            let working = self
+                .export_source
+                .as_ref()
+                .ok_or("missing UFO working copy")?;
             crate::formats::foreign::write_back(foreign, working).map_err(|error| {
                 format!(
                     "the UFO working copy saved, but {} did not: {error}",
                     foreign.path.display()
                 )
             })?;
+            self.foreign_write_back_pending = false;
         }
         Ok(())
     }

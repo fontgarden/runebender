@@ -73,6 +73,7 @@ impl Project {
                 .map(|source| source.source_path.clone());
         }
         self.foreign_source = None;
+        self.foreign_write_back_pending = false;
         self.variable.revision = self.variable.revision.wrapping_add(1);
         Ok(())
     }
@@ -461,6 +462,54 @@ glyphs = ({
             .get_glyph("A")
             .unwrap()
             .width
+    }
+
+    #[test]
+    fn failed_foreign_write_back_retries_without_further_edits() {
+        for extension in ["glyphs", "glyphspackage", "fontra"] {
+            let scratch = Scratch::new(extension);
+            let original = write_foreign_font(&scratch.0, extension);
+            let mut project = Project::load(&original).unwrap();
+            let source = project.document_sources().next().unwrap().id();
+            edit_width(&mut project, 610.0);
+
+            let aside = scratch.0.join("temporarily-moved");
+            std::fs::rename(&original, &aside).unwrap();
+            assert!(project.save().unwrap_err().contains("working copy saved"));
+            assert_eq!(
+                saved_width(project.document_source_path(source).unwrap()),
+                610.0
+            );
+            assert_eq!(project.document_source_is_modified(source), Some(false));
+            assert!(project.is_modified(), "{extension} still needs write-back");
+            assert!(project.save().unwrap_err().contains("working copy saved"));
+
+            std::fs::rename(&aside, &original).unwrap();
+            project.save().unwrap();
+            assert!(!project.is_modified());
+            let reopened = Project::load(&original).unwrap();
+            let layer = reopened.document_sources().next().unwrap().default_layer();
+            assert_eq!(reopened.document_layer("A", &layer).unwrap().width(), 610.0);
+        }
+    }
+
+    #[test]
+    fn save_as_after_failed_write_back_detaches_the_pending_original() {
+        let scratch = Scratch::new("pending-original");
+        let original = write_foreign_font(&scratch.0, "glyphs");
+        let mut project = Project::load(&original).unwrap();
+        edit_width(&mut project, 610.0);
+        let aside = scratch.0.join("temporarily-moved");
+        std::fs::rename(&original, &aside).unwrap();
+        assert!(project.save().is_err());
+
+        let copy = Scratch::new("pending-copy");
+        project.save_as(&copy.0).unwrap();
+        assert!(!project.is_modified());
+        project.save().unwrap();
+        assert!(!original.exists());
+        let source = project.document_sources().next().unwrap();
+        assert_eq!(saved_width(source.path()), 610.0);
     }
 
     #[test]
