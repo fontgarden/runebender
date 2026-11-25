@@ -16,6 +16,15 @@ One kerning discrepancy also remains in live proofing when a nondefault master h
 The variable and static compilers skip that master for kerning interpolation, while the live interpolation can still blend toward zero.
 The [browser usability research](#browser-usability-research--november-25-2026) below sets out the next milestones and distinguishes the published editor from the local work.
 
+The local build now implements portable source import and editable ZIP download, including nested masters and project sidecars.
+A two-master round trip in Firefox, WebKit, and Chromium retained all 75 source files and reopened the edited outline from the extracted ZIP.
+The edited GLIF was the only changed file.
+The other 74 matched byte-for-byte, including the annotated fontinfo and explicitly empty layerinfo plists.
+Chromium also exercised a denied folder write, downloaded a backup, and successfully retried the write to the original folder.
+Local recovery checkpoints store edited font sources and unapplied feature text in IndexedDB.
+Chromium recovered the last committed outline after closing the editing tab and preserved a draft typed in Bold until it was explicitly applied.
+Conflict detection for an external edit to a connected folder, responsiveness during compilation, and qualification through the deployed iframe remain open. [Browser workflows and regression checks](web/README.md)
+
 ## Original review
 
 **I would fix Save As and save retries before the next release.**
@@ -366,7 +375,7 @@ For example, the primary CI failure described in the earlier review has cleared,
 They should be able to open a family, edit an outline in one master, check its spacing and marks in a word, recover from an interruption, and reopen editable sources in a fresh session.
 Switching masters and checking a substitution while drawing exercise workflows highlighted by Fontra and Counterpunch. [Fontra](https://docs.fontra.xyz/) · [Counterpunch](https://counterpunch.space/)
 
-### What reaches a designer today
+### Published behavior at the time of review
 
 In an isolated headless Chrome profile at 1280 × 800 and 1× density, the public editor opened the 863-glyph demo through the website’s iframe.
 The public build manifest identified source `02df900` and release `0e3910c0aa18816f`, predating the implementation reviewed here.

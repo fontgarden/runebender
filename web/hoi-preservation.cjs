@@ -4,6 +4,7 @@
 // Exercise the actual browser package boundary with the small HOI Shapes fixture.
 // Folder writes use Chromium's temporary origin-private file system.
 const assert = require('node:assert/strict');
+const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require(process.env.RUNEBENDER_PLAYWRIGHT || 'playwright');
@@ -149,6 +150,44 @@ function readFiles(directory, files = []) {
     await fileCommand('Control+s', `Saved ${master}`);
     await fileCommand('Control+o', `Opened ${master}`);
     assert.deepEqual(await openBox(), secondEdit, 'the new copy contains the subsequent edit');
+
+    // A denied write offers an editable copy while keeping the original dirty for retry.
+    const deniedEdit = await nudgeBox();
+    await page.evaluate(() => {
+      const write = FileSystemFileHandle.prototype.createWritable;
+      FileSystemFileHandle.prototype.createWritable = async function () {
+        FileSystemFileHandle.prototype.createWritable = write;
+        throw new DOMException('write access revoked', 'NotAllowedError');
+      };
+    });
+    const [backup] = await Promise.all([
+      page.waitForEvent('download'),
+      fileCommand('Control+s', 'Folder write denied'),
+    ]);
+    assert.match(backup.suggestedFilename(), /\.zip$/);
+    assert.equal((await page.evaluate(() => window.runebender.state())).modified, true);
+    const backupBox = execFileSync('python3', ['-c',
+      'import sys, zipfile; print(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]).decode(), end="")',
+      await backup.path(), master + '/glyphs/box.glif'], { encoding: 'utf8' });
+    await fileCommand('Control+s', `Saved ${master}`);
+    const retriedBox = await page.evaluate(async master => {
+      const ufo = await window.testFontDirectory.getDirectoryHandle(master);
+      const glyphs = await ufo.getDirectoryHandle('glyphs');
+      const file = await glyphs.getFileHandle('box.glif');
+      return (await file.getFile()).text();
+    }, master);
+    assert.equal(backupBox, retriedBox, 'the downloaded copy contains the pending edit');
+    await fileCommand('Control+o', `Opened ${master}`);
+    assert.deepEqual(await openBox(), deniedEdit, 'the original received the retried edit');
+
+    // File → Download Editable Sources is also available while the writable UFO is clean.
+    await page.mouse.click(112, 15);
+    const [explicitCopy] = await Promise.all([
+      page.waitForEvent('download'),
+      page.mouse.click(146, 191),
+    ]);
+    assert.match(explicitCopy.suggestedFilename(), /\.zip$/);
+    assert.equal((await page.evaluate(() => window.runebender.state())).modified, false);
 
     assert.deepEqual(errors, [], 'no browser errors');
     console.log(`HOI Shapes browser preservation passed: ${count} original GLIFs unchanged`);

@@ -213,11 +213,11 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Build the browser editor
         run: ./web/build.sh
-      - name: Install pinned Playwright and Chromium
+      - name: Install pinned Playwright browsers
         working-directory: web
         run: |
           npm ci --no-audit --no-fund
-          npx playwright install --with-deps chromium
+          npx playwright install --with-deps chromium firefox webkit
       - name: Browser checks
         env:
           RUNEBENDER_TEST_FONTS: ${{ github.workspace }}/test-fonts/sources
@@ -232,6 +232,8 @@ jobs:
           node web/folder.cjs
           node web/hoi-editing.cjs
           node web/hoi-preservation.cjs
+          node web/portable-source.cjs
+          node web/recovery.cjs
           node web/menu-appearance.cjs
       - uses: actions/upload-artifact@v4
         if: always()

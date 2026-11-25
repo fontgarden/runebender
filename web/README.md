@@ -5,26 +5,43 @@ This is the desktop application's Xilem/Masonry widget tree, compiled to WASM.
 Masonry, and paints its retained scene into a canvas using Vello CPU. There is
 no screenshot player and no separate JavaScript implementation of the editor.
 
-The bundled Virtua Grotesk source opens in memory. In Chrome and Edge, File → Open
-picks a folder with the File System Access API: a UFO folder, or a folder that holds one
-designspace with its UFOs. Save writes the files back into that folder, and Save As
-writes into a new folder. Dropping a folder on the canvas opens it too. Other browsers
-keep the bundled font only, and edits there last for the tab.
+The bundled Virtua Grotesk source opens in memory.
+File → Open accepts a UFO or a project folder with one top-level designspace and its referenced masters, including masters in subdirectories.
+Choose the project folder you want included in an editable copy.
+Runebender includes sidecar files and skips Git internals and Finder metadata.
 Local AI processes stay outside the browser version.
-Export compiles the current in-memory font in Rust and downloads a TTF.
-Compilation is currently synchronous in the browser; a worker host remains future work.
+File → Export compiles the current in-memory font in Rust and downloads a TTF.
+Compilation currently runs on the main browser thread.
 
-## Fonts on disk
+## Open and save editable sources
 
-`src/font/persistence/memory.rs` decodes and encodes a complete UFO package from
-`(path, bytes)` pairs: every layer, images, data, and files the specification does not
-name, which are written back unchanged. The page reads the folder, packs the files into
-one byte bundle, and `BrowserEditor::open_bundle` opens it as a project. Save asks
-`BrowserEditor::save_bundle` for the files to write; the manifest also names the glyph
-directories whose unlisted `.glif` files are stale, and the page removes those. Original
-GLIF file names and layer directories are kept, so a saved UFO matches the opened one
-file for file. The page remembers the folder in IndexedDB and reopens it when Chrome
-kept the permission, as it does for an installed app.
+In browsers that grant directory access, Open and folder drop connect to a folder on disk.
+Save updates its managed font files, and Save As writes a full copy into a chosen destination.
+Runebender remembers the folder handle and can reopen it when the browser retains permission.
+File → Download Editable Sources (.zip) also makes a portable copy while leaving the original folder connected.
+
+When the directory picker is unavailable or access is denied, Open offers a directory input.
+Save and Save As then download the editable project as a ZIP.
+Extract the archive and open the extracted folder to continue editing.
+If the browser denies a write to a connected folder, Runebender downloads a backup and keeps the edits pending for a retry.
+A download notice means the browser received the archive for download.
+
+The Rust memory adapter in `src/font/persistence/memory.rs` preserves layers, UFO images and data, original GLIF file names, and unchanged GLIF bytes.
+A full copy includes the current descriptor, the referenced masters, and files beside them.
+An ordinary folder save leaves project sidecars in place and removes stale GLIFs from managed glyph directories.
+Full copies also preserve the original bytes of unchanged UFO metadata, including comments and explicitly empty optional plists.
+Editing a metadata value writes its current value into the copy.
+
+## Recover a font session
+
+Runebender checkpoints edited font sources and the active master's unapplied feature text in IndexedDB after a short editing pause.
+The checkpoint transaction replaces the previous copy only after its data and label both commit.
+When a tab with a checkpoint closes, reopening Runebender in the same browser profile and origin offers **Recover**, **Later**, and **Discard selected checkpoint**.
+Recovery opens an independent editable copy that can be saved as a ZIP.
+A completed folder save clears that session's checkpoint once all edits are saved.
+A downloaded copy keeps its last checkpoint available because the browser can still cancel the download.
+Clearing site data also clears checkpoints.
+Selection, undo history, and graph-panel work are session-only.
 
 Run `node web/folder.cjs` with the Playwright variables below to check this path: it
 opens the Virtua Grotesk sources through the test hooks, edits a point, and compares the
@@ -110,7 +127,7 @@ cargo clippy --manifest-path web/Cargo.toml --locked \
 To run them locally, install the pinned version once:
 
 ```sh
-(cd web && npm ci && npx playwright install chromium)
+(cd web && npm ci && npx playwright install chromium firefox webkit)
 python3 -m http.server 4326 --bind 127.0.0.1 --directory web &
 node web/quality.cjs
 ```
@@ -144,6 +161,11 @@ and focus events keep it in sync. Mouse motion is coalesced per animation frame;
 only requested repaints run the renderer. A hidden native text input bridges paste
 and composition to the focused Masonry widget. The bundled Graph example is editable
 in memory; executing its proof/export workflow requires the desktop application.
+
+Run `node web/portable-source.cjs` to edit and reopen a downloaded two-master family in Firefox, WebKit, and Chromium.
+The check compares the entire file inventory and every untouched file byte-for-byte and exercises the permission fallback in Chromium.
+Run `node web/recovery.cjs` to close an edited tab, recover its committed checkpoint in a new tab, and download the recovered sources.
+It also interrupts a checkpoint transaction and restores an unapplied feature draft on a nondefault master.
 
 For menu appearance checks, run `node web/menu-appearance.cjs` with the same
 Playwright/Chrome variables and `RUNEBENDER_PROOFS` set to a capture directory.
