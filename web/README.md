@@ -28,15 +28,18 @@ A download notice means the browser received the archive for download.
 
 The Rust memory adapter in `src/font/persistence/memory.rs` preserves layers, UFO images and data, original GLIF file names, and unchanged GLIF bytes.
 A full copy includes the current descriptor, the referenced masters, and files beside them.
-An ordinary folder save leaves project sidecars in place and removes stale GLIFs from managed glyph directories.
-Full copies also preserve the original bytes of unchanged UFO metadata, including comments and explicitly empty optional plists.
-Editing a metadata value writes its current value into the copy.
+An ordinary folder save leaves project sidecars and externally added glyphs in place.
+It removes glyphs deleted in the editor and previously saved feature, group, or kerning files cleared in the editor.
+If the same file also changed on disk, Save reports its path so the editor's version can be saved into a separate folder.
+Both Save and Save As preserve the original bytes of unchanged UFO metadata, including comments and explicitly empty optional plists.
 
 ## Recover a font session
 
 Runebender checkpoints edited font sources and the active master's unapplied feature text in IndexedDB after a short editing pause.
 The checkpoint transaction replaces the previous copy only after its data and label both commit.
 When a tab with a checkpoint closes, reopening Runebender in the same browser profile and origin offers **Recover**, **Later**, and **Discard selected checkpoint**.
+Discard requires Web Locks to confirm that the checkpoint's tab has closed.
+Without that confirmation, Recover keeps the original checkpoint and opens a copy.
 Recovery opens an independent editable copy that can be saved as a ZIP.
 A completed folder save clears that session's checkpoint once all edits are saved.
 A downloaded copy keeps its last checkpoint available because the browser can still cancel the download.

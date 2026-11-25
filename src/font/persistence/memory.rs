@@ -148,7 +148,7 @@ pub struct DecodedUfo {
 pub struct EncodedUfo {
     /// Every file of the package, as (path, bytes) pairs.
     pub files: Vec<(String, Vec<u8>)>,
-    /// The glyph directories; a `.glif` file in one that is not in `files` is stale.
+    /// Glyph directories whose previously owned GLIFs can be removed when absent from `files`.
     pub layer_directories: Vec<String>,
 }
 
@@ -193,7 +193,7 @@ pub struct MemoryProject {
 pub struct MemorySave {
     /// Every file to write, as (path, bytes) pairs.
     pub files: Vec<(String, Vec<u8>)>,
-    /// Glyph directories whose `.glif` files not in `files` are stale and can be removed.
+    /// Glyph directories whose previously owned GLIFs can be removed when absent from `files`.
     pub glif_directories: Vec<String>,
 }
 
@@ -874,7 +874,7 @@ fn files_outside_sources<'a>(
 
 /// The files that persist `project`, relative to the folder it was opened from.
 ///
-/// Every source is written in full, retaining original bytes for unchanged glyphs.
+/// Every source is written in full, retaining original bytes for unchanged glyphs and metadata.
 /// The designspace is written only when its metadata changed.
 /// Call [`crate::font::project::Project::mark_saved`] once the host has written them.
 pub fn memory_save_files(
@@ -918,7 +918,7 @@ fn encode_memory_project(
             .unwrap_or(&empty_glif_paths);
         let mut encoded = ufo_files_from_font(&font, layer_directories, glif_paths)
             .map_err(|error| format!("{}: {error}", path.display()))?;
-        if into_new_folder && let Some(original) = bookkeeping.original_metadata.get(&path) {
+        if let Some(original) = bookkeeping.original_metadata.get(&path) {
             restore_unchanged_metadata(&mut encoded, original);
         }
         let prefix = path.to_string_lossy();
@@ -1251,7 +1251,7 @@ mod tests {
     }
 
     #[test]
-    fn full_copies_preserve_unchanged_ufo_metadata_and_empty_files() {
+    fn ordinary_saves_and_copies_preserve_unchanged_ufo_metadata_and_empty_files() {
         let mut files: Vec<(String, Vec<u8>)> = complete_files()
             .into_iter()
             .map(|(file, bytes)| (file.into(), bytes.to_vec()))
@@ -1270,12 +1270,18 @@ mod tests {
                 .collect()
         };
         let copy = metadata(copy);
+        let saved = metadata(memory_save_files(&opened.project, &opened.bookkeeping).unwrap());
+        assert_eq!(saved, copy);
         for (file, bytes) in &files {
             if file.ends_with(".plist") {
                 assert_eq!(copy.get(file), Some(bytes), "{file} keeps its input bytes");
             }
         }
         assert!(!copy.contains_key("kerning.plist"));
+        assert!(opened.project.set_feature_text(String::new()));
+        let cleared = metadata(memory_save_files(&opened.project, &opened.bookkeeping).unwrap());
+        assert!(!cleared.contains_key("features.fea"));
+        assert_eq!(cleared["groups.plist"], empty);
         let source = opened.project.source_id(0).unwrap();
         opened
             .project

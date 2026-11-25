@@ -34,6 +34,10 @@ function readFiles(directory, files = []) {
     await page.goto(process.env.RUNEBENDER_DEMO_URL || 'http://127.0.0.1:4326/');
     await page.waitForFunction(() => window.runebender);
     const files = readFiles(root);
+    const master = 'HOIShapes-Regular.ufo';
+    const emptyKerning = '<?xml version="1.0"?><plist version="1.0"><dict><!-- deliberately empty --></dict></plist>';
+    files.push([`${master}/features.fea`, [...Buffer.from('languagesystem DFLT dflt;\n')]]);
+    files.push([`${master}/kerning.plist`, [...Buffer.from(emptyKerning)]]);
     const error = await page.evaluate(files => window.runebender.openFiles(
       null, files.map(([name, bytes]) => [name, new Uint8Array(bytes)])), files);
     assert.equal(error, '', 'HOI Shapes opens in the actual browser host');
@@ -88,21 +92,46 @@ function readFiles(directory, files = []) {
     await page.evaluate(async () => {
       const root = await navigator.storage.getDirectory();
       window.testFontDirectory = await root.getDirectoryHandle('family-copy', { create: true });
+      const ufo = await window.testFontDirectory.getDirectoryHandle('HOIShapes-Regular.ufo', { create: true });
+      const glyphs = await ufo.getDirectoryHandle('glyphs', { create: true });
+      window.externalGlyph = await glyphs.getFileHandle('external.glif', { create: true });
+      const stream = await window.externalGlyph.createWritable();
+      await stream.write('outside work');
+      await stream.close();
     });
     await fileCommand('Control+Shift+s', 'Saved HOIShapes.designspace');
+    assert.equal(await page.evaluate(async () => (await window.externalGlyph.getFile()).text()), 'outside work',
+      'Save As leaves unrelated glyphs in an existing destination');
     const copiedNames = await page.evaluate(async () => {
       const names = [];
       for await (const name of window.testFontDirectory.keys()) names.push(name);
       return names.sort();
     });
     assert.deepEqual(copiedNames, [...new Set(files.map(([path]) => path.split('/')[0]))].sort(),
-      'Save As writes the designspace and every master into the empty destination');
+      'Save As writes the designspace and every master into the destination');
     await fileCommand('Control+o', 'Opened HOIShapes.designspace');
     assert.equal((await page.evaluate(() => window.runebender.state())).glyph_count, state.glyph_count,
       'the saved family reopens from its own directory');
 
+    await page.mouse.click(1068, 451); // Features disclosure
+    await page.mouse.click(1044, 480); // shared features.fea field
+    await page.waitForFunction(() => document.activeElement.id === 'text-input');
+    await page.keyboard.press('Control+a');
+    await page.keyboard.press('Backspace');
+    await page.mouse.click(1244, 739); // Apply shared features
+    await page.waitForFunction(() => window.runebender.state().modified);
+    await fileCommand('Control+s', 'Saved HOIShapes.designspace');
+    const optionalTables = await page.evaluate(async master => {
+      const ufo = await window.testFontDirectory.getDirectoryHandle(master);
+      const names = [];
+      for await (const name of ufo.keys()) names.push(name);
+      const kerning = await ufo.getFileHandle('kerning.plist');
+      return { featuresPresent: names.includes('features.fea'), kerning: await (await kerning.getFile()).text() };
+    }, master);
+    assert.equal(optionalTables.featuresPresent, false, 'clearing all feature code removes the owned file on Save');
+    assert.equal(optionalTables.kerning, emptyKerning, 'ordinary Save retains an intentionally empty original table byte for byte');
+
     // Open the UFO itself. A failed copy must leave ordinary Save rooted at that UFO.
-    const master = 'HOIShapes-Regular.ufo';
     const openBox = async () => {
       await page.mouse.dblclick(425, 150, { delay: 100 });
       await page.waitForFunction(() => {
@@ -122,6 +151,13 @@ function readFiles(directory, files = []) {
       window.testFontDirectory = await window.testFontDirectory.getDirectoryHandle(master);
     }, master);
     await fileCommand('Control+o', `Opened ${master}`);
+    await page.evaluate(async () => {
+      const glyphs = await window.testFontDirectory.getDirectoryHandle('glyphs');
+      window.newExternalGlyph = await glyphs.getFileHandle('new-external.glif', { create: true });
+      const stream = await window.newExternalGlyph.createWritable();
+      await stream.write('new outside work');
+      await stream.close();
+    });
     await page.evaluate(async master => {
       const root = await navigator.storage.getDirectory();
       const blocked = await root.getDirectoryHandle('blocked', { create: true });
@@ -133,6 +169,8 @@ function readFiles(directory, files = []) {
     const firstEdit = await nudgeBox();
     assert.notDeepEqual(firstEdit, original);
     await fileCommand('Control+s', `Saved ${master}`);
+    assert.equal(await page.evaluate(async () => (await window.newExternalGlyph.getFile()).text()), 'new outside work',
+      'ordinary Save preserves a glyph added externally after Open');
     await page.evaluate(async master => {
       const root = await navigator.storage.getDirectory();
       const copy = await root.getDirectoryHandle('family-copy');
@@ -145,11 +183,32 @@ function readFiles(directory, files = []) {
       window.testFontDirectory = await root.getDirectoryHandle('single-copy', { create: true });
     });
     await fileCommand('Control+Shift+s', `Saved ${master}`);
+    const pendingEdit = await nudgeBox();
+    await page.evaluate(() => {
+      const create = FileSystemFileHandle.prototype.createWritable;
+      FileSystemFileHandle.prototype.createWritable = async function (...args) {
+        if (this.name === 'box.glif') {
+          FileSystemFileHandle.prototype.createWritable = create;
+          await new Promise(resolve => { window.finishFirstWrite = resolve; });
+        }
+        return create.apply(this, args);
+      };
+    });
+    await page.keyboard.press('Control+s');
+    await page.waitForFunction(() => window.finishFirstWrite);
     const secondEdit = await nudgeBox();
-    assert.notDeepEqual(secondEdit, firstEdit);
-    await fileCommand('Control+s', `Saved ${master}`);
+    assert.notDeepEqual(secondEdit, pendingEdit);
+    await page.keyboard.press('Control+s');
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await page.evaluate(() => window.finishFirstWrite());
+    await page.waitForFunction(() => !window.runebender.state().modified);
     await fileCommand('Control+o', `Opened ${master}`);
     assert.deepEqual(await openBox(), secondEdit, 'the new copy contains the subsequent edit');
+
+    const sameFolderEdit = await nudgeBox();
+    await fileCommand('Control+Shift+s', `Saved ${master}`);
+    await fileCommand('Control+o', `Opened ${master}`);
+    assert.deepEqual(await openBox(), sameFolderEdit, 'Save As into the current folder can update owned files');
 
     // A denied write offers an editable copy while keeping the original dirty for retry.
     const deniedEdit = await nudgeBox();
@@ -188,6 +247,20 @@ function readFiles(directory, files = []) {
     ]);
     assert.match(explicitCopy.suggestedFilename(), /\.zip$/);
     assert.equal((await page.evaluate(() => window.runebender.state())).modified, false);
+
+    await nudgeBox();
+    await page.evaluate(async master => {
+      const ufo = await window.testFontDirectory.getDirectoryHandle(master);
+      const glyphs = await ufo.getDirectoryHandle('glyphs');
+      window.changedGlyph = await glyphs.getFileHandle('box.glif');
+      const stream = await window.changedGlyph.createWritable();
+      await stream.write('externally changed box');
+      await stream.close();
+    }, master);
+    await fileCommand('Control+s', 'Save failed');
+    assert.match((await page.evaluate(() => window.runebender.state())).note, /box\.glif changed outside/);
+    assert.equal(await page.evaluate(async () => (await window.changedGlyph.getFile()).text()), 'externally changed box');
+    assert.equal((await page.evaluate(() => window.runebender.state())).modified, true);
 
     assert.deepEqual(errors, [], 'no browser errors');
     console.log(`HOI Shapes browser preservation passed: ${count} original GLIFs unchanged`);

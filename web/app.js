@@ -17,7 +17,7 @@ function fail(error) {
   console.error(error);
 }
 // Fonts on disk: the File System Access API reads and writes the folder the user picks.
-const folder = { handle: null, name: null, portable: false, busy: false };
+const folder = { handle: null, name: null, portable: false, busy: false, generation: 0, queuedSave: null, baseline: new Map(), pendingCopy: null };
 const hasFolders = typeof window.showDirectoryPicker === 'function';
 const recovery = fontRecovery({
   capture() {
@@ -77,16 +77,61 @@ async function writeFile(directory, path, bytes) {
     throw error;
   }
 }
-async function pruneGlifs(directory, path, written) {
-  let at = directory;
+async function existingFile(directory, path) {
+  const parts = path.split('/');
   try {
-    for (const part of path.split('/')) at = await at.getDirectoryHandle(part);
+    for (const part of parts.slice(0, -1)) directory = await directory.getDirectoryHandle(part);
+    const file = await directory.getFileHandle(parts.at(-1));
+    return new Uint8Array(await (await file.getFile()).arrayBuffer());
   } catch (error) {
-    if (error.name === 'NotFoundError') return;
+    if (error.name === 'NotFoundError') return undefined;
     throw error;
   }
-  for await (const [name, handle] of at.entries()) {
-    if (handle.kind === 'file' && name.endsWith('.glif') && !written.has(`${path}/${name}`)) await at.removeEntry(name);
+}
+function sameBytes(a, b) {
+  return a === b || (a !== undefined && b !== undefined && a.length === b.length && a.every((value, i) => value === b[i]));
+}
+async function writeChanges(directory, files, prune, baseline) {
+  const desired = new Map(files);
+  const glyphDirectories = new Set(prune);
+  const optionalTables = new Set();
+  for (const directory of glyphDirectories) {
+    if (directory !== 'glyphs' && !directory.endsWith('/glyphs')) continue;
+    const prefix = directory.slice(0, -'glyphs'.length);
+    for (const name of ['features.fea', 'groups.plist', 'kerning.plist']) optionalTables.add(prefix + name);
+  }
+  for (const path of baseline.keys()) {
+    const managedGlyph = path.endsWith('.glif') && glyphDirectories.has(path.slice(0, path.lastIndexOf('/')));
+    if (!desired.has(path) && (managedGlyph || optionalTables.has(path))) {
+      desired.set(path, undefined);
+    }
+  }
+  const changes = [];
+  for (const [path, bytes] of desired) {
+    const before = baseline.get(path);
+    if (sameBytes(before, bytes)) continue;
+    const current = await existingFile(directory, path);
+    if (!sameBytes(current, before) && !sameBytes(current, bytes)) {
+      throw new Error(`${path} changed outside Runebender. Save As to a different folder or reopen the project.`);
+    }
+    changes.push([path, bytes]);
+  }
+  for (const [path, bytes] of changes) {
+    // Recheck immediately before each write and remember each completed change for a retry.
+    const current = await existingFile(directory, path);
+    if (!sameBytes(current, bytes)) {
+      if (!sameBytes(current, baseline.get(path))) throw new Error(`${path} changed during Save. Save As to a different folder or reopen the project.`);
+      if (bytes === undefined) {
+        const parts = path.split('/');
+        let parent = directory;
+        for (const part of parts.slice(0, -1)) parent = await parent.getDirectoryHandle(part);
+        await parent.removeEntry(parts.at(-1));
+      } else {
+        await writeFile(directory, path, bytes);
+      }
+    }
+    if (bytes === undefined) baseline.delete(path);
+    else baseline.set(path, bytes.slice());
   }
 }
 const handleStore = {
@@ -134,6 +179,9 @@ async function openSources(name, files, directory) {
   folder.portable = !directory;
   folder.archiveDownload = false;
   folder.handle = directory;
+  folder.generation++;
+  folder.baseline = directory ? new Map(files) : new Map();
+  folder.pendingCopy = null;
   await handleStore.set(directory);
 }
 async function openFolder(directory) {
@@ -191,9 +239,17 @@ async function saveFolder(intoNewFolder) {
   const bytes = editor.save_bundle(intoNewFolder);
   if (!bytes.length) return false;
   const { files, prune } = unbundle(bytes);
-  const written = new Set();
-  for (const [path, data] of files) { await writeFile(directory, path, data); written.add(path); }
-  for (const path of prune) await pruneGlifs(directory, path, written);
+  let baseline = folder.baseline;
+  if (intoNewFolder) {
+    if (!folder.pendingCopy || !await directory.isSameEntry(folder.pendingCopy.directory)) {
+      const currentFolder = folder.handle && await directory.isSameEntry(folder.handle);
+      folder.pendingCopy = { directory, baseline: currentFolder ? folder.baseline : new Map() };
+    }
+    baseline = folder.pendingCopy.baseline;
+  }
+  await writeChanges(directory, files, prune, baseline);
+  folder.baseline = baseline;
+  folder.pendingCopy = null;
   folder.handle = directory;
   folder.name = directory.name;
   folder.archiveDownload = false;
@@ -236,7 +292,10 @@ async function saveSources(intoNewFolder) {
   }
 }
 async function hostRequest(request) {
-  if (folder.busy) return;
+  if (folder.busy) {
+    if (request === 'save') folder.queuedSave = folder.generation;
+    return;
+  }
   folder.busy = true;
   const kind = request === 'open' ? 'open' : 'save';
   try {
@@ -248,9 +307,15 @@ async function hostRequest(request) {
   } catch (error) {
     editor.host_result(kind, false, error?.name === 'AbortError' ? '' : String(error?.message ?? error));
   } finally {
-    folder.busy = false;
-    schedule();
+    finishFolderRequest();
   }
+}
+function finishFolderRequest() {
+  folder.busy = false;
+  const queued = folder.queuedSave;
+  folder.queuedSave = null;
+  if (queued === folder.generation) void hostRequest('save');
+  schedule();
 }
 canvas.addEventListener('dragover', e => e.preventDefault());
 canvas.addEventListener('drop', async e => {
@@ -266,8 +331,7 @@ canvas.addEventListener('drop', async e => {
   } catch (error) {
     editor.host_result('open', false, String(error?.message ?? error));
   } finally {
-    folder.busy = false;
-    schedule();
+    finishFolderRequest();
   }
 });
 function feedback() {

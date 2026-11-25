@@ -41,6 +41,7 @@ export function fontRecovery({ capture, restore, warn }) {
   const id = Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16).padStart(8, '0')).join('');
   const lock = key => 'runebender-draft-' + key;
   let database, observed, timer, deadline, retry = false, hasRecord = false, generation = 0;
+  let lockProtected = false;
   const open = () => database ??= openDrafts().catch(error => { database = undefined; throw error; });
   const report = error => warn(String(error?.message || error));
 
@@ -75,7 +76,7 @@ export function fontRecovery({ capture, restore, warn }) {
     }
     try {
       const { name, bytes } = capture();
-      const label = { id, name, revision, master, savedAt: Date.now() };
+      const label = { id, name, revision, master, savedAt: Date.now(), lockProtected };
       hasRecord = true;
       open().then(db => {
         if (current !== generation) return;
@@ -109,7 +110,7 @@ export function fontRecovery({ capture, restore, warn }) {
       // The browser releases this lock on navigation, tab close, or process death.
       try {
         await new Promise((resolve, reject) => {
-          locks.request(lock(id), () => { resolve(); return new Promise(() => {}); }).catch(reject);
+          locks.request(lock(id), () => { lockProtected = true; resolve(); return new Promise(() => {}); }).catch(reject);
         });
         active = new Set((await locks.query()).held.map(entry => entry.name));
       } catch { locks = null; }
@@ -121,6 +122,15 @@ export function fontRecovery({ capture, restore, warn }) {
     const select = document.querySelector('#drafts');
     select.replaceChildren(...choices.map(item => new Option(
       item.name + ' · ' + new Date(item.savedAt).toLocaleString(), item.id)));
+    // A checkpoint written without a lifetime lock may still belong to a running editor.
+    const canRemove = () => Boolean(locks && choices.find(item => item.id === select.value)?.lockProtected);
+    const discard = dialog.querySelector('[value="discard"]');
+    const showActions = () => {
+      discard.disabled = !canRemove();
+      discard.title = discard.disabled ? 'Another tab may own this checkpoint. You can recover a copy.' : '';
+    };
+    select.onchange = showActions;
+    showActions();
     const decision = new Promise(resolve => dialog.addEventListener('close', resolve, { once: true }));
     dialog.showModal();
     await decision;
@@ -129,6 +139,7 @@ export function fontRecovery({ capture, restore, warn }) {
     const old = select.value;
     async function use() {
       if (action === 'discard') {
+        if (!canRemove()) return false;
         await write(db, (labels, sources) => { labels.delete(old); sources.delete(old); });
         return false;
       }
@@ -140,10 +151,10 @@ export function fontRecovery({ capture, restore, warn }) {
       restore(label, source);
       hasRecord = true;
       await write(db, (labels, sources) => {
-        labels.put({ ...label, id }, id);
+        labels.put({ ...label, id, lockProtected }, id);
         sources.put(source, id);
         // Without Web Locks the other tab may still own this record. Restore a copy.
-        if (locks) {
+        if (canRemove()) {
           labels.delete(old);
           sources.delete(old);
         }

@@ -119,6 +119,16 @@ async function waitForCheckpoint(page, revision, featureDraft) {
     await second.waitForFunction(() => window.runebender || document.querySelector('#recovery').open);
     assert.equal(await second.locator('#recovery').isVisible(), false, 'an active tab owns its own draft');
     await second.close();
+    const lockless = await context.newPage();
+    await lockless.addInitScript(() => Object.defineProperty(navigator, 'locks', { value: undefined }));
+    await lockless.goto(url);
+    const locklessDialog = lockless.locator('#recovery');
+    await locklessDialog.waitFor({ state: 'visible' });
+    assert.equal(await locklessDialog.getByRole('button', { name: 'Discard selected checkpoint' }).isDisabled(), true);
+    await lockless.evaluate(() => document.querySelector('#recovery').close('discard'));
+    await lockless.waitForFunction(() => window.runebender);
+    assert.deepEqual(await original.evaluate(checkpointAfter, -1), retry, 'a tab without locks cannot discard another tab’s checkpoint');
+    await lockless.close();
     await original.close();
 
     const reopened = await context.newPage();
