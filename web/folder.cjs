@@ -52,6 +52,8 @@ function readTree(root, directory, out) {
       return null;
     });
     assert.ok(marker, 'an outline point marker is painted');
+    // The UI remains editable while the page writes the encoded snapshot.
+    await page.evaluate(() => { window.runebender.saveFiles(); });
     const before = (await state()).points;
     await page.mouse.move(...marker); await page.mouse.down();
     await page.mouse.move(marker[0] + 24, marker[1] - 16, { steps: 12 }); await page.mouse.up();
@@ -59,6 +61,10 @@ function readTree(root, directory, out) {
     const edited = await state();
     assert.notDeepEqual(edited.points, before, 'the drag moves a point');
     assert.equal(edited.modified, true, 'the edit marks the document modified');
+    await page.evaluate(() => window.runebender.saved());
+    const duringSave = await state();
+    assert.equal(duringSave.modified, true, 'a completed older snapshot leaves the later edit dirty');
+    assert.match(duringSave.note, /newer edits still need saving/i);
     const saved = await page.evaluate(() => {
       const bundle = window.runebender.saveFiles();
       return bundle && { prune: bundle.prune, files: bundle.files.map(([p, b]) => [p, b.length]) };

@@ -31,7 +31,8 @@ opens the Virtua Grotesk sources through the test hooks, edits a point, and comp
 saved file set with the opened one.
 
 Run `node web/hoi-preservation.cjs` against the built editor to check that HOI Shapes opens and all 18 unchanged GLIFs retain their exact bytes in a browser save package.
-This check uses only the synthetic fixture and writes no font files.
+The check also copies the family into Chromium's temporary origin-private file system with Save As and reopens it.
+It exercises ordinary Save after both a failed and a successful copy of a standalone UFO.
 Run `node web/hoi-editing.cjs` to exercise the interpolation tool with real pointer and keyboard input at 1280 × 800, DPR 1.
 It covers trajectory and control dragging, cancellation, selection, easing, scrubbing, compiled comparison, a read-only filled preview, history, interval scope, and save/reopen with all 18 GLIFs unchanged.
 Set `RUNEBENDER_HOI_PROOF_DIR` to save a screenshot of the authored result.

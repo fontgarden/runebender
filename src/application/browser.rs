@@ -23,7 +23,7 @@ use masonry::ui_events::{
     pointer::*,
 };
 use runebender::font::persistence::memory::{
-    MemoryBookkeeping, memory_save_files, open_memory_project,
+    MemoryBookkeeping, memory_save_as_files, memory_save_files, open_memory_project,
 };
 use runebender::font::project::Project;
 use std::{
@@ -153,6 +153,12 @@ fn build_bundle(files: &[(String, Vec<u8>)], prune: &[String]) -> Vec<u8> {
     bundle
 }
 
+/// The snapshot the page is writing. Only a completed write establishes its destination.
+struct PendingSave {
+    revision: u64,
+    into_new_folder: bool,
+}
+
 struct Host<V: WidgetView<AppState, Widget: Sized>, F> {
     app: AppState,
     view: V,
@@ -174,6 +180,7 @@ struct Host<V: WidgetView<AppState, Widget: Sized>, F> {
     bookkeeping: Option<MemoryBookkeeping>,
     /// The folder's own name when the user opened a UFO directory itself.
     ufo_root: Option<String>,
+    pending_save: Option<PendingSave>,
 }
 impl<V, F> Host<V, F>
 where
@@ -450,6 +457,7 @@ where
             Ok(()) => {
                 self.bookkeeping = Some(opened.bookkeeping);
                 self.ufo_root = ufo_name;
+                self.pending_save = None;
                 String::new()
             }
             Err(error) => {
@@ -469,20 +477,21 @@ where
         let bookkeeping = self
             .bookkeeping
             .get_or_insert_with(MemoryBookkeeping::default);
-        let save = match memory_save_files(&workspace.font.project, bookkeeping) {
+        let encode = if into_new_folder {
+            memory_save_as_files
+        } else {
+            memory_save_files
+        };
+        let save = match encode(&workspace.font.project, bookkeeping) {
             Ok(save) => save,
             Err(error) => {
                 self.set_note(format!("Save failed: {error}"));
                 return Vec::new();
             }
         };
-        if into_new_folder {
-            // The page writes into a folder the user just chose: the UFO sits inside it.
-            self.ufo_root = None;
-        }
         let mut files = save.files;
         let mut prune = save.glif_directories;
-        if let Some(root) = &self.ufo_root {
+        if !into_new_folder && let Some(root) = &self.ufo_root {
             let prefix = format!("{root}/");
             let strip = |path: &mut String| {
                 if let Some(rest) = path.strip_prefix(&prefix) {
@@ -492,25 +501,48 @@ where
             files.iter_mut().for_each(|(path, _)| strip(path));
             prune.iter_mut().for_each(strip);
         }
+        self.pending_save = Some(PendingSave {
+            revision: workspace.font.project.document_revision(),
+            into_new_folder,
+        });
         build_bundle(&files, &prune)
     }
     fn host_result(&mut self, kind: &str, ok: bool, message: &str) {
         let note = match (kind, ok) {
             ("save", true) => {
+                let Some(pending) = self.pending_save.take() else {
+                    return;
+                };
                 let Some(workspace) = self.app.workspace.as_mut() else {
                     return;
                 };
-                workspace.font.project.mark_saved();
-                workspace.modified = false;
+                if pending.into_new_folder {
+                    // The new handle is the parent of the UFO written by Save As.
+                    self.ufo_root = None;
+                }
+                if pending.revision == workspace.font.project.document_revision() {
+                    workspace.font.project.mark_saved();
+                    workspace.modified = workspace.features_edited;
+                }
                 let source = workspace.font.document_source();
                 let label = source
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| source.display().to_string());
-                format!("Saved {label}")
+                if workspace.modified {
+                    format!("Saved an earlier version of {label}. Newer edits still need saving.")
+                } else {
+                    format!("Saved {label}")
+                }
             }
-            ("save", false) if message.is_empty() => "Save cancelled".into(),
-            ("save", false) => format!("Save failed: {message}"),
+            ("save", false) => {
+                self.pending_save = None;
+                if message.is_empty() {
+                    "Save cancelled".into()
+                } else {
+                    format!("Save failed: {message}")
+                }
+            }
             (_, false) if message.is_empty() => "Open cancelled".into(),
             (_, false) => format!("Open failed: {message}"),
             _ => return,
@@ -592,6 +624,7 @@ where
         painted_theme: app.theme_id,
         bookkeeping: None,
         ufo_root: None,
+        pending_save: None,
         app,
         view,
         view_state,

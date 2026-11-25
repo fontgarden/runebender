@@ -162,6 +162,11 @@ pub struct MemoryBookkeeping {
     /// Per source path, files outside the UFO specification, written back unchanged.
     pub preserved: HashMap<PathBuf, Vec<(String, Vec<u8>)>>,
     original_glifs: HashMap<PathBuf, HashMap<String, super::OriginalGlif>>,
+    /// Opening XML and its canonical value, to retain comments and formatting in a copy.
+    original_designspace: Option<(
+        crate::font::model::designspace::CanonicalDesignspace,
+        Vec<u8>,
+    )>,
 }
 
 /// A project opened from in-memory files plus the host's save bookkeeping.
@@ -651,11 +656,12 @@ pub fn open_memory_project(
     match designspaces.as_slice() {
         [] => {}
         [designspace] => {
-            let xml = files
+            let bytes = files
                 .iter()
                 .find(|(path, _)| path == designspace)
-                .map(|(_, bytes)| String::from_utf8_lossy(bytes).into_owned())
+                .map(|(_, bytes)| bytes)
                 .ok_or("designspace vanished")?;
+            let xml = String::from_utf8_lossy(bytes);
             let document =
                 designspace_from_str(&xml).map_err(|error| format!("{designspace}: {error}"))?;
             let mut project = Project::from_designspace(document, |filename| {
@@ -670,6 +676,13 @@ pub fn open_memory_project(
             })?;
             project.export_source = Some(PathBuf::from(designspace));
             project.compute_compat();
+            bookkeeping.original_designspace = Some((
+                project
+                    .document_designspace()
+                    .ok_or("missing imported designspace")?
+                    .clone(),
+                bytes.clone(),
+            ));
             return Ok(MemoryProject {
                 project,
                 bookkeeping,
@@ -709,6 +722,24 @@ pub fn open_memory_project(
 pub fn memory_save_files(
     project: &crate::font::project::Project,
     bookkeeping: &MemoryBookkeeping,
+) -> Result<MemorySave, String> {
+    encode_memory_project(project, bookkeeping, false)
+}
+
+/// Encode every source and the current Designspace descriptor for a new destination.
+///
+/// A standalone UFO keeps its own directory and has no Designspace descriptor.
+pub fn memory_save_as_files(
+    project: &crate::font::project::Project,
+    bookkeeping: &MemoryBookkeeping,
+) -> Result<MemorySave, String> {
+    encode_memory_project(project, bookkeeping, true)
+}
+
+fn encode_memory_project(
+    project: &crate::font::project::Project,
+    bookkeeping: &MemoryBookkeeping,
+    into_new_folder: bool,
 ) -> Result<MemorySave, String> {
     let mut save = MemorySave::default();
     let empty_directories = HashMap::new();
@@ -750,7 +781,7 @@ pub fn memory_save_files(
             save.files.push((format!("{prefix}/{file}"), bytes.clone()));
         }
     }
-    if project.ds_dirty {
+    if project.ds_dirty || (into_new_folder && project.document_designspace().is_some()) {
         let destination = project
             .export_source
             .as_ref()
@@ -758,14 +789,16 @@ pub fn memory_save_files(
                 path.extension()
                     .is_some_and(|extension| extension == "designspace")
             })
-            .ok_or("the designspace changed but has no file to write")?;
-        let document = project
+            .ok_or("the designspace has no destination file")?;
+        let canonical = project
             .document_designspace()
-            .ok_or("designspace document is unavailable")?
-            .to_norad()?;
-        let xml = crate::formats::designspace::to_xml(&document)?;
+            .ok_or("designspace document is unavailable")?;
+        let bytes = match &bookkeeping.original_designspace {
+            Some((original, bytes)) if into_new_folder && original == canonical => bytes.clone(),
+            _ => crate::formats::designspace::to_xml(&canonical.to_norad()?)?.into_bytes(),
+        };
         save.files
-            .push((destination.to_string_lossy().into_owned(), xml.into_bytes()));
+            .push((destination.to_string_lossy().into_owned(), bytes));
     }
     Ok(save)
 }
@@ -1054,6 +1087,13 @@ mod tests {
 
     #[test]
     fn designspace_folder_round_trips_through_memory() {
+        fn descriptor(files: &[(String, Vec<u8>)]) -> &[u8] {
+            &files
+                .iter()
+                .find(|(name, _)| name == "Core.designspace")
+                .unwrap()
+                .1
+        }
         let root = crate::testing::fonts::dir();
         let mut files = Vec::new();
         read_tree(&root, &root, &mut files);
@@ -1062,7 +1102,12 @@ mod tests {
             (!path.contains('/') && path.ends_with(".designspace"))
                 || first_component(path).to_lowercase().ends_with(".ufo")
         });
-        let opened = open_memory_project(None, &files).expect("designspace folder opens");
+        let (_, xml) = files
+            .iter_mut()
+            .find(|(name, _)| name == "Core.designspace")
+            .unwrap();
+        xml.extend_from_slice(b"<!-- Preserve the designer's note in an unchanged copy. -->\n");
+        let mut opened = open_memory_project(None, &files).expect("designspace folder opens");
         assert_eq!(opened.project.document_sources().count(), 2);
         assert!(!opened.project.is_modified());
         assert_eq!(
@@ -1091,6 +1136,15 @@ mod tests {
             "the saved file set matches the opened one"
         );
 
+        let copy = memory_save_as_files(&opened.project, &opened.bookkeeping).unwrap();
+        assert_eq!(descriptor(&copy.files), descriptor(&files));
+        let reopened = open_memory_project(None, &copy.files).expect("the copied family reopens");
+        assert_eq!(
+            reopened.project.document_designspace(),
+            opened.project.document_designspace()
+        );
+        assert_eq!(reopened.project.document_sources().count(), 2);
+
         for source in opened.project.document_sources() {
             let prefix = format!("{}/", source.path().display());
             let before: Vec<(&str, &[u8])> = files
@@ -1115,5 +1169,24 @@ mod tests {
                 "{prefix} is unchanged by a round trip"
             );
         }
+
+        let bold = opened.project.source_id(1).unwrap();
+        let location = opened.project.master_locations()[1].clone();
+        opened
+            .project
+            .update_source(bold, "Heavy", &location)
+            .unwrap();
+        let edited = memory_save_files(&opened.project, &opened.bookkeeping).unwrap();
+        assert_ne!(descriptor(&edited.files), descriptor(&files));
+        opened.project.mark_saved();
+        let copy = memory_save_as_files(&opened.project, &opened.bookkeeping).unwrap();
+        assert_eq!(descriptor(&copy.files), descriptor(&edited.files));
+        let reopened = open_memory_project(None, &copy.files).expect("the edited family reopens");
+        assert_eq!(
+            reopened.project.document_designspace().unwrap().sources()[1]
+                .style_name
+                .as_deref(),
+            Some("Heavy")
+        );
     }
 }
