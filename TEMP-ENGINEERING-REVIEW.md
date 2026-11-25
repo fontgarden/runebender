@@ -2,6 +2,22 @@
 
 November 25, 2026 · [Reviewed revision `dfa8ace`](https://github.com/fontgarden/runebender/tree/dfa8ace636c02d7533743ecfa72e6db1b51547dc)
 
+## Implementation follow-up
+
+| Finding | Local implementation and regression check |
+| --- | --- |
+| 1 · Browser Save As | A copy now includes the designspace and all loaded UFO masters. It retains the original XML when the descriptor is unchanged. The headless Chrome regression uses the normal Save As command and reopens the saved folder. |
+| 2 · Native save retry | A successful working-UFO save leaves a failed write to the original pending. Retry tests reopen Glyphs, Glyphs package, and Fontra originals and verify the saved advance. |
+| 8 · Static kerning | Static export resolves missing exceptions from their groups and preserves explicit zero values. Compiled-font tests compare shaped static and variable advances in Regular, at the midpoint, and in Bold. |
+
+Finding 3 is partly addressed.
+Acknowledging an older browser save now leaves later edits marked dirty, but the browser still drops an additional Save request received while a write is underway.
+One kerning discrepancy also remains in live proofing when a nondefault master has a completely empty kerning table.
+The variable and static compilers skip that master for kerning interpolation, while the live interpolation can still blend toward zero.
+The [browser usability research](#browser-usability-research--november-25-2026) below sets out the next milestones and distinguishes the published editor from the local work.
+
+## Original review
+
 **I would fix Save As and save retries before the next release.**
 In a headless Chrome session, Save As reported “Saved Core.designspace” and produced a folder that Runebender could not reopen as a family.
 On the native engine, retrying a failed Glyphs save returned success while the original still contained the old width.
@@ -343,3 +359,62 @@ The proposed checks below translate the seven reference projects’ published en
 The [November 23 review](docs/QUALITY-REVIEW-2026-11-23.md) and [cleanup plan](docs/CLEANUP-PLAN.md) contain additional lower-level work.
 Check their status notes and the current implementation before scheduling an item.
 For example, the primary CI failure described in the earlier review has cleared, and the text buffer now retains multiple output glyphs per cluster. [Primary CI](https://github.com/fontgarden/runebender/actions/runs/45539409976) · [Current cluster storage](https://github.com/fontgarden/runebender/blob/dfa8ace636c02d7533743ecfa72e6db1b51547dc/src/text/buffer/shaping.rs#L174-L215)
+
+## Browser usability research · November 25, 2026
+
+**The first release target should be a type designer finishing a session on their own font.**
+They should be able to open a family, edit an outline in one master, check its spacing and marks in a word, recover from an interruption, and reopen editable sources in a fresh session.
+Switching masters and checking a substitution while drawing exercise workflows highlighted by Fontra and Counterpunch. [Fontra](https://docs.fontra.xyz/) · [Counterpunch](https://counterpunch.space/)
+
+### What reaches a designer today
+
+In an isolated headless Chrome profile at 1280 × 800 and 1× density, the public editor opened the 863-glyph demo through the website’s iframe.
+The public build manifest identified source `02df900` and release `0e3910c0aa18816f`, predating the implementation reviewed here.
+The browser reported 7,452,082 encoded bytes and 25,576,822 decoded bytes for the public Wasm response.
+The local pre-fix module was 26,487,732 bytes, served uncompressed.
+These counts measure the module payload.
+Startup and input latency need separate measurements. [Published editor](https://runebender.org/wasm-editor/) · [Published build manifest](https://runebender.org/app/build-info.json)
+
+The shared widget tree already draws and edits outlines, and File → Export downloads a compiled TTF.
+On a browser with directory handles, the page can open a UFO package or a folder containing one designspace and its sibling UFOs.
+When the directory picker is unavailable, the current picker workflow offers no way to import the designer’s own source and download an editable copy.
+IndexedDB remembers a directory handle.
+The latest unsaved drawing lives in the tab. [Browser host](web/README.md) · [Folder discovery and persistence](web/app.js) · [Font export](src/application/platform/export.rs)
+
+### Milestones and acceptance tests
+
+1. **Let designers bring a project and take the editable source home.**
+   Keep direct folder writing when supported and permitted.
+   Offer directory import using a file input and relative paths, with a downloadable ZIP containing the complete source tree as the portable save path.
+   Reuse the Rust package decoder and full-copy encoder for both routes.
+   Show the current destination explicitly and distinguish downloading editable sources from exporting a TTF.
+   Test Chrome and Edge with a writable folder, then exercise the portable route in Firefox and Safari and after permission denial.
+   In a fresh session, open the saved family, compare both masters, advances, anchors, features and an untouched GLIF, then export and shape a word.
+   Include a descriptor that references `masters/Regular.ufo`, which the current top-level folder scan misses.
+   Resolve those referenced paths within the selected directory or explain which source is missing. [Folder reader](web/app.js) · [Directory input and relative paths](https://developer.mozilla.org/en-US/docs/Web/API/HTMLInputElement/webkitdirectory) · [Directory picker requirements](https://developer.mozilla.org/en-US/docs/Web/API/Window/showDirectoryPicker)
+
+2. **Recover an interrupted session and preserve edits from other tools.**
+   Store a revisioned recovery snapshot in origin-private storage independently of an explicit source save.
+   Record which snapshot completed, keep the previous complete one during a write, and offer recovery on the next visit.
+   Recheck remembered directory permissions on return and request renewed access from a user gesture.
+   If storage is full or access is revoked, keep the document open and offer source download.
+   Test closing the tab mid-checkpoint, finishing an old save after a newer edit, and editing a GLIF externally between open and save.
+   The next session should identify the last recoverable revision, and writing over an external change should require a decision.
+   Browser-managed storage can be evicted or cleared, so communicate when a user-owned copy last succeeded. [Chrome’s permission guidance](https://developer.chrome.com/docs/capabilities/web-apis/file-system-access) · [Origin-private storage](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system) · [Storage quotas and eviction](https://developer.mozilla.org/en-US/docs/Web/API/Storage_API/Storage_quotas_and_eviction_criteria)
+
+3. **Keep the editor responsive during a real proof and export.**
+   The host writes a full RGBA image to the 2D canvas on every rendered frame, and browser export presently builds the font synchronously.
+   At 1280 × 800 and 2× density the pixel payload alone is 16,384,000 bytes per frame.
+   Measure cold load to first usable glyph, folder open, input to next paint during a drag, and the longest main-thread task during export.
+   Record device, browser, network, release, fixture, and display scale.
+   Start with the two-master Core fixture and a production-sized family at 1× and 2×.
+   A proposed 60 Hz target is p95 drag-to-next-paint within 16.7 ms on a named reference machine.
+   Move compilation to a worker if traces show it blocking typing or cancellation, then re-run the same trace and compare the exported font. [Frame upload](web/app.js) · [Browser compiler path](src/application/platform/export.rs) · [Long-task measurement](https://web.dev/articles/optimize-long-tasks)
+
+4. **Qualify the build users actually launch.**
+   Run the folder round-trip and portable source-download checks through the packaged iframe, assert the manifest’s source revision, and repeat with a returning browser profile across an update.
+   Extend the existing Chromium checks with Firefox and WebKit for the portable route.
+   On shipping Safari and Chrome, verify OS file selection, IME composition in a proof, keyboard-only glyph selection, and screen-reader announcement of the selected glyph.
+   The existing suite exercises synthetic composition, outline dragging, undo, and export and provides a starting point.
+   The installation manifest currently launches an app that needs network access at startup.
+   If offline launch becomes a release promise, cache the wrapper, loader, bindings, and Wasm as one version and verify a disconnected restart with a recoverable project. [Current browser checks](web/quality.cjs) · [CI matrix](.github/workflows/ci.yml) · [Installation and wrapper](web/README.md) · [Playwright browser coverage](https://playwright.dev/docs/browsers)
