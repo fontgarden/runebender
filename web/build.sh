@@ -14,3 +14,7 @@ if [ "$("$bindgen_tool" --version)" != 'wasm-bindgen 0.2.127' ]; then
 fi
 "$bindgen_tool" web/target/wasm32-unknown-unknown/release/runebender_browser.wasm --target web --out-dir web/pkg
 cp web/recovery.js web/pkg/recovery.js
+# The website versions the generated loader by content. Include the helper's version in it
+# so a recovery-only update also gets a new loader and a fresh helper request.
+recovery_hash=$(python3 -c 'import hashlib, pathlib; print(hashlib.sha256(pathlib.Path("web/recovery.js").read_bytes()).hexdigest()[:16])')
+printf '\nexport { fontRecovery } from "./recovery.js?v=%s";\n' "$recovery_hash" >> web/pkg/runebender_browser.js

@@ -1,6 +1,4 @@
-import init, { BrowserEditor } from './pkg/runebender_browser.js';
-// The published loader's query identifies its release, including its recovery helper.
-const { fontRecovery } = await import('./pkg/recovery.js' + new URL(import.meta.url).search);
+import init, { BrowserEditor, fontRecovery } from './pkg/runebender_browser.js';
 const canvas = document.querySelector('#app');
 const context = canvas.getContext('2d', { alpha: false });
 const textInput = document.querySelector('#text-input');
