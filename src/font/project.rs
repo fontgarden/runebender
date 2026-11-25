@@ -25,6 +25,7 @@ use super::variable::{
 use crate::font::model::glyph_metadata::MarkColor;
 use crate::font::var_model::{Location, VariationModel};
 use crate::formats::binary_import::import_binary_font;
+use crate::formats::foreign::{ForeignDocument, ForeignSource};
 
 /// Resolve one glyph outline with every component, failing on a missing or cyclic component.
 ///
@@ -397,9 +398,8 @@ pub struct Project {
     pub experiments: super::experiments::Experiments,
     /// The Glyphs file or Fontra folder this project's UFOs were converted from, which Save
     /// also writes back to.
-    pub foreign_source: Option<crate::formats::foreign::ForeignSource>,
-    /// The working copy has been saved since the last successful write to the foreign source.
-    foreign_write_back_pending: bool,
+    pub foreign_source: Option<ForeignSource>,
+    foreign_document: ForeignDocument,
     /// What the conversion from a foreign source could not read.
     pub import_warnings: Vec<String>,
 }
@@ -563,7 +563,7 @@ impl Project {
             brace: Vec::new(),
             experiments: super::experiments::Experiments::default(),
             foreign_source: None,
-            foreign_write_back_pending: false,
+            foreign_document: ForeignDocument::default(),
             import_warnings: Vec::new(),
         }
     }
@@ -584,36 +584,13 @@ impl Project {
 
     /// Loads a project by file type without filling in `export_source` or computing compatibility. Prefer [`Project::load`].
     fn load_inner(path: &Path) -> Result<Self, String> {
-        let glyphs_ext = path.extension().and_then(|e| e.to_str()).map(|e| {
-            if e.eq_ignore_ascii_case("glyphspackage") {
-                GlyphsSource::Package
-            } else if e.eq_ignore_ascii_case("glyphs") {
-                GlyphsSource::File
-            } else {
-                GlyphsSource::Neither
-            }
-        });
-        let foreign = crate::formats::foreign::ForeignFormat::of(path);
-        if let Some(format) = foreign {
-            let result = match glyphs_ext {
-                Some(GlyphsSource::Package) => {
-                    let entries = read_glyphspackage(path)?;
-                    crate::formats::glyphs_import::glyphs_package_to_ufo_files(&entries)?
-                }
-                Some(GlyphsSource::File) => {
-                    let text = std::fs::read_to_string(path).map_err(|e| format!("{e}"))?;
-                    crate::formats::glyphs_import::glyphs_to_ufo_files(&text)?
-                }
-                _ => crate::formats::fontra::to_ufo_files(path)?,
-            };
-            let warnings = result.warnings.clone();
-            let open = super::persistence::publish_converted_import(path, result)?;
+        if let Some((source, foreign, mut conversion)) = ForeignDocument::open(path)? {
+            let warnings = std::mem::take(&mut conversion.warnings);
+            let open = super::persistence::publish_converted_import(path, conversion)?;
             let mut project = Self::load_inner(&open)?;
             project.export_source = Some(open);
-            project.foreign_source = Some(crate::formats::foreign::ForeignSource {
-                path: path.to_path_buf(),
-                format,
-            });
+            project.foreign_source = Some(source);
+            project.foreign_document = foreign;
             project.import_warnings = warnings;
             return Ok(project);
         }
@@ -1571,7 +1548,9 @@ impl Project {
 
     /// Whether any source, Designspace metadata or foreign original still needs saving.
     pub fn is_modified(&self) -> bool {
-        self.foreign_write_back_pending || self.ds_dirty || self.sources.iter().any(|s| s.dirty)
+        (self.foreign_source.is_some() && self.foreign_document.needs_write_back())
+            || self.ds_dirty
+            || self.sources.iter().any(|s| s.dirty)
     }
 
     /// Whether one stable source has unsaved changes.
@@ -2355,29 +2334,16 @@ impl Project {
         if self.sources.is_empty() {
             return Err("a filesystem export needs at least one UFO source".into());
         }
-        if !exports.is_empty() || designspace.is_some() {
+        let changed = !exports.is_empty() || designspace.is_some();
+        if changed {
             super::persistence::ExportPlan::new(exports, designspace)?.execute()?;
             self.mark_saved();
-            self.foreign_write_back_pending = self.foreign_source.is_some();
         }
-        if self.foreign_write_back_pending {
-            let foreign = self
-                .foreign_source
-                .as_ref()
-                .ok_or("missing foreign save destination")?;
-            let working = self
-                .export_source
-                .as_ref()
-                .ok_or("missing UFO working copy")?;
-            crate::formats::foreign::write_back(foreign, working).map_err(|error| {
-                format!(
-                    "the UFO working copy saved, but {} did not: {error}",
-                    foreign.path.display()
-                )
-            })?;
-            self.foreign_write_back_pending = false;
-        }
-        Ok(())
+        self.foreign_document.save(
+            self.foreign_source.as_ref(),
+            self.export_source.as_deref(),
+            changed,
+        )
     }
 
     /// Mark the sources from a recovery checkpoint as awaiting an explicit save.

@@ -736,7 +736,7 @@ fn create_parent_directories(path: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(created)
 }
 
-fn fresh_sibling(path: &Path, purpose: &str) -> Result<PathBuf, String> {
+pub(crate) fn fresh_sibling(path: &Path, purpose: &str) -> Result<PathBuf, String> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let parent = path.parent().unwrap_or(Path::new("."));
     let name = path
@@ -763,7 +763,7 @@ fn paths_overlap(left: &Path, right: &Path) -> bool {
     left == right || left.starts_with(right) || right.starts_with(left)
 }
 
-pub(super) fn path_entry_exists(path: &Path) -> Result<bool, String> {
+pub(crate) fn path_entry_exists(path: &Path) -> Result<bool, String> {
     match fs::symlink_metadata(path) {
         Ok(_) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),

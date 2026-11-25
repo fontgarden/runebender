@@ -5,9 +5,9 @@
 //! `.glyphspackage` folder.
 //!
 //! Each master maps to the working-copy UFO that [`super::glyphs_import`] named for it.
-//! A master layer is replaced only when its drawing differs from what the import made of it,
-//! so unedited layers keep Glyphs data the import does not read, such as hints and node user
-//! data. New glyphs are added and deliberately deleted imported glyphs are removed; glyphs
+//! Width, anchors and shapes are compared separately with the UFO projection of the Glyphs layer.
+//! A spacing edit leaves the original path, component and anchor records intact.
+//! New glyphs are added and deliberately deleted imported glyphs are removed; glyphs
 //! skipped by the original import remain untouched, tracked separately from the working set.
 //! Unicode values, kerning groups and kerning follow the working copy when they changed.
 //! The rest of the file is kept as glyphslib reads it; a Glyphs 2 file is written as Glyphs 3.
@@ -20,9 +20,9 @@
 //! - glyphslib lays out the file differently from Glyphs (arrays on one line, for
 //!   example), so the first save of a single `.glyphs` file changes nearly every line in a
 //!   diff. A package keeps the original bytes of every file Runebender did not change.
-//! - An edited master layer is rebuilt from the UFO glyph. Its hints, node user data, path
-//!   attributes and anchor details (locked, orientation, user data) are lost, and its paths
-//!   are written before its components whatever the original order was.
+//! - When shapes change, they are rebuilt from the UFO glyph. Node user data and path
+//!   attributes are lost, and paths are written before components whatever the original order was.
+//!   Hints referring to changed nodes may no longer identify the intended positions.
 //! - Component transforms are decomposed into position, angle, scale and horizontal slant
 //!   only; vertical slant and smart-component settings of an edited component are lost.
 //! - Kerning groups come from the first master. Vertical kerning is not read or written.
@@ -46,7 +46,7 @@ use glyphslib::glyphs3::{
     Anchor, Component, Glyph, Glyphs3, Layer, Node, Path as GlyphsPath, Shape,
 };
 
-use super::foreign::{WorkingSource, same_drawing};
+use super::foreign::{WorkingSource, same_anchors, same_shapes};
 use super::glyphs_import::{
     is_backup_layer, kern_name, layer_to_norad, master_ufo_name, rtl_kern_name, rtl_kerning_glyphs,
     ufo_kerning,
@@ -112,39 +112,53 @@ fn restore_unchanged_package_files(
     stage: &Path,
     changes: &Changes,
 ) -> Result<(), String> {
-    let mut keep = vec!["UIState.plist"];
-    if !changes.glyph_set {
-        keep.push("order.plist");
-    }
-    if !changes.kerning {
-        keep.push("fontinfo.plist");
-    }
-    for name in keep {
-        let from = original.join(name);
-        if from.exists() {
-            std::fs::copy(&from, stage.join(name))
-                .map_err(|error| format!("{}: {error}", from.display()))?;
+    fn restore(
+        dir: &Path,
+        original: &Path,
+        stage: &Path,
+        changes: &Changes,
+    ) -> std::io::Result<()> {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let relative = path
+                .strip_prefix(original)
+                .expect("package walk stays under its root");
+            let target = stage.join(relative);
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
+                std::fs::create_dir_all(&target)?;
+                restore(&path, original, stage, changes)?;
+                continue;
+            }
+            if !kind.is_file() {
+                return Err(std::io::Error::other(format!(
+                    "unexpected package entry {}",
+                    path.display()
+                )));
+            }
+            let generated = if relative == Path::new("fontinfo.plist") {
+                changes.kerning
+            } else if relative == Path::new("order.plist") {
+                changes.glyph_set
+            } else if relative.parent() == Some(Path::new("glyphs"))
+                && path.extension().is_some_and(|ext| ext == "glyph")
+            {
+                // A glyph absent from staging was deleted. A changed glyph uses the generated file.
+                !target.exists()
+                    || glyph_name_in(&std::fs::read_to_string(&path)?)
+                        .is_none_or(|name| changes.glyphs.contains(&name))
+            } else {
+                false
+            };
+            if !generated {
+                std::fs::copy(&path, target)?;
+            }
         }
+        Ok(())
     }
-    let Ok(entries) = std::fs::read_dir(original.join("glyphs")) else {
-        return Ok(());
-    };
-    for entry in entries {
-        let path = entry
-            .map_err(|error| format!("{}: {error}", original.display()))?
-            .path();
-        let Some(file_name) = path.file_name() else {
-            continue;
-        };
-        let target = stage.join("glyphs").join(file_name);
-        let text = std::fs::read_to_string(&path).unwrap_or_default();
-        let unchanged = glyph_name_in(&text).is_some_and(|name| !changes.glyphs.contains(&name));
-        if unchanged && target.exists() {
-            std::fs::write(&target, text)
-                .map_err(|error| format!("{}: {error}", target.display()))?;
-        }
-    }
-    Ok(())
+    restore(original, original, stage, changes)
+        .map_err(|error| format!("{}: {error}", original.display()))
 }
 
 /// The `glyphname` of a package's `.glyph` file.
@@ -280,22 +294,10 @@ fn merge(font: &mut Glyphs3, sources: &[WorkingSource]) -> Result<Changes, Strin
             });
             match position {
                 Some(at) => {
-                    let unchanged = before
-                        .and_then(|before| {
-                            before
-                                .layers
-                                .iter()
-                                .find(|layer| {
-                                    layer.layer_id == *master
-                                        && layer.associated_master_id.is_none()
-                                })
-                                .map(|layer| (before, layer))
-                        })
-                        .and_then(|(before, layer)| layer_to_norad(&original, before, layer).ok())
-                        .is_some_and(|imported| same_drawing(&imported, edited));
-                    if !unchanged {
-                        apply(&mut glyph.layers[at], edited);
-                    }
+                    let imported = before.and_then(|before| {
+                        layer_to_norad(&original, before, &glyph.layers[at]).ok()
+                    });
+                    apply(&mut glyph.layers[at], edited, imported.as_ref());
                 }
                 None => {
                     let mut layer = blank_layer(
@@ -304,7 +306,7 @@ fn merge(font: &mut Glyphs3, sources: &[WorkingSource]) -> Result<Changes, Strin
                             .ok_or("the Glyphs file has no layer to copy")?,
                         master,
                     );
-                    apply(&mut layer, edited);
+                    apply(&mut layer, edited, None);
                     glyph.layers.push(layer);
                 }
             }
@@ -463,15 +465,16 @@ fn sync_backup_layers(
     let name = glyph.name.clone();
     let default_name = working.font.default_layer().name().to_string();
     let mut kept: HashSet<String> = HashSet::new();
+    let reserved = |name: &str| {
+        name == default_name
+            || name == "public.background"
+            || name.eq_ignore_ascii_case("background")
+            || name.starts_with("com.runebender.proposal.")
+            || name.starts_with(['{', '[', ']'])
+    };
     for ufo_layer in working.font.layers.iter() {
         let layer_name = ufo_layer.name().to_string();
-        if layer_name == default_name
-            || layer_name == "public.background"
-            || layer_name.eq_ignore_ascii_case("background")
-            || layer_name.starts_with("com.runebender.proposal.")
-            || layer_name.starts_with('{')
-            || layer_name.starts_with('[')
-        {
+        if reserved(&layer_name) {
             continue;
         }
         let Some(edited) = ufo_layer.get_glyph(name.as_str()) else {
@@ -483,12 +486,9 @@ fn sync_backup_layers(
         });
         match position {
             Some(at) => {
-                let unchanged = before
-                    .and_then(|before| layer_to_norad(original, before, &glyph.layers[at]).ok())
-                    .is_some_and(|imported| same_drawing(&imported, edited));
-                if !unchanged {
-                    apply(&mut glyph.layers[at], edited);
-                }
+                let imported = before
+                    .and_then(|before| layer_to_norad(original, before, &glyph.layers[at]).ok());
+                apply(&mut glyph.layers[at], edited, imported.as_ref());
             }
             None => {
                 let Some(template) = template else {
@@ -498,7 +498,7 @@ fn sync_backup_layers(
                 layer.layer_id = backup_layer_id(master, &name, &layer_name);
                 layer.associated_master_id = Some(master.to_owned());
                 layer.name = Some(layer_name);
-                apply(&mut layer, edited);
+                apply(&mut layer, edited, None);
                 glyph.layers.push(layer);
             }
         }
@@ -506,7 +506,10 @@ fn sync_backup_layers(
     // A backup layer that was read on open and is gone from the UFO was deleted.
     glyph.layers.retain(|layer| {
         !is_backup_layer(layer, master)
-            || layer.name.as_ref().is_some_and(|name| kept.contains(name))
+            || layer
+                .name
+                .as_ref()
+                .is_some_and(|name| reserved(name) || kept.contains(name))
             || before.is_none_or(|before| layer_to_norad(original, before, layer).is_err())
     });
 }
@@ -560,24 +563,36 @@ fn blank_layer(template: &Layer, master: &str) -> Layer {
     layer
 }
 
-/// Replace a layer's width, anchors, paths and components with the UFO glyph's.
-fn apply(layer: &mut Layer, glyph: &norad::Glyph) {
+/// Apply the fields the UFO can express without rebuilding unrelated Glyphs records.
+fn apply(layer: &mut Layer, glyph: &norad::Glyph, imported: Option<&norad::Glyph>) {
     layer.width = narrow(glyph.width);
-    layer.anchors = glyph
-        .anchors
-        .iter()
-        .map(|anchor| Anchor {
-            locked: false,
-            name: anchor
-                .name
-                .as_ref()
-                .map(|name| name.as_str().to_owned())
-                .unwrap_or_default(),
-            orientation: glyphslib::common::Orientation::default(),
-            pos: (narrow(anchor.x), narrow(anchor.y)),
-            user_data: None,
-        })
-        .collect();
+    if imported.is_none_or(|old| !same_anchors(old, glyph)) {
+        let mut previous = std::mem::take(&mut layer.anchors);
+        layer.anchors = glyph
+            .anchors
+            .iter()
+            .map(|anchor| {
+                let name = anchor.name.as_ref().map_or("", norad::Name::as_str);
+                let pos = (narrow(anchor.x), narrow(anchor.y));
+                if let Some(index) = previous.iter().position(|old| old.name == name) {
+                    let mut record = previous.remove(index);
+                    record.pos = pos;
+                    record
+                } else {
+                    Anchor {
+                        locked: false,
+                        name: name.to_owned(),
+                        orientation: glyphslib::common::Orientation::default(),
+                        pos,
+                        user_data: None,
+                    }
+                }
+            })
+            .collect();
+    }
+    if imported.is_some_and(|old| same_shapes(old, glyph)) {
+        return;
+    }
     let paths = glyph.contours.iter().map(|contour| {
         let closed = contour
             .points
@@ -737,6 +752,54 @@ unitsPerEm = 1000;
         let changes = merge(&mut font, &sources).unwrap();
         assert_eq!(font, original);
         assert!(changes.glyphs.is_empty() && !changes.glyph_set && !changes.kerning);
+    }
+
+    #[test]
+    fn reserved_native_backup_names_survive_unrelated_working_copy_edits() {
+        let text = SOURCE.replace("layerId = m01;\nshapes = (", "associatedMasterId = m01; layerId = stash; name = \"com.runebender.proposal.saved\"; width = 638; }, { layerId = m01;\nshapes = (");
+        let (mut font, mut sources) = convert_source("reserved-backup", &text);
+        let mut expected = font.clone();
+        expected.glyphs[0].layers[1].width = 525.;
+        sources[0]
+            .font
+            .default_layer_mut()
+            .get_glyph_mut("A")
+            .unwrap()
+            .width = 525.;
+        merge(&mut font, &sources).unwrap();
+        assert_eq!(font, expected);
+    }
+
+    #[test]
+    fn spacing_and_anchor_edits_preserve_glyphs_shape_and_anchor_records() {
+        let text = SOURCE
+            .replace(
+                "layerId = m01;\nshapes = (",
+                "layerId = m01;\nanchors = ({ name = top; pos = (50,100); locked = 1; userData = { note = kept; }; });\nshapes = ({ ref = B; locked = 1; },",
+            )
+            .replace("(100,0,l)", "(100,0,l,{ note = kept; })");
+        let (mut font, mut sources) = convert_source("spacing-and-anchors", &text);
+        let mut expected = font.clone();
+        expected.glyphs[0].layers[0].width = 525.0;
+        sources[0]
+            .font
+            .default_layer_mut()
+            .get_glyph_mut("A")
+            .unwrap()
+            .width = 525.0;
+        merge(&mut font, &sources).unwrap();
+        assert_eq!(font, expected, "a width edit changes only the width");
+
+        sources[0]
+            .font
+            .default_layer_mut()
+            .get_glyph_mut("A")
+            .unwrap()
+            .anchors[0]
+            .x = 60.0;
+        expected.glyphs[0].layers[0].anchors[0].pos.0 = 60.0;
+        merge(&mut font, &sources).unwrap();
+        assert_eq!(font, expected, "moving top retains its lock and user data");
     }
 
     #[test]

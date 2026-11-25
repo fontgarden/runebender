@@ -42,9 +42,8 @@
 //! - Not reading features means the compiled preview has no Glyphs
 //!   features, and feature edits made in Runebender stay in the UFO
 //!   working copy.
-//! - Only a glyph that fails to convert is reported as a warning. The
-//!   skipped data above is dropped silently on open; it should be
-//!   listed as warnings, as the Fontra import does.
+//! - Open reports skipped layout code, instances, special layers, smart component data,
+//!   hints, guides, backgrounds, vertical kerning, custom parameters and failed glyphs.
 //! - Masters map to UFOs by file name (`master_ufo_name`), so two
 //!   masters with the same name collide.
 
@@ -110,7 +109,7 @@ fn convert(font: GlyphsFont) -> Result<ConversionResult, String> {
     }
 
     let mut files = Vec::new();
-    let mut warnings = Vec::new();
+    let mut warnings = import_warnings(font);
     let family = font.family_name.trim();
     let family = if family.is_empty() {
         "Untitled"
@@ -277,6 +276,90 @@ fn convert(font: GlyphsFont) -> Result<ConversionResult, String> {
     })
 }
 
+/// Inventory source data whose omission changes what the working copy can show or export.
+fn import_warnings(font: &Glyphs3) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if !font.features.is_empty() || !font.classes.is_empty() || !font.feature_prefixes.is_empty() {
+        warnings.push(format!(
+            "The working copy omits Glyphs layout code (features {}, classes {}, prefixes {}). Preview and export use the working copy. The original retains this code.",
+            font.features.len(), font.classes.len(), font.feature_prefixes.len()
+        ));
+    }
+    let mut counts = BTreeMap::from([
+        ("named instances", font.instances.len()),
+        (
+            "vertical kerning pairs",
+            font.kerning_vertical
+                .values()
+                .flat_map(|master| master.values())
+                .map(BTreeMap::len)
+                .sum(),
+        ),
+        (
+            "guides",
+            font.masters.iter().map(|master| master.guides.len()).sum(),
+        ),
+        (
+            "custom parameters",
+            font.custom_parameters
+                .iter()
+                .filter(|p| {
+                    !matches!(
+                        p.name.as_str(),
+                        "Variable Font Origin" | "Variation Font Origin"
+                    )
+                })
+                .count()
+                + font
+                    .masters
+                    .iter()
+                    .map(|m| m.custom_parameters.len())
+                    .sum::<usize>(),
+        ),
+    ]);
+    for glyph in &font.glyphs {
+        *counts.entry("smart component axes").or_default() += glyph.smart_component_settings.len();
+        for layer in &glyph.layers {
+            *counts.entry("hints").or_default() += layer.hints.len();
+            *counts.entry("guides").or_default() += layer.guides.len();
+            *counts.entry("backgrounds").or_default() += usize::from(layer.background.is_some());
+            *counts.entry("smart component placements").or_default() += layer
+                .shapes
+                .iter()
+                .filter(
+                    |s| matches!(s, Shape::Component(c) if !c.smart_component_location.is_empty()),
+                )
+                .count();
+            if let Some(master) = &layer.associated_master_id
+                && master != &layer.layer_id
+                && !is_backup_layer(layer, master)
+            {
+                let name = layer.name.as_deref().unwrap_or_default().trim();
+                let kind = if layer.attr.contains_key("coordinates") || name.starts_with('{') {
+                    "brace layers"
+                } else if layer.attr.contains_key("axisRules") || name.starts_with(['[', ']']) {
+                    "bracket layers"
+                } else {
+                    "other special layers"
+                };
+                *counts.entry(kind).or_default() += 1;
+            }
+        }
+    }
+    let omitted = counts
+        .into_iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(kind, count)| format!("{kind} ({count})"))
+        .collect::<Vec<_>>();
+    if !omitted.is_empty() {
+        warnings.push(format!(
+            "Glyphs data omitted from the working copy: {}.",
+            omitted.join(", ")
+        ));
+    }
+    warnings
+}
+
 /// The working-copy UFO a Glyphs master converts to, such as `Family-Regular.ufo`.
 pub(crate) fn master_ufo_name(font: &Glyphs3, master: &glyphslib::glyphs3::Master) -> String {
     let family = font.family_name.trim();
@@ -384,7 +467,7 @@ pub(crate) fn is_backup_layer(layer: &glyphslib::glyphs3::Layer, master: &str) -
         && layer.attr.is_empty()
         && layer.name.as_deref().is_some_and(|name| {
             let name = name.trim();
-            !name.is_empty() && !name.starts_with('{') && !name.starts_with('[')
+            !name.is_empty() && !name.starts_with(['{', '[', ']'])
         })
 }
 
@@ -783,6 +866,22 @@ mod tests {
     /// split across files, so it must land on the same UFO set the
     /// single-file path produces.
     #[test]
+    fn lists_the_present_variation_data_excluded_from_the_working_copy() {
+        let text = MINIMAL_GLYPHS3
+            .replace("glyphs = (", "instances = ({ name = Medium; axesValues = (500); });\nglyphs = (")
+            .replacen("layers = (", r#"layers = (
+                {layerId = intermediate; associatedMasterId = m01; attr = {coordinates = (500);};},
+                {layerId = conditional; associatedMasterId = m01; attr = {axisRules = ({min = 600;});};},"#, 1);
+        let result = glyphs_to_ufo_files(&text).unwrap();
+        assert_eq!(
+            result.warnings,
+            [
+                "Glyphs data omitted from the working copy: brace layers (1), bracket layers (1), named instances (1)."
+            ]
+        );
+    }
+
+    #[test]
     fn package_matches_single_file() {
         let from_file = glyphs_to_ufo_files(MINIMAL_GLYPHS3).unwrap();
 
@@ -875,6 +974,19 @@ glyphs = (
 );
 kerningLTR = { m01 = { "@MMK_L_A" = { "@MMK_R_A" = -20; }; }; };
 }"#;
+
+    #[test]
+    fn warns_when_glyphs_feature_code_is_absent_from_the_working_copy() {
+        let text = MINIMAL_GLYPHS3.replace(
+            "glyphs = (",
+            r#"features = ({ tag = liga; code = "sub A A by Aacute;"; });
+classes = ({ name = Upper; code = "A Aacute"; });
+glyphs = ("#,
+        );
+        let result = glyphs_to_ufo_files(&text).unwrap();
+        assert_eq!(result.warnings.len(), 1);
+        assert!(result.warnings[0].contains("features 1, classes 1, prefixes 0"));
+    }
 
     #[test]
     fn converts_minimal_glyphs3() {

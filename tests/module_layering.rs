@@ -71,7 +71,7 @@ const APPLICATION_ORDER: &[&str] = &[
 /// module that it names, and the number of references.
 const LIBRARY_BACK_EDGES: &[(&str, &str, usize)] = &[
     ("outline", "font", 38),
-    ("font", "formats", 29),
+    ("font", "formats", 24),
     ("ui", "workflows", 5),
     ("font", "analysis", 4),
     ("font", "text", 4),

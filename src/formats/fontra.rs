@@ -7,6 +7,7 @@
 //! [`write_back`] merges a saved working copy into a copy of the original folder: changed glyph
 //! layers, the glyph set and Unicode values, kerning, feature text and line metrics.
 //! A glyph file whose drawings did not change keeps its original text.
+//! Width and anchor edits retain native contour data, and a moved named anchor keeps its other fields.
 //! The original import inventory distinguishes skipped glyphs from deliberate deletions.
 //!
 //! Read: continuous axes and their mappings, full font sources, outlines, components, anchors,
@@ -46,7 +47,7 @@ use kurbo::Affine;
 use serde::Serialize as _;
 use serde_json::{Map, Value, json};
 
-use super::foreign::{WorkingSource, same_drawing};
+use super::foreign::{WorkingSource, close, same_anchors, same_shapes};
 use super::glyphs_import::{ConversionResult, ConvertedFile};
 use crate::outline::glyph_paths::round_units;
 
@@ -723,8 +724,8 @@ fn read_layer(
     Ok(out)
 }
 
-/// A UFO glyph's drawing as the keys of a Fontra static glyph.
-fn write_layer(glyph: &norad::Glyph) -> Map<String, Value> {
+/// Encode changed geometry, including the original payloads bound to edited components.
+fn write_shapes(glyph: &norad::Glyph) -> (Value, Value) {
     let contours: Vec<Value> = glyph
         .contours
         .iter()
@@ -786,25 +787,84 @@ fn write_layer(glyph: &norad::Glyph) -> Map<String, Value> {
             value
         })
         .collect();
-    let anchors: Vec<Value> = glyph
+    (json!({ "contours": contours }), components.into())
+}
+
+/// Keep native fields on anchors matched by name, consuming each original at most once.
+fn write_anchors(original: &Value, glyph: &norad::Glyph) -> Value {
+    let mut originals = original
+        .as_array()
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    glyph
         .anchors
         .iter()
         .map(|anchor| {
-            let mut out = Map::new();
-            if let Some(name) = &anchor.name {
-                out.insert("name".into(), name.as_str().into());
+            let name = anchor.name.as_ref().map(norad::Name::as_str);
+            let previous = originals
+                .iter()
+                .position(|item| item["name"].as_str() == name)
+                .map(|index| originals.remove(index));
+            let mut record = previous
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            if let Some(name) = name {
+                record.insert("name".into(), name.into());
             }
-            out.insert("x".into(), number(anchor.x));
-            out.insert("y".into(), number(anchor.y));
-            Value::Object(out)
+            for (key, value) in [("x", anchor.x), ("y", anchor.y)] {
+                if previous.is_none()
+                    || !close(
+                        record.get(key).and_then(Value::as_f64).unwrap_or_default(),
+                        value,
+                    )
+                {
+                    record.insert(key.into(), number(value));
+                }
+            }
+            Value::Object(record)
         })
-        .collect();
-    let mut out = Map::new();
-    out.insert("path".into(), json!({ "contours": contours }));
-    out.insert("components".into(), components.into());
-    out.insert("xAdvance".into(), number(glyph.width));
-    out.insert("anchors".into(), anchors.into());
-    out
+        .collect()
+}
+
+/// Merge a default layer or a source sub-layer into its native static glyph.
+fn merge_layer(glyph: &mut Value, layer: &str, name: &str, edited: &norad::Glyph) {
+    let current = &glyph["layers"][layer]["glyph"];
+    let imported = if current.is_object() {
+        read_layer(name, current, &[], &mut Vec::new()).ok()
+    } else {
+        None
+    };
+    let imported = imported.as_ref();
+    let width_changed = imported.is_none_or(|old| !close(old.width, edited.width));
+    let shapes_changed = imported.is_none_or(|old| !same_shapes(old, edited));
+    let anchors_changed = imported.is_none_or(|old| !same_anchors(old, edited));
+    if !width_changed && !shapes_changed && !anchors_changed {
+        return;
+    }
+    if !glyph["layers"].is_object() {
+        glyph["layers"] = json!({});
+    }
+    let layer = &mut glyph["layers"][layer];
+    if !layer.is_object() {
+        *layer = json!({});
+    }
+    let target = &mut layer["glyph"];
+    if !target.is_object() {
+        *target = json!({});
+    }
+    if width_changed {
+        target["xAdvance"] = number(edited.width);
+    }
+    if shapes_changed {
+        let (path, components) = write_shapes(edited);
+        target["path"] = path;
+        target["components"] = components;
+    }
+    if anchors_changed {
+        target["anchors"] = write_anchors(&target["anchors"], edited);
+    }
 }
 
 /// One kerning table: groups on each side, the source identifiers, and values by pair.
@@ -1458,7 +1518,6 @@ pub fn write_back(original: &Path, sources: &[WorkingSource], stage: &Path) -> R
 
     // Glyph files: replace changed layers, add new glyphs and sources, drop removed glyphs.
     let mut files = read_glyph_files(stage)?;
-    let mut ignored = Vec::new();
     for name in &order {
         let (path, mut glyph) = files.remove(*name).unwrap_or_else(|| {
             (
@@ -1501,28 +1560,7 @@ pub fn write_back(original: &Path, sources: &[WorkingSource], stage: &Path) -> R
                     layer
                 }
             };
-            let current = &glyph["layers"][&layer_name]["glyph"];
-            let unchanged = !current.is_null()
-                && read_layer(name, current, &[], &mut ignored)
-                    .is_ok_and(|current| same_drawing(&current, edited));
-            if unchanged {
-                continue;
-            }
-            if !glyph["layers"].is_object() {
-                glyph["layers"] = json!({});
-            }
-            let layer = glyph["layers"]
-                .as_object_mut()
-                .expect("layers is an object")
-                .entry(layer_name)
-                .or_insert_with(|| json!({"glyph": {}}));
-            if !layer["glyph"].is_object() {
-                layer["glyph"] = json!({});
-            }
-            let target = layer["glyph"].as_object_mut().expect("glyph is an object");
-            for (key, value) in write_layer(edited) {
-                target.insert(key, value);
-            }
+            merge_layer(&mut glyph, &layer_name, name, edited);
         }
         // The UFO's extra layers go back as the source's sub-layers, `<layer>^<name>`.
         for (source, working) in &font_sources {
@@ -1541,28 +1579,7 @@ pub fn write_back(original: &Path, sources: &[WorkingSource], stage: &Path) -> R
                 };
                 let key = format!("{layer_name}^{sub_name}");
                 kept.insert(key.clone());
-                let current = &glyph["layers"][&key]["glyph"];
-                let unchanged = !current.is_null()
-                    && read_layer(name, current, &[], &mut ignored)
-                        .is_ok_and(|current| same_drawing(&current, edited));
-                if unchanged {
-                    continue;
-                }
-                if !glyph["layers"].is_object() {
-                    glyph["layers"] = json!({});
-                }
-                let layer = glyph["layers"]
-                    .as_object_mut()
-                    .expect("layers is an object")
-                    .entry(key)
-                    .or_insert_with(|| json!({"glyph": {}}));
-                if !layer["glyph"].is_object() {
-                    layer["glyph"] = json!({});
-                }
-                let target = layer["glyph"].as_object_mut().expect("glyph is an object");
-                for (key, value) in write_layer(edited) {
-                    target.insert(key, value);
-                }
+                merge_layer(&mut glyph, &key, name, edited);
             }
             // A sub-layer the UFO no longer has was deleted.
             if let Some(layers) = glyph["layers"].as_object_mut() {
@@ -1661,6 +1678,7 @@ pub fn write_back(original: &Path, sources: &[WorkingSource], stage: &Path) -> R
 
 #[cfg(test)]
 mod tests {
+    use super::super::foreign::same_drawing;
     use super::*;
 
     fn fixture(name: &str) -> std::path::PathBuf {
@@ -1807,6 +1825,47 @@ mod tests {
                 .unwrap()
                 .contains("New;")
         );
+        let _ = std::fs::remove_dir_all(folder.parent().unwrap());
+    }
+
+    #[test]
+    fn width_and_anchor_edits_preserve_other_native_fontra_fields() {
+        let folder = fixture("native-layer-fields");
+        let path = Path::new("glyphs/A^1.json");
+        let mut original = read_json(&folder.join(path)).unwrap();
+        let layer = &mut original["layers"]["regular"]["glyph"];
+        layer["path"]["customData"] = json!({"layout": "original"});
+        layer["path"]["contours"][0]["points"][0]["attrs"] = json!({"identifier": "first-point"});
+        layer["anchors"] = json!([
+            {"name": "top", "x": 200, "y": 720, "customData": {"identifier": "top"}},
+            {"name": "bottom", "y": 5, "customData": {"identifier": "bottom"}}
+        ]);
+        original["layers"]["regular^Sketch"] = original["layers"]["regular"].clone();
+        write_text(&folder.join(path), &fontra_json(&original)).unwrap();
+        let mut sources = load(
+            &to_ufo_files(&folder).unwrap(),
+            &folder.with_file_name("out"),
+        );
+        let regular = &mut sources[1].font;
+        regular
+            .default_layer_mut()
+            .get_glyph_mut("A")
+            .unwrap()
+            .width = 615.;
+        regular
+            .layers
+            .get_mut("Sketch")
+            .unwrap()
+            .get_glyph_mut("A")
+            .unwrap()
+            .anchors[0]
+            .x = 225.;
+        let stage = folder.with_file_name("Edited.fontra");
+        write_back(&folder, &sources, &stage).unwrap();
+        let mut expected = original;
+        expected["layers"]["regular"]["glyph"]["xAdvance"] = 615.into();
+        expected["layers"]["regular^Sketch"]["glyph"]["anchors"][0]["x"] = 225.into();
+        assert_eq!(read_json(&stage.join(path)).unwrap(), expected);
         let _ = std::fs::remove_dir_all(folder.parent().unwrap());
     }
 

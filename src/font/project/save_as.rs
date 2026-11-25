@@ -73,7 +73,7 @@ impl Project {
                 .map(|source| source.source_path.clone());
         }
         self.foreign_source = None;
-        self.foreign_write_back_pending = false;
+        self.foreign_document = ForeignDocument::default();
         self.variable.revision = self.variable.revision.wrapping_add(1);
         Ok(())
     }
@@ -462,6 +462,103 @@ glyphs = ({
             .get_glyph("A")
             .unwrap()
             .width
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn foreign_write_back_preserves_a_symlink_to_the_original_file_or_package() {
+        for extension in ["glyphs", "glyphspackage", "fontra"] {
+            let scratch = Scratch::new(extension);
+            let original = write_foreign_font(&scratch.0, extension);
+            let target = scratch.0.join("source target");
+            std::fs::rename(&original, &target).unwrap();
+            std::os::unix::fs::symlink(&target, &original).unwrap();
+            let mut project = Project::load(&original).unwrap();
+            edit_width(&mut project, 610.0);
+            project.save().unwrap();
+            assert_eq!(std::fs::read_link(&original).unwrap(), target);
+            let reopened = Project::load(&original).unwrap();
+            let layer = reopened.document_sources().next().unwrap().default_layer();
+            assert_eq!(reopened.document_layer("A", &layer).unwrap().width(), 610.0);
+        }
+    }
+
+    #[test]
+    fn replacing_the_public_foreign_source_cannot_overwrite_an_unobserved_original() {
+        let scratch = Scratch::new("foreign-binding");
+        let original = write_foreign_font(&scratch.0, "glyphs");
+        let other = scratch.0.join("Another.glyphs");
+        let original_bytes = std::fs::read(&original).unwrap();
+        std::fs::write(&other, &original_bytes).unwrap();
+        let mut project = Project::load(&original).unwrap();
+        let opened = project.foreign_source.clone();
+        project.foreign_source.as_mut().unwrap().path = other.clone();
+        edit_width(&mut project, 610.);
+        assert!(project.save().unwrap_err().contains("was opened from"));
+        assert!(project.is_modified());
+        assert_eq!(std::fs::read(&other).unwrap(), original_bytes);
+        project.foreign_source = opened;
+        project.save().unwrap();
+        assert!(!project.is_modified());
+        assert_ne!(std::fs::read(original).unwrap(), original_bytes);
+        assert_eq!(std::fs::read(other).unwrap(), original_bytes);
+    }
+
+    #[test]
+    fn glyphspackage_write_back_keeps_opaque_auxiliary_files() {
+        let scratch = Scratch::new("package-assets");
+        let original = write_foreign_font(&scratch.0, "glyphspackage");
+        let sidecar = original.join("assets").join("image.bin");
+        std::fs::create_dir(sidecar.parent().unwrap()).unwrap();
+        std::fs::write(&sidecar, [0, 255, 1]).unwrap();
+        let mut project = Project::load(&original).unwrap();
+        edit_width(&mut project, 610.);
+        project.save().unwrap();
+        assert_eq!(std::fs::read(&sidecar).unwrap(), [0, 255, 1]);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn linked_package_members_can_be_opened_and_saved_as_an_independent_copy() {
+        let scratch = Scratch::new("linked-member");
+        let original = write_foreign_font(&scratch.0, "glyphspackage");
+        let member = original.join("order.plist");
+        let target = scratch.0.join("order.plist");
+        std::fs::rename(&member, &target).unwrap();
+        std::os::unix::fs::symlink(&target, &member).unwrap();
+        let mut project = Project::load(&original).unwrap();
+        edit_width(&mut project, 610.0);
+        assert!(project.save().unwrap_err().contains("symbolic links"));
+        assert_eq!(std::fs::read_link(member).unwrap(), target);
+        let independent = Scratch::new("linked-member-copy");
+        project.save_as(&independent.0).unwrap();
+        let layer = project.document_sources().next().unwrap();
+        assert_eq!(saved_width(layer.path()), 610.0);
+    }
+
+    #[test]
+    fn foreign_write_back_preserves_an_outside_edit_and_the_local_working_copy() {
+        for extension in ["glyphs", "glyphspackage", "fontra"] {
+            let scratch = Scratch::new(extension);
+            let original = write_foreign_font(&scratch.0, extension);
+            let mut first = Project::load(&original).unwrap();
+            let mut second = Project::load(&original).unwrap();
+            edit_width(&mut first, 601.0);
+            first.save().unwrap();
+            edit_width(&mut first, 602.0);
+            first.save().unwrap();
+
+            edit_width(&mut second, 650.0);
+            let error = second.save().unwrap_err();
+            assert!(error.contains("changed outside Runebender"), "{error}");
+            assert!(second.is_modified());
+            let source = second.document_sources().next().unwrap();
+            assert_eq!(saved_width(source.path()), 650.0);
+            let reopened = Project::load(&original).unwrap();
+            let layer = reopened.document_sources().next().unwrap().default_layer();
+            assert_eq!(reopened.document_layer("A", &layer).unwrap().width(), 602.0);
+            assert!(second.save().is_err(), "a retry must respect the conflict");
+        }
     }
 
     #[test]
