@@ -41,7 +41,8 @@ pub(in super::super) fn press(
         let (point_count, active_contour) = editor.session.pen_checkpoint();
         editor.drag = Drag::Pen {
             origin,
-            quadratic: state.modifiers.alt() && editor.session.pen_can_append_quadratic(),
+            quadratic: editor.view.quadratic_pen
+                || (state.modifiers.alt() && editor.session.pen_can_append_quadratic()),
             dragging: false,
             point_count,
             active_contour,

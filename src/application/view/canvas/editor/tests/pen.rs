@@ -467,7 +467,15 @@ fn shift_option_click_selects_the_new_quadratic_handle() {
 
 #[test]
 fn option_drag_with_the_pen_draws_one_quadratic_to_the_pressed_endpoint() {
-    use masonry::core::keyboard::Modifiers;
+    check_quadratic_pen_drag(false, masonry::core::keyboard::Modifiers::ALT);
+}
+
+#[test]
+fn quadratic_pen_draws_without_a_modifier() {
+    check_quadratic_pen_drag(true, masonry::core::keyboard::Modifiers::empty());
+}
+
+fn check_quadratic_pen_drag(quadratic: bool, modifiers: masonry::core::keyboard::Modifiers) {
     use norad::PointType::{Move, OffCurve, QCurve};
     let mut workspace = Workspace::untitled().unwrap();
     workspace.open_glyph(workspace.font.index_of("A").unwrap());
@@ -481,6 +489,7 @@ fn option_drag_with_the_pen_draws_one_quadratic_to_the_pressed_endpoint() {
     session.viewport = editor.session.viewport.clone();
     editor.session = session;
     editor.tool = Tool::Pen;
+    editor.view.quadratic_pen = quadratic;
     let mut harness =
         TestHarness::create_with_size(default_property_set(), editor.prepare(), (600, 400));
     let affine = harness.edit_root_widget(|root| root.widget.glyph_affine());
@@ -491,7 +500,7 @@ fn option_drag_with_the_pen_draws_one_quadratic_to_the_pressed_endpoint() {
         button: Some(PointerButton::Primary),
         state: PointerState {
             position: PhysicalPosition::new(endpoint.x, endpoint.y),
-            modifiers: Modifiers::ALT,
+            modifiers,
             ..Default::default()
         },
     }));

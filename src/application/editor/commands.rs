@@ -1657,6 +1657,23 @@ mod tests {
         assert_eq!(app.metadata_undo.len(), 1);
         app.undo_active_edit(false);
         assert_eq!(projected_glyph(&app.session).contours, original);
+        use crate::application::app_action::AppAction;
+        app.dispatch(AppAction::CubicsToQuads);
+        let quadratic = projected_glyph(&app.session).contours;
+        assert!(
+            quadratic[0]
+                .points
+                .iter()
+                .any(|p| p.typ == PointType::QCurve)
+        );
+        app.dispatch(AppAction::QuadsToCubics);
+        let cubic = projected_glyph(&app.session).contours;
+        assert!(cubic[0].points.iter().any(|p| p.typ == PointType::Curve));
+        assert!(cubic[0].points.iter().all(|p| p.typ != PointType::QCurve));
+        app.undo_active_edit(false);
+        assert_eq!(projected_glyph(&app.session).contours, quadratic);
+        app.undo_active_edit(false);
+        assert_eq!(projected_glyph(&app.session).contours, original);
         assert_eq!(
             norad::Font::load(&path)
                 .unwrap()

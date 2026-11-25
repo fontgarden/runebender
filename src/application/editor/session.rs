@@ -1709,6 +1709,13 @@ impl Session {
         control: Point,
         checkpoint: usize,
     ) {
+        // The first point starts the contour. Its first control belongs to the next segment.
+        if checkpoint == 0 {
+            if self.pen.is_empty() {
+                self.pen_corner(endpoint.x, endpoint.y);
+            }
+            return;
+        }
         let Some(contour) = self.active_contour else {
             return;
         };

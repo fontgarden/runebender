@@ -30,8 +30,10 @@ See [supported formats and preservation limits](https://runebender.org/docs/open
 
 ## Quadratic outlines
 
-With the Pen tool, click to start a contour, then Option-drag from the next endpoint to place its quadratic control (Alt-drag on Linux or Windows).
-Repeat from each new endpoint to draw a series of quadratic curves.
+Choose the Pen (P), then select **Cubic** or **Quadratic** in the right sidebar.
+In Quadratic mode, click to start a contour, then drag from each new endpoint to place its single control point.
+The mode stays selected when you switch tools or start another contour in the same workspace.
+In Cubic mode, Option-drag (Alt-drag on Linux or Windows) from a new endpoint after a corner to draw one quadratic segment.
 With the Select tool, Shift–Option-click a straight segment (Shift–Alt-click on Linux or Windows) to add one quadratic control point.
 Drag the selected handle to bend the segment.
 The Pen tool can split a quadratic between consecutive controls, including segments with an implied midpoint.

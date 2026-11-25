@@ -19,6 +19,17 @@ use crate::application::workspace::{Mode, Tool, Workspace};
 use runebender::outline::glyph_paths::round_units;
 use xilem::WidgetView;
 
+fn pen_section(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
+    use recipes::rows::{Group, Row, section_of};
+
+    let mode = Row::Choice {
+        options: vec!["Cubic".into(), "Quadratic".into()],
+        chosen: usize::from(app.view.quadratic_pen),
+        on_pick: std::sync::Arc::new(|app, index| app.view.quadratic_pen = index == 1),
+    };
+    section_of(app, "Pen", "Pen", vec![Group::new("", vec![mode])])
+}
+
 pub(crate) fn info_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> {
     use xilem::core::one_of::Either;
     if app.interpolation_is_active() && matches!(app.mode, Mode::Editor(_)) {
@@ -209,6 +220,7 @@ pub(crate) fn info_panel(app: &Workspace) -> impl WidgetView<Workspace> + use<> 
         // the overview still begins with glyph identity because these
         // optional edit groups disappear there.
         recipes::panel_stack((
+            (editing && app.tool == Tool::Pen).then(|| pen_section(app)),
             editing.then(|| anchor_section(app)).flatten(),
             // The picture's properties belong to the picture: they show while it is selected.
             (editing && app.session.image_selected && app.image_frame().is_some())

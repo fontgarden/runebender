@@ -128,6 +128,8 @@ pub(crate) struct ViewOptions {
     pub thickness: bool,
     /// A dot per on-curve node, colored by continuity level.
     pub continuity: bool,
+    /// Draw single-control curves with the Pen until the designer selects Cubic.
+    pub quadratic_pen: bool,
     /// Match curvature at the edited smooth cubic join on pointer release.
     pub maintain_g2: bool,
     /// Tint the outline and handles by segment length.
