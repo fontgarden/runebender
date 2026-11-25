@@ -584,25 +584,33 @@ impl LayerEditDraft {
         start: PointId,
         end: PointId,
     ) -> Result<[PointId; 2], DocumentEditError> {
+        self.add_line_controls(start, end, NodeType::Curve, [1.0 / 3.0, 2.0 / 3.0])
+    }
+
+    /// Turn a straight segment into a quadratic and return its single editable handle.
+    pub fn convert_line_to_quadratic(
+        &mut self,
+        start: PointId,
+        end: PointId,
+    ) -> Result<PointId, DocumentEditError> {
+        let [control] = self.add_line_controls(start, end, NodeType::QCurve, [0.5])?;
+        Ok(control)
+    }
+
+    fn add_line_controls<const N: usize>(
+        &mut self,
+        start: PointId,
+        end: PointId,
+        end_type: NodeType,
+        fractions: [f64; N],
+    ) -> Result<[PointId; N], DocumentEditError> {
         let spacing = self.grid_spacing;
-        let locate = |id: PointId| {
-            self.layer
-                .shapes
-                .iter()
-                .enumerate()
-                .find_map(|(shape_index, shape)| {
-                    let Shape::Path(path) = shape else {
-                        return None;
-                    };
-                    path.nodes
-                        .iter()
-                        .position(|node| read_id(&node.format_specific) == Some(id.0))
-                        .map(|node_index| (shape_index, node_index))
-                })
-        };
-        let (shape_index, start_index) =
-            locate(start).ok_or(DocumentEditError::MissingPoint(start))?;
-        let (end_shape, end_index) = locate(end).ok_or(DocumentEditError::MissingPoint(end))?;
+        let (shape_index, start_index) = self
+            .locate_point(start)
+            .ok_or(DocumentEditError::MissingPoint(start))?;
+        let (end_shape, end_index) = self
+            .locate_point(end)
+            .ok_or(DocumentEditError::MissingPoint(end))?;
         if shape_index != end_shape {
             return Err(DocumentEditError::NotLineSegment(start, end));
         }
@@ -625,56 +633,39 @@ impl LayerEditDraft {
                 crate::outline::point_ops::snap_to_spacing(point.y, spacing),
             )
         };
-        let first_position = snapped(start_position.lerp(end_position, 1.0 / 3.0));
-        let second_position = snapped(start_position.lerp(end_position, 2.0 / 3.0));
-        ensure_finite(&[
-            first_position.x,
-            first_position.y,
-            second_position.x,
-            second_position.y,
-        ])?;
-        let point_ids = [PointId::next(), PointId::next()];
-        let node = |id: PointId, position: kurbo::Point| {
-            let mut node = Node {
-                x: position.x,
-                y: position.y,
-                nodetype: NodeType::OffCurve,
-                ..Node::default()
-            };
-            write_id(&mut node.format_specific, id.0);
-            node
-        };
+        let positions = fractions.map(|t| {
+            let position = start_position.lerp(end_position, t);
+            // An exact midpoint keeps a diagonal line straight even on a coarse grid.
+            if end_type == NodeType::QCurve {
+                position
+            } else {
+                snapped(position)
+            }
+        });
+        for point in positions {
+            ensure_finite(&[point.x, point.y])?;
+        }
+        let controls =
+            positions.map(|position| new_document_point(position, NodeType::OffCurve, false));
+        let point_ids = controls.each_ref().map(|point| point.0);
         let insert_index = if wraps { start_index + 1 } else { end_index };
         let contour_id =
             ContourId(read_id(&path.format_specific).expect("canonical contour identity"));
         let Shape::Path(path) = &mut self.layer.shapes[shape_index] else {
             unreachable!("located shape is a path");
         };
-        path.nodes
-            .insert(insert_index, node(point_ids[0], first_position));
-        path.nodes
-            .insert(insert_index + 1, node(point_ids[1], second_position));
-        let shifted_end = if wraps { end_index } else { end_index + 2 };
-        path.nodes[shifted_end].nodetype = NodeType::Curve;
         let preserved = self
             .preserved
             .contours
             .iter_mut()
             .find(|candidate| candidate.id == contour_id)
             .expect("canonical contour preservation");
-        for (offset, id) in point_ids.iter().copied().enumerate() {
-            preserved.points.insert(
-                insert_index + offset,
-                PreservedPoint {
-                    id,
-                    name: None,
-                    metadata: ObjectMetadata {
-                        identifier: None,
-                        lib: None,
-                    },
-                },
-            );
+        for (offset, (_, node, record)) in controls.into_iter().enumerate() {
+            path.nodes.insert(insert_index + offset, node);
+            preserved.points.insert(insert_index + offset, record);
         }
+        let shifted_end = if wraps { end_index } else { end_index + N };
+        path.nodes[shifted_end].nodetype = end_type;
         Ok(point_ids)
     }
 }

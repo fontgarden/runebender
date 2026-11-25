@@ -75,17 +75,18 @@ pub(in super::super) fn press(
         editor.emit(ctx, false);
         return;
     }
-    // Option-click on a segment gives it two curve handles, as in Glyphs.
-    if editor.tool == Tool::Select
-        && state.modifiers.alt()
-        && editor.hit_point(at).is_none()
-        && editor.session.add_segment_handles_at(
-            editor.screen_to_glyph_design(at),
-            HIT_RADIUS_PX / editor.session.viewport.zoom,
-        )
-    {
-        editor.emit(ctx, true);
-        return;
+    if editor.tool == Tool::Select && state.modifiers.alt() && editor.hit_point(at).is_none() {
+        let position = editor.screen_to_glyph_design(at);
+        let radius = HIT_RADIUS_PX / editor.session.viewport.zoom;
+        let changed = if shift {
+            editor.session.add_quadratic_handle_at(position, radius)
+        } else {
+            editor.session.add_segment_handles_at(position, radius)
+        };
+        if changed {
+            editor.emit(ctx, true);
+            return;
+        }
     }
     if editor.hit_point(at).is_none()
         && let Some((owner, point)) = editor.hit_part_point(at)

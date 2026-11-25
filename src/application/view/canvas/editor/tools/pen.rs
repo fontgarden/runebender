@@ -7,7 +7,12 @@ use super::super::*;
 use masonry::ui_events::pointer::PointerState;
 
 /// Apply a press of the pen.
-pub(in super::super) fn press(editor: &mut EditorWidget, ctx: &mut EventCtx<'_>, at: Point) {
+pub(in super::super) fn press(
+    editor: &mut EditorWidget,
+    ctx: &mut EventCtx<'_>,
+    at: Point,
+    state: &PointerState,
+) {
     let affine = editor.glyph_affine();
     let near_first = editor
         .session
@@ -36,6 +41,7 @@ pub(in super::super) fn press(editor: &mut EditorWidget, ctx: &mut EventCtx<'_>,
         let (point_count, active_contour) = editor.session.pen_checkpoint();
         editor.drag = Drag::Pen {
             origin,
+            quadratic: state.modifiers.alt() && editor.session.pen_can_append_quadratic(),
             dragging: false,
             point_count,
             active_contour,
@@ -105,22 +111,27 @@ pub(in super::super) fn drag(
     glyph_affine: Affine,
 ) {
     if let Drag::Pen {
-        origin, dragging, ..
+        origin,
+        dragging,
+        quadratic,
+        point_count,
+        ..
     } = &mut editor.drag
     {
-        let origin = *origin;
-        let to = glyph_design;
-        let moved_px = (glyph_affine * origin).distance(at);
-        if *dragging {
-            editor.session.pen_smooth_drag(origin, to);
-            ctx.request_render();
-        } else if moved_px > 4.0 {
-            if let Drag::Pen { dragging, .. } = &mut editor.drag {
-                *dragging = true;
-            }
-            editor.session.pen_smooth_begin(origin, to);
-            ctx.request_render();
+        if !*dragging && (glyph_affine * *origin).distance(at) <= 4.0 {
+            return;
         }
+        if *quadratic {
+            editor
+                .session
+                .pen_quadratic_drag(*origin, glyph_design, *point_count);
+        } else if *dragging {
+            editor.session.pen_smooth_drag(*origin, glyph_design);
+        } else {
+            editor.session.pen_smooth_begin(*origin, glyph_design);
+        }
+        *dragging = true;
+        ctx.request_render();
     }
 }
 
@@ -135,6 +146,7 @@ pub(in super::super) fn release(
         dragging,
         point_count,
         active_contour,
+        quadratic,
     } = &editor.drag
     {
         if cancelled {
@@ -144,7 +156,7 @@ pub(in super::super) fn release(
         } else if !dragging {
             editor.session.pen_corner(origin.x, origin.y);
         }
-        if !cancelled
+        if !(cancelled || *quadratic && *dragging)
             && editor.view.maintain_g2
             && let Some(id) = editor.session.pen_checkpoint().1
         {

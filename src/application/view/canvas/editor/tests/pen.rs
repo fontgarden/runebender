@@ -323,3 +323,193 @@ fn pointer_cancel_never_applies_shape_or_knife_gestures() {
         }
     }
 }
+
+#[test]
+fn quadratic_handle_bends_a_closing_line_without_touching_the_other_segments() {
+    use norad::PointType::Line;
+    use runebender::font::LayerPointType;
+    let original = session_with(&[(0.0, 0.0, Line), (300.0, 0.0, Line), (301.0, 301.0, Line)]);
+    let mut font = norad::Font::new();
+    font.default_layer_mut()
+        .insert_glyph(projected_glyph(&original));
+    let path = std::env::temp_dir().join(format!(
+        "runebender-quadratic-handle-{}.ufo",
+        std::process::id()
+    ));
+    font.save(&path).unwrap();
+    let mut workspace = Workspace::open(&path).unwrap();
+    workspace.open_glyph(0);
+    let mut session = (*workspace.session).clone();
+    assert!(session.add_quadratic_handle_at(Point::new(150.5, 150.5), 2.0));
+    assert_eq!(
+        workspace.sync_session_from(&mut session),
+        SessionSyncOutcome::Changed
+    );
+    let points = session.points();
+    let handle = points
+        .iter()
+        .find(|point| session.selection.contains(&point.id))
+        .unwrap();
+    assert!(!handle.on_curve);
+    assert_eq!(handle.point, Point::new(150.5, 150.5));
+    assert!(session.nudge(20.0, 0.0));
+    let types: Vec<_> = session
+        .current_layer()
+        .unwrap()
+        .contours()
+        .next()
+        .unwrap()
+        .points()
+        .map(|point| point.point_type())
+        .collect();
+    assert_eq!(
+        types,
+        [
+            LayerPointType::QCurve,
+            LayerPointType::Line,
+            LayerPointType::Line,
+            LayerPointType::OffCurve
+        ]
+    );
+    assert_eq!(
+        workspace.sync_session_from(&mut session),
+        SessionSyncOutcome::Changed
+    );
+    workspace.font.project.save().unwrap();
+    let saved = norad::Font::load(&path).unwrap();
+    let nodes = &saved.default_layer().get_glyph("A").unwrap().contours[0].points;
+    assert!(
+        nodes
+            .iter()
+            .any(|node| node.typ == norad::PointType::QCurve)
+    );
+    assert!(
+        nodes
+            .iter()
+            .any(|node| node.typ == norad::PointType::OffCurve && node.x > 150.5)
+    );
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn quadratic_handle_chain_accepts_a_pen_split_at_an_implied_segment() {
+    use norad::PointType::{Line, OffCurve, QCurve};
+    let mut session = session_with(&[
+        (0.0, 0.0, Line),
+        (0.0, 100.0, OffCurve),
+        (100.0, 100.0, OffCurve),
+        (100.0, 0.0, QCurve),
+    ]);
+    let midpoint = Point::new(12.5, 75.0);
+    assert!(!session.add_quadratic_handle_at(midpoint, 2.0));
+    assert!(session.insert_point_at(midpoint, 2.0));
+    let segments =
+        runebender::outline::segment_ops::ordinary_layer_segments(session.current_layer().unwrap());
+    assert_eq!(
+        segments
+            .iter()
+            .filter(|s| matches!(s.seg, kurbo::PathSeg::Quad(_)))
+            .count(),
+        3
+    );
+    assert!(session.points().iter().any(|p| p.on_curve
+        && session.selection.contains(&p.id)
+        && p.point.distance(midpoint) <= 1.0));
+}
+
+#[test]
+fn quadratic_handle_ring_can_be_split_without_an_explicit_start_point() {
+    use norad::PointType::OffCurve;
+    let mut session = session_with(&[
+        (0.0, 0.0, OffCurve),
+        (200.0, 0.0, OffCurve),
+        (200.0, 200.0, OffCurve),
+        (0.0, 200.0, OffCurve),
+    ]);
+    assert!(session.insert_point_at(Point::new(25.0, 25.0), 1.0));
+    let segments =
+        runebender::outline::segment_ops::ordinary_layer_segments(session.current_layer().unwrap());
+    assert_eq!(segments.len(), 5);
+    assert!(
+        segments
+            .iter()
+            .all(|hit| matches!(hit.seg, kurbo::PathSeg::Quad(_)))
+    );
+}
+
+#[test]
+fn shift_option_click_selects_the_new_quadratic_handle() {
+    use masonry::core::keyboard::Modifiers;
+    let mut editor = widget();
+    editor.tool = Tool::Select;
+    let mut harness =
+        TestHarness::create_with_size(default_property_set(), editor.prepare(), (600, 400));
+    let at = harness.edit_root_widget(|root| root.widget.glyph_affine() * Point::new(200.0, 0.0));
+    harness.mouse_move(at);
+    harness.process_pointer_event(PointerEvent::Down(PointerButtonEvent {
+        pointer: PRIMARY_MOUSE,
+        button: Some(PointerButton::Primary),
+        state: PointerState {
+            position: PhysicalPosition::new(at.x, at.y),
+            modifiers: Modifiers::ALT | Modifiers::SHIFT,
+            ..Default::default()
+        },
+    }));
+    harness.mouse_button_release(Some(PointerButton::Primary));
+    harness.edit_root_widget(|root| {
+        let session = &root.widget.session;
+        assert_eq!(session.selection.len(), 1);
+        assert!(session.points().iter().any(|p| !p.on_curve
+            && session.selection.contains(&p.id)
+            && p.point == Point::new(200.0, 0.0)));
+    });
+}
+
+#[test]
+fn option_drag_with_the_pen_draws_one_quadratic_to_the_pressed_endpoint() {
+    use masonry::core::keyboard::Modifiers;
+    use norad::PointType::{Move, OffCurve, QCurve};
+    let mut workspace = Workspace::untitled().unwrap();
+    workspace.open_glyph(workspace.font.index_of("A").unwrap());
+    let mut session = (*workspace.session).clone();
+    session.pen_corner(20.0, 20.0);
+    assert_eq!(
+        workspace.sync_session_from(&mut session),
+        SessionSyncOutcome::Changed
+    );
+    let mut editor = widget();
+    session.viewport = editor.session.viewport.clone();
+    editor.session = session;
+    editor.tool = Tool::Pen;
+    let mut harness =
+        TestHarness::create_with_size(default_property_set(), editor.prepare(), (600, 400));
+    let affine = harness.edit_root_widget(|root| root.widget.glyph_affine());
+    let endpoint = affine * Point::new(200.0, 100.0);
+    harness.mouse_move(endpoint);
+    harness.process_pointer_event(PointerEvent::Down(PointerButtonEvent {
+        pointer: PRIMARY_MOUSE,
+        button: Some(PointerButton::Primary),
+        state: PointerState {
+            position: PhysicalPosition::new(endpoint.x, endpoint.y),
+            modifiers: Modifiers::ALT,
+            ..Default::default()
+        },
+    }));
+    harness.mouse_move(affine * Point::new(80.0, 160.0));
+    harness.mouse_move(affine * Point::new(90.0, 180.0));
+    harness.mouse_button_release(Some(PointerButton::Primary));
+    harness.edit_root_widget(|root| {
+        let glyph = projected_glyph(&root.widget.session);
+        let points = &glyph.contours.last().unwrap().points;
+        let expected = [
+            (Move, (20.0, 20.0)),
+            (OffCurve, (90.0, 180.0)),
+            (QCurve, (200.0, 100.0)),
+        ];
+        assert_eq!(points.len(), expected.len());
+        for (node, (kind, position)) in points.iter().zip(expected) {
+            assert_eq!(node.typ, kind);
+            assert!(Point::new(node.x, node.y).distance(position.into()) < 1e-8);
+        }
+    });
+}

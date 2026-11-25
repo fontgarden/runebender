@@ -256,11 +256,36 @@ impl LayerEditDraft {
         endpoint: kurbo::Point,
         smooth: bool,
     ) -> Result<Vec<PointId>, DocumentEditError> {
-        let mut coordinates = vec![endpoint.x, endpoint.y];
-        if let Some(controls) = controls {
-            coordinates.extend(controls.into_iter().flat_map(|point| [point.x, point.y]));
+        match controls {
+            Some(controls) => {
+                self.append_segment(contour, &controls, endpoint, NodeType::Curve, smooth)
+            }
+            None => self.append_segment(contour, &[], endpoint, NodeType::Line, smooth),
         }
-        ensure_finite(&coordinates)?;
+    }
+
+    /// Append a quadratic segment with a single off-curve control to an open contour.
+    pub fn append_quadratic_segment(
+        &mut self,
+        contour: ContourId,
+        control: kurbo::Point,
+        endpoint: kurbo::Point,
+    ) -> Result<Vec<PointId>, DocumentEditError> {
+        self.append_segment(contour, &[control], endpoint, NodeType::QCurve, false)
+    }
+
+    fn append_segment(
+        &mut self,
+        contour: ContourId,
+        controls: &[kurbo::Point],
+        endpoint: kurbo::Point,
+        endpoint_type: NodeType,
+        smooth: bool,
+    ) -> Result<Vec<PointId>, DocumentEditError> {
+        ensure_finite(&[endpoint.x, endpoint.y])?;
+        for position in controls {
+            ensure_finite(&[position.x, position.y])?;
+        }
         let shape_index = self
             .contour_shape_index(contour)
             .ok_or(DocumentEditError::MissingContour(contour))?;
@@ -276,21 +301,11 @@ impl LayerEditDraft {
             return Err(DocumentEditError::NotOpenContour(contour));
         }
 
-        let mut additions = Vec::with_capacity(if controls.is_some() { 3 } else { 1 });
-        if let Some(controls) = controls {
-            for position in controls {
-                additions.push(new_document_point(position, NodeType::OffCurve, false));
-            }
+        let mut additions = Vec::with_capacity(controls.len() + 1);
+        for &position in controls {
+            additions.push(new_document_point(position, NodeType::OffCurve, false));
         }
-        additions.push(new_document_point(
-            endpoint,
-            if controls.is_some() {
-                NodeType::Curve
-            } else {
-                NodeType::Line
-            },
-            smooth,
-        ));
+        additions.push(new_document_point(endpoint, endpoint_type, smooth));
         let ids = additions.iter().map(|(id, _, _)| *id).collect();
         let Shape::Path(path) = &mut self.layer.shapes[shape_index] else {
             unreachable!("located contour is a path");

@@ -193,7 +193,7 @@ impl EditorWidget {
                         measure::press(self, ctx, at);
                     }
                     Some(PointerButton::Primary) if self.tool == Tool::Pen => {
-                        pen::press(self, ctx, at);
+                        pen::press(self, ctx, at, state);
                     }
                     Some(PointerButton::Primary) => select::press(self, ctx, at, state),
                     _ => self.drag = Drag::Pan { last: at },

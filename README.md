@@ -28,6 +28,16 @@ Glyphs files, Glyphs packages and Fontra folders open through converted working 
 Python `.babelfont` directories and compiled TTF/OTF fonts are import-only formats.
 See [supported formats and preservation limits](https://runebender.org/docs/opening.html) before editing an existing source.
 
+## Quadratic outlines
+
+With the Pen tool, click to start a contour, then Option-drag from the next endpoint to place its quadratic control (Alt-drag on Linux or Windows).
+Repeat from each new endpoint to draw a series of quadratic curves.
+With the Select tool, Shift–Option-click a straight segment (Shift–Alt-click on Linux or Windows) to add one quadratic control point.
+Drag the selected handle to bend the segment.
+The Pen tool can split a quadratic between consecutive controls, including segments with an implied midpoint.
+For whole-layer conversion, the Path menu offers **Cubic to Quadratic** and **Quadratic to Cubic**.
+When drawing a variable font, make the corresponding point edits in each master to keep the outlines compatible.
+
 ## Screenshots
 
 ![Runebender glyph overview](https://runebender.org/images/runebender-xilem-grid.png)

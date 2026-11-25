@@ -21,6 +21,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use masonry::kurbo::{self as kurbo, BezPath, Point, Rect};
+use runebender::font::DocumentSegmentEndpoint;
 use runebender::font::model::glyph_metadata::MarkColor;
 use runebender::font::project::CanonicalLayerTransaction;
 use runebender::font::{AnchorId, ComponentId, ContourId, LayerPointType, LayerView, PointId};
@@ -85,11 +86,16 @@ pub(crate) struct PointView {
 /// Where a click would split a segment; see [`Session::segment_insert_at`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SegmentInsert {
-    pub start: PointId,
-    pub end: PointId,
+    target: SegmentTarget,
     pub t: f64,
     pub point: Point,
     pub curve: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SegmentTarget {
+    Direct(PointId, PointId),
+    ImpliedQuadratic(DocumentSegmentEndpoint, PointId, DocumentSegmentEndpoint),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1442,43 +1448,33 @@ impl Session {
     /// insert a point: the segment's endpoints, the parameter, the position
     /// of the new point on the grid, and whether it splits a curve.
     pub(crate) fn segment_insert_at(&self, at: Point, radius: f64) -> Option<SegmentInsert> {
-        use kurbo::{ParamCurve as _, ParamCurveNearest as _};
-        use runebender::font::DocumentSegmentEndpoint;
-        let layer = self.current_layer()?;
-        let (distance_sq, insert) =
-            runebender::outline::segment_ops::ordinary_layer_segments(layer)
-                .into_iter()
-                .filter_map(|segment| {
-                    let (
-                        DocumentSegmentEndpoint::Point(start),
-                        DocumentSegmentEndpoint::Point(end),
-                    ) = (segment.start, segment.end)
-                    else {
-                        return None;
-                    };
-                    let hit = segment.seg.nearest(at, 1e-6);
-                    Some((
-                        hit.distance_sq,
-                        SegmentInsert {
-                            start,
-                            end,
-                            t: hit.t,
-                            point: {
-                                // Snapped like the inserted point, so a preview
-                                // shows where the click lands.
-                                use runebender::outline::point_ops::snap_to_spacing;
-                                let at = segment.seg.eval(hit.t);
-                                Point::new(
-                                    snap_to_spacing(at.x, self.grid_spacing),
-                                    snap_to_spacing(at.y, self.grid_spacing),
-                                )
-                            },
-                            curve: !matches!(segment.seg, kurbo::PathSeg::Line(_)),
-                        },
-                    ))
-                })
-                .min_by(|a, b| a.0.total_cmp(&b.0))?;
-        (distance_sq <= radius * radius && (0.001..=0.999).contains(&insert.t)).then_some(insert)
+        use kurbo::ParamCurve as _;
+        use runebender::outline::point_ops::snap_to_spacing;
+        let (hit, t) = runebender::outline::segment_ops::nearest_ordinary_layer_segment_with_t(
+            self.current_layer()?,
+            at,
+            radius,
+        )?;
+        if !(0.001..=0.999).contains(&t) {
+            return None;
+        }
+        let target = match (hit.start, hit.end, hit.controls.as_slice()) {
+            (DocumentSegmentEndpoint::Point(start), DocumentSegmentEndpoint::Point(end), _) => {
+                SegmentTarget::Direct(start, end)
+            }
+            (start, end, &[control]) => SegmentTarget::ImpliedQuadratic(start, control, end),
+            _ => return None,
+        };
+        let position = hit.seg.eval(t);
+        Some(SegmentInsert {
+            target,
+            t,
+            point: Point::new(
+                snap_to_spacing(position.x, self.grid_spacing),
+                snap_to_spacing(position.y, self.grid_spacing),
+            ),
+            curve: !matches!(hit.seg, kurbo::PathSeg::Line(_)),
+        })
     }
 
     /// Split the segment under `at` with a new on-curve point and select it.
@@ -1487,12 +1483,21 @@ impl Session {
     /// each side, and keeps its shape. Returns false when no segment lies
     /// within `radius` design units.
     pub(crate) fn insert_point_at(&mut self, at: Point, radius: f64) -> bool {
-        let Some(SegmentInsert { start, end, t, .. }) = self.segment_insert_at(at, radius) else {
+        let Some(SegmentInsert { target, t, .. }) = self.segment_insert_at(at, radius) else {
             return false;
         };
         let mut inserted = None;
         let changed = self.stage_canonical_edit("insert point", |draft| {
-            inserted = Some(draft.insert_point_on_segment(start, end, t)?);
+            inserted = Some(match target {
+                SegmentTarget::Direct(start, end) => {
+                    draft.insert_point_on_segment(start, end, t)?
+                }
+                SegmentTarget::ImpliedQuadratic(start, control, end) => {
+                    draft
+                        .insert_point_on_quadratic_segment(start, control, end, t)?
+                        .point
+                }
+            });
             Ok(true)
         });
         if let (true, Some(id)) = (changed, inserted) {
@@ -1547,7 +1552,11 @@ impl Session {
     /// does in Glyphs. Returns false unless a straight or single-control segment lies
     /// within `radius` design units.
     pub(crate) fn add_segment_handles_at(&mut self, at: Point, radius: f64) -> bool {
-        let Some(SegmentInsert { start, end, .. }) = self.segment_insert_at(at, radius) else {
+        let Some(SegmentInsert {
+            target: SegmentTarget::Direct(start, end),
+            ..
+        }) = self.segment_insert_at(at, radius)
+        else {
             return false;
         };
         let mut handles = None;
@@ -1557,6 +1566,27 @@ impl Session {
         });
         if let (true, Some(ids)) = (changed, handles) {
             self.selection = HashSet::from(ids);
+        }
+        changed
+    }
+
+    /// Place a single quadratic handle halfway along a straight segment and select it.
+    pub(crate) fn add_quadratic_handle_at(&mut self, at: Point, radius: f64) -> bool {
+        let Some(SegmentInsert {
+            target: SegmentTarget::Direct(start, end),
+            curve: false,
+            ..
+        }) = self.segment_insert_at(at, radius)
+        else {
+            return false;
+        };
+        let mut handle = None;
+        let changed = self.stage_canonical_edit("add quadratic handle", |draft| {
+            handle = Some(draft.convert_line_to_quadratic(start, end)?);
+            Ok(true)
+        });
+        if let (true, Some(id)) = (changed, handle) {
+            self.selection = HashSet::from([id]);
         }
         changed
     }
@@ -1665,6 +1695,33 @@ impl Session {
             return;
         }
         self.pen.push(PenPt { point, off: false });
+    }
+
+    /// A quadratic drag can continue a corner or quadratic endpoint that has no outgoing cubic handle.
+    pub(crate) fn pen_can_append_quadratic(&self) -> bool {
+        self.active_contour.is_some() && Self::pen_outgoing(&self.pen).is_none()
+    }
+
+    /// Preview a single-control segment from the last committed endpoint.
+    pub(crate) fn pen_quadratic_drag(
+        &mut self,
+        endpoint: Point,
+        control: Point,
+        checkpoint: usize,
+    ) {
+        let Some(contour) = self.active_contour else {
+            return;
+        };
+        if self.stage_canonical_edit("pen contour", |draft| {
+            draft.append_quadratic_segment(contour, control, endpoint)?;
+            Ok(true)
+        }) {
+            self.pen.truncate(checkpoint);
+            self.pen.push(PenPt {
+                point: endpoint,
+                off: false,
+            });
+        }
     }
 
     /// Begin a smooth point with symmetric handles at `origin`; the outgoing

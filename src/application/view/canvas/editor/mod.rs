@@ -185,6 +185,7 @@ enum Drag {
     /// Pen mouse-down at `origin` (design space); becomes handle-drag past a threshold.
     Pen {
         origin: Point,
+        quadratic: bool,
         dragging: bool,
         point_count: usize,
         active_contour: Option<ContourId>,
