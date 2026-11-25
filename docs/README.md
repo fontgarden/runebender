@@ -20,6 +20,7 @@ Commands in these guides run from the repository root unless stated otherwise.
 - [Engine benchmarks](BENCHMARKS.md): repeatable measurements and interpretation.
 - [Audit of 2026-11-09](AUDIT-2026-11-09.md): historical findings, status corrections, and the previously reported validation baseline.
 - [Cleanup plan](CLEANUP-PLAN.md): a checklist from the code review of 2026-11-17, with files, changes and verification for each item.
+- [Quality review of 2026-11-23](QUALITY-REVIEW-2026-11-23.md): a temporary checklist from a full review of the repository, one item at a time.
 - [Upstream work](upstream/README.md): changes and workarounds to propose to Xilem, Vello and `spline`, with the Linebender LLM policy rules.
 
 ## Interface and local models
