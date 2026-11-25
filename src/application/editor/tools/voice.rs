@@ -92,6 +92,9 @@ impl Drop for VoiceState {
         if let Some(capture) = &self.capture {
             capture.stop.store(true, Ordering::Release);
         }
+        if let Some(job) = &self.job {
+            job.cancellation.cancel();
+        }
     }
 }
 
@@ -104,7 +107,48 @@ fn is_placeholder(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_placeholder;
+    use super::*;
+
+    #[test]
+    fn done_waits_for_the_final_buffer_on_the_worker() {
+        let font = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/core/Core-Regular.ufo");
+        let mut app = Workspace::open(&font).unwrap();
+        let job = ChatJob::default();
+        let capture = Capture {
+            events: job.events.clone(),
+            ..Capture::default()
+        };
+        let worker_capture = capture.thread_view();
+        app.voice.capture = Some(capture);
+        app.voice.job = Some(job.clone());
+        let (release, held) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            run_voice_job(
+                &worker_capture,
+                &job,
+                |capture| {
+                    held.recv().unwrap();
+                    assert!(capture.stop.load(Ordering::Acquire));
+                    *capture.format.lock().unwrap() = Some((whisper_server::SAMPLE_RATE, 1));
+                    *capture.samples.lock().unwrap() = vec![0.5; 8_000];
+                    Ok(())
+                },
+                |samples| {
+                    assert_eq!(samples.len(), 8_000);
+                    Ok("wider".into())
+                },
+            );
+        });
+        app.voice_stop();
+        app.voice_pump();
+        assert!(app.voice.capture.is_none() && app.voice.job.is_some());
+        release.send(()).unwrap();
+        worker.join().unwrap();
+        app.voice_pump();
+        assert!(!app.voice.active());
+        assert!(app.chat.prompt.ends_with("wider"));
+    }
 
     #[test]
     fn silence_notes_are_placeholders_and_speech_is_not() {
@@ -140,12 +184,18 @@ fn record(capture: &Capture) -> Result<(), String> {
     let on_error = move |error: cpal::Error| {
         *failed.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("microphone: {error}"));
     };
-    fn collect<T>(samples: Arc<Mutex<Vec<f32>>>) -> impl FnMut(&[T], &cpal::InputCallbackInfo)
+    let (callback_owner, callback_closed) = std::sync::mpsc::channel::<()>();
+    fn collect<T>(
+        samples: Arc<Mutex<Vec<f32>>>,
+        callback_owner: std::sync::mpsc::Sender<()>,
+    ) -> impl FnMut(&[T], &cpal::InputCallbackInfo)
     where
         T: cpal::SizedSample,
         f32: cpal::FromSample<T>,
     {
         move |data: &[T], _| {
+            // The receiver disconnects when CPAL releases this callback after its last buffer.
+            let _owner = &callback_owner;
             samples.lock().unwrap_or_else(|e| e.into_inner()).extend(
                 data.iter()
                     .map(|&s| <f32 as cpal::FromSample<T>>::from_sample_(s)),
@@ -153,18 +203,30 @@ fn record(capture: &Capture) -> Result<(), String> {
         }
     }
     let stream = match supported.sample_format() {
-        cpal::SampleFormat::F32 => {
-            device.build_input_stream(config, collect::<f32>(samples.clone()), on_error, None)
-        }
-        cpal::SampleFormat::I16 => {
-            device.build_input_stream(config, collect::<i16>(samples.clone()), on_error, None)
-        }
-        cpal::SampleFormat::U16 => {
-            device.build_input_stream(config, collect::<u16>(samples.clone()), on_error, None)
-        }
-        cpal::SampleFormat::I32 => {
-            device.build_input_stream(config, collect::<i32>(samples.clone()), on_error, None)
-        }
+        cpal::SampleFormat::F32 => device.build_input_stream(
+            config,
+            collect::<f32>(samples, callback_owner),
+            on_error,
+            None,
+        ),
+        cpal::SampleFormat::I16 => device.build_input_stream(
+            config,
+            collect::<i16>(samples, callback_owner),
+            on_error,
+            None,
+        ),
+        cpal::SampleFormat::U16 => device.build_input_stream(
+            config,
+            collect::<u16>(samples, callback_owner),
+            on_error,
+            None,
+        ),
+        cpal::SampleFormat::I32 => device.build_input_stream(
+            config,
+            collect::<i32>(samples, callback_owner),
+            on_error,
+            None,
+        ),
         other => return Err(format!("microphone sample format {other} is not supported")),
     }
     .map_err(|error| format!("microphone: {error}"))?;
@@ -199,7 +261,56 @@ fn record(capture: &Capture) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(50));
     }
     drop(stream);
+    let _ = callback_closed.recv();
     Ok(())
+}
+
+/// Run on the microphone worker. Only a finished capture can hand samples to transcription.
+fn run_voice_job(
+    capture: &Capture,
+    job: &ChatJob,
+    record: impl FnOnce(&Capture) -> Result<(), String>,
+    transcribe: impl FnOnce(&[f32]) -> Result<String, String>,
+) {
+    let recording = record(capture);
+    capture
+        .events
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(serde_json::json!({"event": "ended"}));
+    let result = recording.and_then(|()| {
+        if job.cancellation.is_cancelled() {
+            return Ok(());
+        }
+        if let Some(error) = capture
+            .error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
+            return Err(error);
+        }
+        let (rate, channels) = capture
+            .format
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .ok_or_else(|| "The microphone did not open".to_owned())?;
+        let samples =
+            std::mem::take(&mut *capture.samples.lock().unwrap_or_else(|e| e.into_inner()));
+        let samples = whisper_server::to_mono_16k(&samples, channels, rate);
+        if samples.len() < whisper_server::SAMPLE_RATE as usize / 2 {
+            return Err("Nothing heard".into());
+        }
+        let text = transcribe(&samples)?;
+        if !job.cancellation.is_cancelled() {
+            job.events
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(serde_json::json!({"event": "heard", "text": text}));
+        }
+        Ok(())
+    });
+    *job.finished.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
 }
 
 impl Workspace {
@@ -218,86 +329,26 @@ impl Workspace {
         if self.voice.active() {
             return;
         }
-        if whisper_server::find_binary().is_none() {
+        let Some(binary) = whisper_server::find_binary() else {
             self.note = "Install whisper.cpp (brew install whisper.cpp) or set \
                          RUNEBENDER_WHISPER_SERVER to use voice input"
                 .into();
             return;
-        }
-        if self.voice_model().is_none() {
+        };
+        let Some(model) = self.voice_model() else {
             self.note = "Put a whisper.cpp model in a models folder named whisper-… as \
                          model.bin to use voice input"
                 .into();
             return;
-        }
+        };
         let job = ChatJob::default();
         let capture = Capture {
             events: job.events.clone(),
             ..Capture::default()
         };
         let thread_view = capture.thread_view();
-        // The job outlives the microphone: it is the same one the
-        // transcription reports through, so the panel's poll of it runs
-        // from Talk to the words arriving. The thread ending on its own
-        // (the time limit, a fault) is an event, not the end of the job.
-        std::thread::spawn(move || {
-            let result = record(&thread_view);
-            thread_view.stop.store(true, Ordering::Release);
-            let event = match result {
-                Ok(()) => serde_json::json!({"event": "ended"}),
-                Err(error) => serde_json::json!({"event": "ended", "error": error}),
-            };
-            thread_view
-                .events
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(event);
-        });
         self.voice.capture = Some(capture);
-        self.voice.job = Some(job);
-    }
-
-    /// Done: close the microphone and transcribe what it heard.
-    pub(crate) fn voice_stop(&mut self) {
-        let Some(capture) = self.voice.capture.take() else {
-            return;
-        };
-        let Some(job) = self.voice.job.clone() else {
-            return;
-        };
-        let fail = |app: &mut Self, note: String| {
-            app.voice.job = None;
-            app.note = note;
-        };
-        capture.stop.store(true, Ordering::Release);
-        // The capture thread may still be appending its last buffer.
-        std::thread::sleep(Duration::from_millis(80));
-        if let Some(error) = capture
-            .error
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
-        {
-            fail(self, error);
-            return;
-        }
-        let samples =
-            std::mem::take(&mut *capture.samples.lock().unwrap_or_else(|e| e.into_inner()));
-        let Some((rate, channels)) = *capture.format.lock().unwrap_or_else(|e| e.into_inner())
-        else {
-            fail(self, "The microphone did not open".into());
-            return;
-        };
-        let samples = whisper_server::to_mono_16k(&samples, channels, rate);
-        if samples.len() < whisper_server::SAMPLE_RATE as usize / 2 {
-            fail(self, "Nothing heard".into());
-            return;
-        }
-        let (Some(binary), Some(model)) = (whisper_server::find_binary(), self.voice_model())
-        else {
-            fail(self, "The speech model is no longer available".into());
-            return;
-        };
+        self.voice.job = Some(job.clone());
         let family = self
             .font
             .font_info()
@@ -308,7 +359,7 @@ impl Workspace {
         let prompt = format!("{family}. {VOCABULARY}");
         let server = self.voice.server.clone();
         std::thread::spawn(move || {
-            let result = (|| {
+            run_voice_job(&thread_view, &job, record, |samples| {
                 let mut slot = server.lock().unwrap_or_else(|e| e.into_inner());
                 let reuse = slot
                     .as_mut()
@@ -317,18 +368,18 @@ impl Workspace {
                     *slot = None;
                     *slot = Some(WhisperServer::start(&binary, &model)?);
                 }
-                let text = slot
-                    .as_ref()
+                slot.as_ref()
                     .expect("server just checked or started")
-                    .transcribe(&samples, &prompt)?;
-                job.events
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .push(serde_json::json!({"event": "heard", "text": text}));
-                Ok(())
-            })();
-            *job.finished.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
+                    .transcribe(samples, &prompt)
+            });
         });
+    }
+
+    /// Done: ask the capture worker to finish its last buffer before it transcribes.
+    pub(crate) fn voice_stop(&mut self) {
+        if let Some(capture) = self.voice.capture.take() {
+            capture.stop.store(true, Ordering::Release);
+        }
     }
 
     /// Follow the microphone, then put a finished transcription into the
@@ -344,18 +395,7 @@ impl Workspace {
                         capture.started = true;
                     }
                 }
-                Some("ended") if self.voice.capture.is_some() => {
-                    // The microphone thread ended on its own: the time
-                    // limit, or a fault.
-                    match event.get("error").and_then(serde_json::Value::as_str) {
-                        None => self.voice_stop(),
-                        Some(error) => {
-                            self.voice.capture = None;
-                            self.voice.job = None;
-                            self.note = error.to_owned();
-                        }
-                    }
-                }
+                Some("ended") => self.voice.capture = None,
                 Some("heard") => {
                     let text = event
                         .get("text")
