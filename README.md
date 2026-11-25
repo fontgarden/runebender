@@ -86,6 +86,9 @@ A model's assessment is feedback, not design approval.
 - [Proof reference fonts](docs/PROOF-REFERENCES.md): project-local reference fonts for review.
 - [MCP setup](https://runebender.org/docs/mcp.html): connect an agent to the live editor.
   MCP supplies editor tools, not a model; the agent's own setup decides whether its model is local or remote.
+- [Review spacing changes with an agent](docs/AGENT-SPACING.md#review-a-proposed-change-in-the-editor).
+  Ask an agent to propose a sidebearing change and show it in a few real words in the native editor’s Agent Proof view.
+  Compare **Working** and **Proposal**, then accept or reject the change in the editor or your connected MCP client.
 
 ## External workflow worker contract
 

@@ -19,7 +19,8 @@ Commands in these guides run from the repository root unless stated otherwise.
 - [Browser development](../web/README.md): browser preparation, locked builds, and Playwright checks.
 - [Engine benchmarks](BENCHMARKS.md): repeatable measurements and interpretation.
 - [Project-owned proofs](PROJECT-PROOFS.md) explains how to check a compiled word and review changes to its shape and positioning in CI.
-- [Agent spacing and kerning](AGENT-SPACING.md) describes the tools available today and a bounded whole-font review workflow to build on them.
+- [Review a spacing proposal in Agent Proof](AGENT-SPACING.md#review-a-proposed-change-in-the-editor) walks through connecting an agent, comparing real words, and accepting or rejecting a change.
+  The [spacing-pass agent instructions](../skills/runebender-spacing-pass/SKILL.md) give the tool sequence and revision checks.
 - [Audit of 2026-11-09](AUDIT-2026-11-09.md): historical findings, status corrections, and the previously reported validation baseline.
 - [Cleanup plan](CLEANUP-PLAN.md): a checklist from the code review of 2026-11-17, with files, changes and verification for each item.
 - [Quality review of 2026-11-23](QUALITY-REVIEW-2026-11-23.md): a temporary checklist from a full review of the repository, one item at a time.

@@ -76,6 +76,10 @@ OMP can read the repository's `.mcp.json` when this build is on PATH, or use an 
 If several editors are open, check the project path and source before proposing.
 All tools below are also available as `runebender agent call TOOL --session SOCKET --args JSON`.
 
+Agents can use the live MCP prompt `spacing-pass` or follow its [tool-by-tool instructions](../skills/runebender-spacing-pass/SKILL.md).
+If the designer asks to review an existing proposal, use `proposal_list` to find its task and glyph, then open that glyph and show the pending change.
+After the decision, use `read_glyph` to confirm the foreground's left sidebearing, right sidebearing and advance.
+
 Try this request in the connected client.
 
 > On the copy of Virtua Grotesk Regular, propose adding 16 units to the left sidebearing of h while keeping its right sidebearing.
