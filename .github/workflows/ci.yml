@@ -128,9 +128,12 @@ jobs:
           # RUSTFLAGS replaces target-specific flags, so the SIMD feature that web/build.sh
           # ships must be repeated here beside the job's warning policy.
           RUSTFLAGS: -D warnings -C target-feature=+simd128
-        run: >-
-          cargo clippy --manifest-path web/Cargo.toml --locked
-          --target wasm32-unknown-unknown --no-deps -- -D warnings
+        # On a partial cache match, rust-cache removes every entry of web/target that is not
+        # a build profile, including the prepared adapter, so the adapter is prepared again.
+        run: |
+          python3 web/prepare.py
+          cargo clippy --manifest-path web/Cargo.toml --locked \
+            --target wasm32-unknown-unknown --no-deps -- -D warnings
       - name: doc
         run: cargo doc --workspace --no-deps --locked
       - name: Install pinned proof renderer
