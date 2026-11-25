@@ -16,7 +16,12 @@ Its row IDs, rendering settings, source revision and measurements are available 
 ![Five rows showing an increased left sidebearing, a missing kern, and an unchanged control](examples/spacing/spacing-sheet.png)
 
 The annotations explain the planted changes to the reader.
-For a blind trial, conceal those annotations and randomize the A/B order before asking a worker to judge the spacing.
+We also tested a [blind version](examples/spacing/blind-review.png) with the labels concealed, the rows shuffled, and two restored examples on either side.
+A fresh Astra worker on low reasoning effort saw only that image.
+It chose the restored spacing in each of the four changed rows and identified the unchanged row.
+The trial involved two deliberately large defects, each shown twice, in a single Latin master.
+It tested visual discrimination between two choices.
+Finding a subtle fault without a reference, choosing the right number of font units to move and improving held-out words still need a separate trial.
 
 ## What works today
 
