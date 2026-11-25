@@ -118,6 +118,8 @@ unicode-bidi = { version = "0.3.18", default-features = false, features = ["hard
 fea-rs = "=1.0.0"
 harfrust = "0.5"
 write-fonts = "0.52"
+# `std::time::Instant::now` panics on wasm32-unknown-unknown; this one reads the browser clock.
+web-time = "1.1"
 # TODO: open a pull request on linebender/spline that updates it to the current kurbo.
 # kurbo 0.9.5 is here only because spline, which the hyperbezier code uses, depends on it.
 # Remove this line and the conversions in src/outline/path/hyper.rs when that lands.

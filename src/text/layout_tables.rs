@@ -44,7 +44,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use fea_rs::{
     DiagnosticSet, GlyphMap, Opts,
@@ -62,6 +62,8 @@ use fontir::{
     },
     orchestration::{Context as IrContext, Flags},
 };
+// The browser editor builds these tables too, and `std::time::Instant::now` panics there.
+use web_time::Instant;
 use write_fonts::tables::{gdef::GlyphClassDef, layout::ClassDef};
 
 use crate::font::LayerView;

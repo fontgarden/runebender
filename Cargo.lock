@@ -4787,6 +4787,7 @@ dependencies = [
  "unicode-bidi",
  "unicode-general-category",
  "unicode-normalization",
+ "web-time",
  "winit",
  "write-fonts",
  "xilem",

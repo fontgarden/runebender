@@ -2341,6 +2341,7 @@ dependencies = [
  "unicode-bidi",
  "unicode-general-category",
  "unicode-normalization",
+ "web-time",
  "write-fonts",
 ]
 
