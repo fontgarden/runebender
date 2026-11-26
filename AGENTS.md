@@ -8,7 +8,7 @@ Sibling repositories are not workspace members; do not modify them unless a task
 
 This file is the entry point for any coding agent working in the repository.
 The root `.mcp.json` declares `runebender mcp --live`, the editor's local MCP command.
-Clients that read `.mcp.json` can use it directly; `runebender mcp --install` registers the built binary by absolute path in Claude Code, Codex, Claude Desktop and Cursor.
+Clients that read `.mcp.json` can use it directly; `runebender mcp --install` registers the built binary by absolute path in Antigravity, Claude Code, Codex, Claude Desktop and Cursor.
 Design context for agents lives in `assets/context/*.context.md` (defaults), `~/.config/runebender/context/` (personal) and `*.context.md` beside a font (font layer).
 The `design_context` tool serves these files, and the chat prompt embeds them.
 Keep the default files generic; the rules of a font go in its own file.
